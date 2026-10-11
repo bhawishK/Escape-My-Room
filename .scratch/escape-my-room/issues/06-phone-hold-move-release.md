@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**GitHub issue:** [#6](https://github.com/bhawishK/Escape-My-Room/issues/6)
+
 ## Proposed technical approach
 
 - Use Python-authoritative states available/master-controlled, with acquire, movement, and release commands. Return accepted state or rejection; never let the client silently overwrite authority.

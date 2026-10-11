@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**GitHub issue:** [#2](https://github.com/bhawishK/Escape-My-Room/issues/2)
+
 ## Proposed technical approach
 
 - Start from an existing room reconstruction exported to a browser-loadable format; GLB/glTF plus a small manifest is the proposed default. Python serves or references assets and validates the room version loaded by each participant.

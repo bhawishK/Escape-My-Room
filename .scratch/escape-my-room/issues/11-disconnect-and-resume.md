@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**GitHub issue:** [#11](https://github.com/bhawishK/Escape-My-Room/issues/11)
+
 ## Proposed technical approach
 
 - Bind ownership to a participant connection generation/manipulation. Detect disconnects using socket closure plus a documented timeout where needed; choose timeout values from initial testing.

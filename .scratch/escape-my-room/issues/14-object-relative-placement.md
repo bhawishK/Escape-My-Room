@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**GitHub issue:** [#14](https://github.com/bhawishK/Escape-My-Room/issues/14)
+
 ## Proposed technical approach
 
 - Use the placement direction selected in the pilot. An authored support anchor/region on a desk or floor is a proposed first implementation; interior containment is not assumed.

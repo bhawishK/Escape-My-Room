@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**GitHub issue:** [#13](https://github.com/bhawishK/Escape-My-Room/issues/13)
+
 ## Proposed technical approach
 
 - Propose browser WebRTC audio with signaling scoped to the Python session; microphone permission starts through explicit user interaction.

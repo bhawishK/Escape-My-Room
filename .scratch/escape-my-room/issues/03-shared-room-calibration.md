@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**GitHub issue:** [#3](https://github.com/bhawishK/Escape-My-Room/issues/3)
+
 ## Proposed technical approach
 
 - Keep a canonical room coordinate frame and one transform between each client's XR reference space and that room. Define the transform direction explicitly and apply it to poses and displayed content.

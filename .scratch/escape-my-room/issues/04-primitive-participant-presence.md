@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**GitHub issue:** [#4](https://github.com/bhawishK/Escape-My-Room/issues/4)
+
 ## Proposed technical approach
 
 - Convert tracked viewer poses to room coordinates and send bounded-rate presence updates through the Python session.

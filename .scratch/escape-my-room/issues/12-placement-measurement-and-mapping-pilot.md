@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**GitHub issue:** [#12](https://github.com/bhawishK/Escape-My-Room/issues/12)
+
 ## Proposed technical approach
 
 - Define room-space target regions and record final accepted object positions. Derive placement error from the shared geometry rather than screen pixels.

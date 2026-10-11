@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**GitHub issue:** [#5](https://github.com/bhawishK/Escape-My-Room/issues/5)
+
 ## Proposed technical approach
 
 - Implement one selection method supported by the tested device: a touch ray or a center-view ray with an explicit select control is a proposed default.

@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**GitHub issue:** [#10](https://github.com/bhawishK/Escape-My-Room/issues/10)
+
 ## Proposed technical approach
 
 - Handle missing/invalid viewer poses, session visibility/end events, and reference-space reset notifications separately; an XR pose is not guaranteed on every frame.

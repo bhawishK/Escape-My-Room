@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**GitHub issue:** [#9](https://github.com/bhawishK/Escape-My-Room/issues/9)
+
 ## Proposed technical approach
 
 - Separate XR render cadence from network publication cadence. Coalesce unsent movement to the newest sample rather than growing an unbounded queue.

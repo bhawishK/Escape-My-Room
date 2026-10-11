@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**GitHub issue:** [#8](https://github.com/bhawishK/Escape-My-Room/issues/8)
+
 ## Proposed technical approach
 
 - Serialize ownership transitions per session/object in Python. Use an accepted manipulation ID and monotonically ordered movement sequence so old messages cannot affect a later hold.

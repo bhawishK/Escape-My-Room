@@ -11,11 +11,13 @@ The chosen stack is **WebXR browser clients and Python services**. The starting 
 - [Related research](<Escape My Room Related Research.md>) — primary-source findings and limits of the related-work review.
 - [Original proposal](<Escape My Room.docx>) — source proposal; later decisions in the specification and approved tickets take precedence.
 
-## Implementation tickets
+## Implementation issues
 
-The [17 published local tickets](.scratch/escape-my-room/issues/) are the implementation tracker. Each has a technical approach, acceptance criteria, scope boundary, and blocking dependencies. Their initial status is `ready-for-agent`; a ticket can start only when its blockers are complete.
+The [17 GitHub issues](https://github.com/bhawishK/Escape-My-Room/issues) are the implementation tracker. Each preserves the approved technical approach, acceptance criteria, and scope boundary, and has the `ready-for-agent` label. Native blocked-by relationships record dependencies; an issue can start only when its blockers are complete.
 
-Start with [Ticket 01: Connect mobile and VR through Python with a tracked pose](.scratch/escape-my-room/issues/01-connected-webxr-pose.md). Once it is complete, room loading (02) and voice communication (13) become available.
+Start with [Issue #1: Connect mobile and VR through Python with a tracked pose](https://github.com/bhawishK/Escape-My-Room/issues/1). Once it is complete, [room loading (#2)](https://github.com/bhawishK/Escape-My-Room/issues/2) and [voice communication (#13)](https://github.com/bhawishK/Escape-My-Room/issues/13) become available.
+
+The [local ticket files](.scratch/escape-my-room/issues/) remain source snapshots and link to their corresponding GitHub issues. Use GitHub for ongoing issue status and dependency tracking.
 
 ## Current state
 

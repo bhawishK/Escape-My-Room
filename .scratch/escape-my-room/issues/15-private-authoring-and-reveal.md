@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**GitHub issue:** [#15](https://github.com/bhawishK/Escape-My-Room/issues/15)
+
 ## Proposed technical approach
 
 - Add a small role-aware content state such as concealed/revealed, with master-authorized preparation and reveal commands accepted by Python.

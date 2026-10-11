@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**GitHub issue:** [#1](https://github.com/bhawishK/Escape-My-Room/issues/1)
+
 ## Proposed technical approach
 
 - Suggested baseline: TypeScript browser code, Three.js rendering, FastAPI/Pydantic on Python, and JSON over WebSocket. These are proposed implementation defaults, not additional user-confirmed requirements.

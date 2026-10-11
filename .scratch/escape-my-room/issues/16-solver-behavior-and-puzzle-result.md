@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**GitHub issue:** [#16](https://github.com/bhawishK/Escape-My-Room/issues/16)
+
 ## Proposed technical approach
 
 - Use the behavior selected in the pilot. A revealed-item retrieval followed by a completion state is the proposed minimal demo; do not infer mechanical drawers from room geometry.

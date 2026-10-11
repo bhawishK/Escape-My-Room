@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**GitHub issue:** [#7](https://github.com/bhawishK/Escape-My-Room/issues/7)
+
 ## Proposed technical approach
 
 - Use the tested headset input source and map target-ray/grip poses into room coordinates. Preserve a grab offset so acquisition does not teleport the item to the controller.

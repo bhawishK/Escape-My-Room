@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**GitHub issue:** [#17](https://github.com/bhawishK/Escape-My-Room/issues/17)
+
 ## Proposed technical approach
 
 - Provide one startup/deployment procedure for the WebXR browser assets and Python service, including HTTPS/WSS, session configuration, prepared assets, and audio connectivity.
