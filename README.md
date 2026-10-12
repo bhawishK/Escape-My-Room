@@ -13,9 +13,9 @@ The chosen stack is **WebXR browser clients and Python services**. The starting 
 
 ## Implementation issues
 
-The [17 GitHub issues](https://github.com/bhawishK/Escape-My-Room/issues) are the implementation tracker. Each preserves the approved technical approach, acceptance criteria, and scope boundary, and has the `ready-for-agent` label. Native blocked-by relationships record dependencies; an issue can start only when its blockers are complete.
+The [GitHub issues](https://github.com/bhawishK/Escape-My-Room/issues) are the implementation tracker. The original 17 issues preserve the approved technical approach, acceptance criteria, and scope boundary, and have the `ready-for-agent` label. Issue #19 separately tracks deferred phone movement. Native blocked-by relationships record dependencies; an issue can start only when its blockers are complete.
 
-Start with [Issue #1: Connect mobile and VR through Python with a tracked pose](https://github.com/bhawishK/Escape-My-Room/issues/1). Once it is complete, [room loading (#2)](https://github.com/bhawishK/Escape-My-Room/issues/2) and [voice communication (#13)](https://github.com/bhawishK/Escape-My-Room/issues/13) become available.
+Start with [Issue #1: Connect phone and VR through Python with device status](https://github.com/bhawishK/Escape-My-Room/issues/1). Once it is complete, [room loading (#2)](https://github.com/bhawishK/Escape-My-Room/issues/2) and [voice communication (#13)](https://github.com/bhawishK/Escape-My-Room/issues/13) become available. Deferred physical phone movement is tracked separately in [Issue #19](https://github.com/bhawishK/Escape-My-Room/issues/19); tracking-dependent alignment, presence, and manipulation work will need that capability.
 
 The [local ticket files](.scratch/escape-my-room/issues/) remain source snapshots and link to their corresponding GitHub issues. Use GitHub for ongoing issue status and dependency tracking.
 
@@ -23,7 +23,7 @@ The [local ticket files](.scratch/escape-my-room/issues/) remain source snapshot
 
 Issue #1 now has a Python service and a responsive browser diagnostic. Open the same URL on both devices, choose **Connect phone** on the phone and **Connect VR headset** on Quest, then **Enter VR**. The phone shows **VR device connected** when the headset page joins. One shared room replaces session IDs, invite links, and authentication. The simulator and manual coordinate controls have been removed.
 
-The agreed first target is **iPhone 16 Chrome for the mobile page and Meta Quest 3 for immersive VR**. The user chose to build the iPhone page first and add movement tracking later. Quest VR entry has been confirmed by the user through the HTTPS tunnel. The remaining iPhone/Quest smoke checks and the original phone-translation acceptance criterion are pending; Issue #1 is not yet complete on hardware.
+The agreed first target is **iPhone 16 Chrome for the mobile page and Meta Quest 3 for immersive VR**. The user chose to build the iPhone page first and add movement tracking later. Quest VR entry has been confirmed by the user through the HTTPS tunnel. Remaining Quest exit/re-entry and device records are pending in Issue #1. Physical phone translation is pending separately in Issue #19.
 
 - [Start the diagnostic](docs/diagnostic-startup.md) — installation, HTTPS/WSS, and checks.
 - [Connection and pose contract](docs/diagnostic-protocol.md) — shared device status, validation, and marker coordinates.

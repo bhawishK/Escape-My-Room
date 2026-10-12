@@ -2,7 +2,7 @@
 
 Status: **simplified shared-room software implemented; Quest VR entry previously confirmed by the user; fresh device checks pending**.
 
-Targets are iPhone 16 Chrome for the mobile master and Meta Quest 3 for immersive VR. The user approved: “Build the iPhone page first; add movement tracking later.” On 12 October 2026, the user also requested removing the simulator and session IDs/authentication in favor of a simple VR connected status. This supersedes the original session-enrollment design. Keep [Issue #1](https://github.com/bhawishK/Escape-My-Room/issues/1) open while physical phone tracking and hardware acceptance remain unresolved.
+Targets are iPhone 16 Chrome for the mobile master and Meta Quest 3 for immersive VR. The user approved: “Build the iPhone page first; add movement tracking later.” On 12 October 2026, the user also requested removing the simulator and session IDs/authentication in favor of a simple VR connected status. This supersedes the original session-enrollment design. [Issue #1](https://github.com/bhawishK/Escape-My-Room/issues/1) covers connection status and Quest entry/exit; deferred physical phone tracking and its tracking-mode lifecycle now belong to [Issue #19](https://github.com/bhawishK/Escape-My-Room/issues/19). Tracking no longer blocks completion of Issue #1.
 
 ## Current software evidence
 
@@ -51,6 +51,8 @@ Automated on Windows, 2026-10-12:
 6. Deny XR permission once where supported. Restore permission and retry; record actual behavior. Open the optional diagnostics and download each device report. If a DOM overlay is available, check **Hold input probe**; otherwise record unavailable.
 
 ## Complete physical phone tracking later
+
+These checks are acceptance work for [Issue #19](https://github.com/bhawishK/Escape-My-Room/issues/19), separate from Issue #1's connection checks.
 
 The iPhone movement-tracking mechanism remains a separate decision. On a phone/browser with positional WebXR support, the retained AR path can be tested: enter AR, verify non-emulated `tracked` position, translate along each axis, and compare Python-accepted coordinates with the marker in Quest. Check start/end, lost tracking, and recovery. No marker movement is expected from the currently deferred iPhone tracking path.
 
