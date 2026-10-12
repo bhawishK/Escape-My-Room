@@ -9,8 +9,9 @@ The browser joins through HTTP and receives authoritative state over JSON WebSoc
 | `GET /api/health` | `{ "status": "ok" }` |
 | `POST /api/sessions` | HTTP 201 with server-assigned `session_id` |
 | `POST /api/sessions/{session_id}/participants` | HTTP 201 with `participant_id`, `connection_token`, and `role` |
+| `POST /api/sessions/{session_id}/participants/{participant_id}/release` | HTTP 204 after authenticated release; body `{ "connection_token": "..." }` |
 
-The join body is `{ "role": "mobile_master", "tracking_source": "webxr" }`. The other role is `vr_solver`; the explicit development source is `simulator`. Unknown fields and values are rejected with HTTP 422, a missing session with 404, and an occupied role with 409. Each session has at most one participant in each role. A role reserved by HTTP but never connected is retained until process restart; automatic retry/expiry is not implemented in this first slice.
+The join body is `{ "role": "mobile_master", "tracking_source": "webxr" }`. The other role is `vr_solver`; the explicit development source is `simulator`. Unknown fields and values are rejected with HTTP 422, a missing session with 404, and an occupied role with 409. Each session has at most one participant in each role. If its first socket fails, the page releases its grant over HTTP before allowing a manual retry in the same session. Release checks the participant credential, closes any existing socket, clears its usable marker, and frees the role. A repeated release after removal is harmless; an incorrect credential for an existing participant gets 403. If HTTP is also unreachable, the page explains that recovery requires restored connectivity and a new master session. Automatic reservation expiry is not implemented.
 
 Connect to `/api/sessions/{session_id}/ws?participant_id={participant_id}` using WebSocket subprotocols `["escape-my-room", connection_token]`. Python selects `escape-my-room` and validates the credential against that participant in that session. The token is not included in shared state, invitation links, or query strings. Treat it as a connection credential. The invitation shares only the session ID.
 

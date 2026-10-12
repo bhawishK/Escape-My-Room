@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 Role = Literal["mobile_master", "vr_solver"]
 TrackingSource = Literal["webxr", "simulator"]
 TrackingStatus = Literal["inactive", "tracked", "lost", "emulated", "simulated"]
+ReferenceSpace = Literal["local", "local-floor"]
 
 
 class WireModel(BaseModel):
@@ -18,10 +19,22 @@ class JoinRequest(WireModel):
     tracking_source: TrackingSource = "webxr"
 
 
+class ReleaseRequest(WireModel):
+    connection_token: str = Field(min_length=1, max_length=128)
+
+
 class Position(WireModel):
     x: float = Field(ge=-100, le=100)
     y: float = Field(ge=-100, le=100)
     z: float = Field(ge=-100, le=100)
+
+
+class MarkerState(WireModel):
+    participant_id: str | None = None
+    source: TrackingSource | None = None
+    tracking_status: TrackingStatus = "inactive"
+    reference_space: ReferenceSpace | None = None
+    position: Position | None = None
 
 
 class PoseMessage(WireModel):
@@ -29,7 +42,7 @@ class PoseMessage(WireModel):
     connection_generation: int = Field(ge=1)
     sequence: int = Field(ge=1)
     tracking_status: TrackingStatus
-    reference_space: Literal["local", "local-floor"] | None
+    reference_space: ReferenceSpace | None
     position: Position | None
 
     @model_validator(mode="after")

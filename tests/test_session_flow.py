@@ -242,3 +242,61 @@ def test_replacement_connection_has_new_generation_and_no_old_usable_pose(servic
                 "y": -0.1,
                 "z": -0.5,
             }
+
+
+def test_failed_socket_join_can_release_its_grant_and_retry_without_losing_session(service_url):
+    session = create_session(service_url)
+    solver = join(service_url, session, "vr_solver")
+    release_url = (
+        f"{service_url}/api/sessions/{session}/participants/{solver['participant_id']}/release"
+    )
+    denied = httpx.post(release_url, json={"connection_token": "incorrect"})
+    assert denied.status_code == 403
+    occupied = httpx.post(
+        f"{service_url}/api/sessions/{session}/participants", json={"role": "vr_solver"}
+    )
+    assert occupied.status_code == 409
+    released = httpx.post(release_url, json={"connection_token": solver["connection_token"]})
+    assert released.status_code == 204
+    assert (
+        httpx.post(release_url, json={"connection_token": solver["connection_token"]}).status_code
+        == 204
+    )
+    retry = join(service_url, session, "vr_solver")
+    with open_socket(service_url, session, retry) as headset:
+        welcome = json.loads(headset.recv(timeout=2))
+        assert welcome["state"]["session_id"] == session
+        assert [p["role"] for p in welcome["state"]["participants"]] == ["vr_solver"]
+
+
+def test_releasing_active_master_clears_peer_marker_and_revokes_old_credential(service_url):
+    session = create_session(service_url)
+    master = join(service_url, session)
+    solver = join(service_url, session, "vr_solver")
+    with open_socket(service_url, session, solver) as headset:
+        headset.recv(timeout=2)
+        with open_socket(service_url, session, master) as phone:
+            generation = json.loads(phone.recv(timeout=2))["connection_generation"]
+            phone.send(json.dumps(pose(generation)))
+            receive_until(
+                headset,
+                lambda e: e.get("state", {}).get("marker", {}).get("tracking_status") == "tracked",
+            )
+            release = httpx.post(
+                f"{service_url}/api/sessions/{session}/participants/{master['participant_id']}/release",
+                json={"connection_token": master["connection_token"]},
+            )
+            assert release.status_code == 204
+            cleared = receive_until(
+                headset,
+                lambda e: e.get("state", {}).get("marker", {}).get("tracking_status") == "lost",
+            )["state"]
+            assert cleared["marker"]["position"] is None
+            assert [p["role"] for p in cleared["participants"]] == ["vr_solver"]
+        with pytest.raises(InvalidStatus) as revoked:
+            with open_socket(service_url, session, master):
+                pass
+        assert revoked.value.response.status_code == 403
+        replacement = join(service_url, session)
+        with open_socket(service_url, session, replacement) as new_phone:
+            assert json.loads(new_phone.recv(timeout=2))["state"]["marker"]["position"] is None

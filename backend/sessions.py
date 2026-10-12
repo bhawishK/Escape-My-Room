@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, WebSocket
 
-from backend.protocol import JoinRequest, PoseMessage, Role, TrackingSource
+from backend.protocol import JoinRequest, MarkerState, PoseMessage, Role, TrackingSource
 
 
 @dataclass
@@ -27,15 +27,7 @@ class Session:
     session_id: str
     participants: dict[str, Participant] = field(default_factory=lambda: dict[str, Participant]())
     revision: int = 0
-    marker: dict[str, Any] = field(
-        default_factory=lambda: {
-            "participant_id": None,
-            "source": None,
-            "tracking_status": "inactive",
-            "reference_space": None,
-            "position": None,
-        }
-    )
+    marker: MarkerState = field(default_factory=MarkerState)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def snapshot(self) -> dict[str, Any]:
@@ -52,7 +44,7 @@ class Session:
                 }
                 for p in self.participants.values()
             ],
-            "marker": dict(self.marker),
+            "marker": self.marker.model_dump(),
         }
 
     async def broadcast(self, exclude: WebSocket | None = None) -> None:
@@ -68,13 +60,31 @@ class Session:
 
     def accept_pose(self, participant: Participant, pose: PoseMessage) -> None:
         participant.sequence = pose.sequence
-        self.marker = {
-            "participant_id": participant.participant_id,
-            "source": participant.tracking_source,
-            "tracking_status": pose.tracking_status,
-            "reference_space": pose.reference_space,
-            "position": pose.position.model_dump() if pose.position else None,
-        }
+        self.marker = MarkerState(
+            participant_id=participant.participant_id,
+            source=participant.tracking_source,
+            tracking_status=pose.tracking_status,
+            reference_space=pose.reference_space,
+            position=pose.position,
+        )
+        self.revision += 1
+
+    def reset_master_marker(self, participant: Participant) -> None:
+        if participant.role == "mobile_master":
+            self.marker = MarkerState(
+                participant_id=participant.participant_id, source=participant.tracking_source
+            )
+
+    def remove_participant(self, participant: Participant) -> None:
+        participant.socket = None
+        self.participants.pop(participant.participant_id, None)
+        if self.marker.participant_id == participant.participant_id:
+            self.marker = MarkerState(
+                participant_id=participant.participant_id,
+                source=participant.tracking_source,
+                tracking_status="lost",
+                reference_space=self.marker.reference_space,
+            )
         self.revision += 1
 
 

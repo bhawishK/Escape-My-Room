@@ -51,3 +51,20 @@ test('denied XR permission explains recovery and preserves the connected view', 
   await expect(page.getByRole('alert')).toContainText('XR permission was denied');
   await expect(page.getByTestId('connection')).toContainText('Connected');
 });
+
+test('solver can retry in the same session after its initial WebSocket fails', async ({ page, request }) => {
+  const session = await (await request.post('/api/sessions')).json() as { session_id: string };
+  let blockSocket = true;
+  await page.routeWebSocket(/\/api\/sessions\/.*\/ws/, socket => {
+    if (blockSocket) socket.close({ code: 1008, reason: 'Initial connection failure for test' });
+    else socket.connectToServer();
+  });
+  await page.goto(`/?session=${session.session_id}`);
+  await page.getByRole('button', { name: 'Join as solver' }).click();
+  await expect(page.getByRole('alert')).toContainText('Connection failed');
+  await expect(page.getByRole('button', { name: 'Join as solver' })).toBeEnabled();
+  blockSocket = false;
+  await page.getByRole('button', { name: 'Join as solver' }).click();
+  await expect(page.getByTestId('connection')).toHaveText('Connected · VR solver');
+  await expect(page.getByLabel('Session ID')).toHaveValue(session.session_id);
+});

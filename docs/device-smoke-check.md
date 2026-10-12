@@ -8,8 +8,11 @@ User-approved scope adjustment: “Build the iPhone page first; add movement tra
 
 Automated on Windows, 2026-10-12:
 
-- Real Python HTTP/WebSocket tests: master/solver state delivery, rejected role/source/schema/sequence/generation messages, isolated sessions and credentials, disconnect clearing, binary frames, and connection replacement.
-- Playwright against the running service in desktop Microsoft Edge: a simulator updates both separate browser views; a mobile-sized viewport works with XR unavailable; denied XR permission gives recovery guidance without losing the shared connection.
+- Real Python HTTP/WebSocket tests: master/solver state delivery, rejected role/source/schema/sequence/generation messages, isolated sessions and credentials, disconnect clearing, binary frames, connection replacement, and authenticated grant release after a failed initial socket.
+- Playwright against the running service in desktop Microsoft Edge 155.0.4283.45: a simulator updates both separate browser views; a mobile-sized viewport works with XR unavailable; denied XR permission gives recovery guidance without losing the shared connection; a failed initial WebSocket allows a manual join retry in the same session.
+- Visual inspection: 1440-pixel desktop and 390-pixel mobile layouts, no page errors or mobile horizontal overflow. These are desktop Edge screenshots, not hardware evidence.
+
+Final automated result: **16 Python integration checks and 4 browser checks passed**. Strict TypeScript/Python checking and Ruff passed; the production build succeeded. Vite reports its standard chunk-size warning for the approximately 546 kB Three.js browser bundle (137 kB compressed). [Code review](issue-1-code-review.md) found one recovery bug and one optional typing improvement; both were resolved and re-reviewed.
 - Strict TypeScript and Python typechecks, Ruff, and the production build are available in the [startup commands](diagnostic-startup.md).
 
 The mobile viewport and permission tests use browser API overrides to exercise those branches. They are not iPhone or headset emulation. Simulator delivery proves the transport only. No iPhone, Quest, tunnel, certificate trust, real positional tracking, or real DOM-overlay held input was tested in this implementation session.

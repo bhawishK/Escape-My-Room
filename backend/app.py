@@ -1,14 +1,15 @@
 """Serve the built browser app and its same-origin HTTP/WebSocket contract."""
 
+import asyncio
 import json
 import secrets
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
-from backend.protocol import JoinRequest, PoseMessage
+from backend.protocol import JoinRequest, PoseMessage, ReleaseRequest
 from backend.sessions import SessionStore
 
 
@@ -33,6 +34,29 @@ def create_app() -> FastAPI:
             "role": participant.role,
         }
 
+    @app.post("/api/sessions/{session_id}/participants/{participant_id}/release", status_code=204)
+    async def release_participant(
+        session_id: str, participant_id: str, request: ReleaseRequest
+    ) -> Response:
+        session = store.get(session_id)
+        async with session.lock:
+            participant = session.participants.get(participant_id)
+            if participant is None:
+                return Response(status_code=204)
+            if not secrets.compare_digest(request.connection_token, participant.token):
+                raise HTTPException(
+                    403, "The connection credential does not match this participant."
+                )
+            socket = participant.socket
+            session.remove_participant(participant)
+            if socket is not None:
+                try:
+                    await asyncio.wait_for(socket.close(code=1000), timeout=2)
+                except (RuntimeError, OSError, TimeoutError):
+                    pass
+            await session.broadcast()
+        return Response(status_code=204)
+
     @app.websocket("/api/sessions/{session_id}/ws")
     async def session_socket(
         socket: WebSocket,
@@ -40,52 +64,49 @@ def create_app() -> FastAPI:
         participant_id: str,
     ) -> None:
         session = store.sessions.get(session_id)
-        participant = session.participants.get(participant_id) if session else None
+        if session is None:
+            await socket.close(code=1008)
+            return
+        participant = None
         protocols = [
             value.strip() for value in socket.headers.get("sec-websocket-protocol", "").split(",")
         ]
-        if (
-            participant is None
-            or len(protocols) != 2
-            or protocols[0] != "escape-my-room"
-            or not secrets.compare_digest(protocols[1], participant.token)
-        ):
-            await socket.close(code=1008)
-            return
-        assert session is not None
-        await socket.accept(subprotocol="escape-my-room")
-        async with session.lock:
-            previous_socket = participant.socket
-            participant.generation += 1
-            participant.sequence = 0
-            participant.socket = socket
-            generation = participant.generation
-            if participant.role == "mobile_master":
-                session.marker.update(
-                    participant_id=participant_id,
-                    source=participant.tracking_source,
-                    tracking_status="inactive",
-                    reference_space=None,
-                    position=None,
-                )
-            if previous_socket is not None:
-                await previous_socket.close(code=1008, reason="Connection replaced")
-            session.revision += 1
-            await socket.send_json(
-                {
-                    "type": "welcome",
-                    "session_id": session_id,
-                    "participant_id": participant_id,
-                    "connection_generation": generation,
-                    "state": session.snapshot(),
-                }
-            )
-            await session.broadcast(exclude=socket)
 
         async def reject(code: str, message: str) -> None:
             await socket.send_json({"type": "error", "code": code, "message": message})
 
         try:
+            async with session.lock:
+                # Resolve the grant while holding the same lock as release and role assignment.
+                participant = session.participants.get(participant_id)
+                if (
+                    participant is None
+                    or len(protocols) != 2
+                    or protocols[0] != "escape-my-room"
+                    or not secrets.compare_digest(protocols[1], participant.token)
+                ):
+                    await socket.close(code=1008)
+                    return
+                await socket.accept(subprotocol="escape-my-room")
+                previous_socket = participant.socket
+                participant.generation += 1
+                participant.sequence = 0
+                participant.socket = socket
+                generation = participant.generation
+                session.reset_master_marker(participant)
+                if previous_socket is not None:
+                    await previous_socket.close(code=1008, reason="Connection replaced")
+                session.revision += 1
+                await socket.send_json(
+                    {
+                        "type": "welcome",
+                        "session_id": session_id,
+                        "participant_id": participant_id,
+                        "connection_generation": generation,
+                        "state": session.snapshot(),
+                    }
+                )
+                await session.broadcast(exclude=socket)
             while True:
                 message = await socket.receive()
                 if message["type"] == "websocket.disconnect":
@@ -135,12 +156,8 @@ def create_app() -> FastAPI:
             pass
         finally:
             async with session.lock:
-                if participant.socket is socket:
-                    participant.socket = None
-                    session.participants.pop(participant_id, None)
-                    if session.marker["participant_id"] == participant_id:
-                        session.marker.update(tracking_status="lost", position=None)
-                    session.revision += 1
+                if participant is not None and participant.socket is socket:
+                    session.remove_participant(participant)
                     await session.broadcast()
 
     dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"
