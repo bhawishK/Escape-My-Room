@@ -1,6 +1,6 @@
 # Issue #1: device smoke-check record
 
-Status: **software diagnostic implemented; actual-device acceptance pending**.
+Status: **software diagnostic implemented; Quest VR entry confirmed by the user; remaining actual-device acceptance pending**.
 
 User-approved scope adjustment: “Build the iPhone page first; add movement tracking later.” Targets are iPhone 16 Chrome for the mobile master and Meta Quest 3 for immersive VR. This changes the order of work; it does not provide evidence for the original phone-translation criterion. Keep [Issue #1](https://github.com/bhawishK/Escape-My-Room/issues/1) open until the remaining hardware criteria are resolved.
 
@@ -11,11 +11,18 @@ Automated on Windows, 2026-10-12:
 - Real Python HTTP/WebSocket tests: master/solver state delivery, rejected role/source/schema/sequence/generation messages, isolated sessions and credentials, disconnect clearing, binary frames, connection replacement, and authenticated grant release after a failed initial socket.
 - Playwright against the running service in desktop Microsoft Edge 155.0.4283.45: a simulator updates both separate browser views; a mobile-sized viewport works with XR unavailable; denied XR permission gives recovery guidance without losing the shared connection; a failed initial WebSocket allows a manual join retry in the same session.
 - Visual inspection: 1440-pixel desktop and 390-pixel mobile layouts, no page errors or mobile horizontal overflow. These are desktop Edge screenshots, not hardware evidence.
-
-Final automated result: **16 Python integration checks and 4 browser checks passed**. Strict TypeScript/Python checking and Ruff passed; the production build succeeded. Vite reports its standard chunk-size warning for the approximately 546 kB Three.js browser bundle (137 kB compressed). [Code review](issue-1-code-review.md) found one recovery bug and one optional typing improvement; both were resolved and re-reviewed.
 - Strict TypeScript and Python typechecks, Ruff, and the production build are available in the [startup commands](diagnostic-startup.md).
 
-The mobile viewport and permission tests use browser API overrides to exercise those branches. They are not iPhone or headset emulation. Simulator delivery proves the transport only. No iPhone, Quest, tunnel, certificate trust, real positional tracking, or real DOM-overlay held input was tested in this implementation session.
+Final automated result: **16 Python integration checks and 4 browser checks passed**. Strict TypeScript/Python checking and Ruff passed; the production build succeeded. Vite reports its standard chunk-size warning for the approximately 546 kB Three.js browser bundle (137 kB compressed). [Code review](issue-1-code-review.md) found one recovery bug and one optional typing improvement; both were resolved and re-reviewed.
+
+The mobile viewport and permission tests use browser API overrides to exercise those branches. They are not iPhone or headset emulation. Simulator delivery proves the transport only. The automated implementation checks did not exercise physical devices; the later manual observations below are recorded separately.
+
+## Manual observations on 2026-10-12
+
+- The user started a Cloudflare Quick Tunnel to the laptop's port 8000. Its output recorded successful DNS, UDP, TCP, and API checks and a registered connection. The public HTTPS application returned HTTP 200 and its backend health endpoint returned `status: ok` when checked by the agent.
+- The user reported connecting the VR device, then confirmed that **Enter VR** worked on the selected Meta Quest 3. This is user-reported immersive entry, not an agent-run headset test.
+- The tunnel log later recorded a brief QUIC interruption followed by reconnection. Automatic application reconnection remains unimplemented; the page may need a manual rejoin after a dropped socket.
+- The user asked how to change simulator coordinates. Sphere movement inside Quest has not yet been confirmed. iPhone participation, phone translation, headset exit/re-entry, positional tracking, browser/OS versions, and actual overlay/held-input results remain unrecorded.
 
 ## Actual device record
 
@@ -25,11 +32,11 @@ Fill in observed results after following the steps below. “Pending” is not a
 | --- | --- | --- |
 | Planned device | iPhone 16 | Meta Quest 3 |
 | Planned browser | Chrome on iPhone | Quest browser with WebXR; exact browser/version pending |
-| Actual device, OS, browser/version | Pending | Pending |
-| Date and tester | Pending | Pending |
-| Shared trusted HTTPS URL | Pending | Pending |
-| Correct role / connected state / peer visible | Pending | Pending |
-| Immersive mode entered and ended | Phone tracking path deferred | Pending `immersive-vr` |
+| Actual device, OS, browser/version | Pending | Meta Quest 3 selected; browser/OS versions pending |
+| Date and tester | Pending | 2026-10-12, user-reported test |
+| Shared trusted HTTPS URL | Pending | Cloudflare tunnel used; application/health verified separately |
+| Correct role / connected state / peer visible | Pending | Connection reported; complete role/peer observations pending |
+| Immersive mode entered and ended | Phone tracking path deferred | Enter VR confirmed; exit/re-entry pending |
 | Runtime reference space | Not exercised | Pending `local` |
 | Positional tracking / emulated position | Phone tracking path deferred | Pending |
 | DOM overlay type | Not exercised | Pending |
