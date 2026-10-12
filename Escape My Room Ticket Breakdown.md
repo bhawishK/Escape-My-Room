@@ -1,6 +1,6 @@
 # Escape My Room technical ticket breakdown
 
-Approved and published as 17 GitHub issues on 12 October 2026. This replaces the original eight-ticket proposal. Each issue has an end-to-end deliverable, technical approach, acceptance checks, scope boundary, and the ready-for-agent label. GitHub is the implementation tracker, with 21 native blocking relationships. Local ticket files remain source snapshots and earlier drafts remain as drafting history.
+Initially approved and published as 17 GitHub issues on 12 October 2026, replacing the eight-ticket proposal. The original issues have an end-to-end deliverable, technical approach, acceptance checks, scope boundary, and the ready-for-agent label. Deferred phone tracking was subsequently split into Issue #19, bringing the implementation backlog to 18 issues with 23 native blocking relationships. Local ticket files remain source snapshots and earlier drafts remain as drafting history.
 
 ## Confirmed scope and proposed technical defaults
 
@@ -12,9 +12,13 @@ Phone movement uses positional WebXR poses relative to a chosen reference space,
 
 ## Technical contracts to establish through the slices
 
+The user simplified Issue #1 on 12 October 2026: direct phone/VR role buttons connect to one shared room, with VR connected status and no session IDs, authentication, or simulator. Physical iPhone movement tracking remains deferred by the earlier mobile-page-first decision. Published ticket snapshots retain their original wording; Issue #1 and the protocol document record the current approved scope.
+
+The deferred physical phone-tracking requirement has been split into [Issue #19](https://github.com/bhawishK/Escape-My-Room/issues/19). Issue #1 covers connection status and Quest VR entry/exit. Tracking-dependent room alignment, mobile presence, and phone manipulation require the new tracking capability; room loading and connection work can proceed separately.
+
 | Contract | Initial content | First delivered in |
 |---|---|---|
-| Session identity | Session, participant, role, connection generation, room version | 01–02 |
+| Prototype connection | One shared room, phone/VR roles, VR connected status; room version when assets are added | 01–02 |
 | Room entities | Stable ID, transform, bounds/proxy, static/movable flags | 02 |
 | Coordinate mapping | Canonical room frame, meters, client XR-to-room transform, alignment validity | 03 |
 | Manipulation commands | Acquire, movement, release; object ID, manipulation ID, movement sequence | 06 |
@@ -27,16 +31,16 @@ These contracts are developed alongside usable client behavior, rather than in s
 
 ## Approved breakdown
 
-1. **[Connect mobile and VR through Python with a tracked pose](https://github.com/bhawishK/Escape-My-Room/issues/1)**
+1. **[Connect phone and VR through Python with device status](https://github.com/bhawishK/Escape-My-Room/issues/1)**
    - **Blocked by:** None.
-   - **What it delivers:** The mobile master and remote VR solver join a WebXR session served by Python; moving the phone moves a diagnostic marker in the VR view. This proves the actual device-to-service-to-headset path before room content is added.
+   - **What it delivers:** Phone and VR connect directly to one Python shared room; the phone displays VR connected status, and Quest can enter/exit the neutral VR scene. Physical phone tracking is a separate deliverable in Issue #19.
 
 2. **[Load a prepared room and independently selectable objects](https://github.com/bhawishK/Escape-My-Room/issues/2)**
    - **Blocked by:** 01.
    - **What it delivers:** Both participants enter the same recognizable prepared room, with matching furniture identities and one independently movable virtual item.
 
 3. **[Align both WebXR views with the shared room](https://github.com/bhawishK/Escape-My-Room/issues/3)**
-   - **Blocked by:** 02.
+   - **Blocked by:** 02 and [Issue #19](https://github.com/bhawishK/Escape-My-Room/issues/19) (physical phone tracking).
    - **What it delivers:** Participants calibrate their local XR views so known room locations and virtual content agree across mobile and VR.
 
 4. **[Show each participant's position and orientation](https://github.com/bhawishK/Escape-My-Room/issues/4)**

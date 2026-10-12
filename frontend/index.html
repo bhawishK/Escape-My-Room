@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Escape My Room — connection diagnostic</title>
+  </head>
+  <body>
+    <main id="app">
+      <header>
+        <p class="eyebrow">ESCAPE MY ROOM / FIRST CONNECTION SLICE</p>
+        <h1>Connect your phone and VR.</h1>
+        <p>Open this page on both devices and choose which device you are using.</p>
+      </header>
+      <div class="layout">
+        <section class="panel" aria-labelledby="connect-heading">
+          <h2 id="connect-heading">Connect your devices</h2>
+          <div class="device-buttons">
+            <button id="connect-phone">Connect phone</button>
+            <button id="connect-vr" class="secondary">Connect VR headset</button>
+          </div>
+          <p class="hint">Both devices connect to the same prototype automatically.</p>
+          <p id="connection" data-testid="connection" role="status">Not connected</p>
+          <p id="vr-status" data-testid="vr-status" class="device-status" role="status">Connect to see VR device status</p>
+          <div class="button-row">
+            <button id="start-xr" disabled>Enter XR</button>
+            <button id="end-xr" disabled class="secondary">End XR</button>
+          </div>
+          <p id="xr-support" class="notice" role="status">Checking XR support…</p>
+          <p class="hint">iPhone 16 can use the mobile view. Physical phone tracking on iPhone Chrome is pending. Meta Quest 3 uses the immersive VR view.</p>
+          <button id="disconnect" class="secondary" disabled>Disconnect</button>
+          <p id="error" role="alert" hidden></p>
+        </section>
+        <section class="panel scene-panel" aria-labelledby="scene-heading">
+          <div class="scene-heading"><h2 id="scene-heading">VR preview</h2></div>
+          <div id="scene" aria-label="Three-dimensional diagnostic scene"></div>
+          <p class="hint">On Quest, connect the headset and select Enter VR to look around.</p>
+          <details><summary>Device smoke-test diagnostics</summary>
+            <p id="tracking" data-testid="tracking">Inactive</p>
+            <p id="marker-position" data-testid="marker-position">No accepted position</p>
+            <p>Positions are meters in the phone's XR reference space. Room alignment comes later.</p>
+            <p>This report records browser observations. It does not certify a completed hardware test.</p>
+            <pre id="device-report"></pre>
+            <button id="download-report" class="secondary">Download diagnostic report</button>
+          </details>
+        </section>
+      </div>
+    </main>
+    <div id="xr-overlay" hidden>
+      <p id="xr-hud">Connection diagnostic</p>
+      <button id="hold-probe">Hold input probe</button>
+      <button id="overlay-end-xr">End XR</button>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

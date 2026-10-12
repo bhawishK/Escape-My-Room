@@ -86,7 +86,9 @@ Object identity, transforms, ownership, and visibility must have consistent mean
 
 ### Chosen WebXR and Python approach
 
-Use WebXR for the mobile and VR clients, connected through Python shared session services. Browser-side code will drive WebXR input and rendering. Confirm support for the actual phone and headset, positional tracking, room alignment, and the required inputs in the first working slice. WebXR and Python are selected; the exact devices and supporting libraries remain open.
+Use WebXR for the mobile and VR clients, connected through Python shared state. The implemented first slice uses TypeScript, Three.js, Vite, and FastAPI. Targets are iPhone 16 Chrome and Meta Quest 3. The user approved building the iPhone page first and adding phone movement tracking later; the implemented WebXR path alone does not establish positional support on iPhone.
+
+For the prototype, open the same URL on both devices and choose **Connect phone** or **Connect VR headset**. Use one shared room with VR connected status. Session IDs, invite links, authentication, and simulator controls are removed by the user's scope adjustment on 12 October 2026. Quest enters immersive mode with a separate **Enter VR** gesture. Tracking, room alignment, and object interaction still require their respective implementation and device checks.
 
 Treat room capture, reconstruction, and object preparation as a separate pipeline initially; do not assume WebXR supplies these capabilities. That pipeline may use existing tools or processing outside the browser. The first interaction test can load prepared reconstructed assets. An entirely browser-based capture-to-play workflow is not a first-build requirement.
 

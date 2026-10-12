@@ -1,0 +1,23 @@
+{
+  "recorded_at": "2026-10-12T12:01:53.005Z",
+  "role": "mobile_master",
+  "xr": {
+    "secure_context": true,
+    "api_available": false,
+    "immersive_ar": false,
+    "immersive_vr": false,
+    "mode": null,
+    "reference_space": null,
+    "dom_overlay": null,
+    "positional_tracking": "not-tested",
+    "input_sources": [],
+    "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_6_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/155.0.8059.37 Mobile/15E148 Safari/604.1"
+  },
+  "dom_overlay_hold_events": 0,
+  "marker": {
+    "tracking_status": "inactive",
+    "reference_space": null,
+    "position": null
+  },
+  "evidence": "Browser observations only; complete the manual device smoke-test record separately."
+}

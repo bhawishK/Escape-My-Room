@@ -1,0 +1,19 @@
+{
+  "recorded_at": "2026-10-12T11:56:26.291Z",
+  "role": null,
+  "xr": {
+    "secure_context": true,
+    "api_available": false,
+    "immersive_ar": false,
+    "immersive_vr": false,
+    "mode": null,
+    "reference_space": null,
+    "dom_overlay": null,
+    "positional_tracking": "not-tested",
+    "input_sources": [],
+    "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6.1 Mobile/15E148 Safari/604.1"
+  },
+  "dom_overlay_hold_events": 0,
+  "marker": null,
+  "evidence": "Browser observations only; complete the manual device smoke-test record separately."
+}
