@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Escape My Room — connection diagnostic</title>
+  </head>
+  <body>
+    <main id="app">
+      <header>
+        <p class="eyebrow">ESCAPE MY ROOM / FIRST CONNECTION SLICE</p>
+        <h1>One session. Two views.</h1>
+        <p>Connect the mobile master and VR solver, then inspect a shared diagnostic marker.</p>
+      </header>
+      <div class="layout">
+        <section class="panel" aria-labelledby="connect-heading">
+          <h2 id="connect-heading">Connect your devices</h2>
+          <label for="pose-input">Pose input</label>
+          <select id="pose-input">
+            <option value="webxr">Tracked phone (WebXR)</option>
+            <option value="simulator">Simulator (testing only)</option>
+          </select>
+          <button id="create-session">Create session</button>
+          <p class="hint">The device creating the session becomes the mobile master.</p>
+          <label for="session-id">Session ID</label>
+          <input id="session-id" type="text" placeholder="Paste the master's session ID" autocomplete="off" />
+          <button id="join-session" class="secondary">Join as solver</button>
+          <label for="invite-link">Solver invite link</label>
+          <input id="invite-link" type="text" readonly placeholder="Available after creation" />
+          <p id="connection" data-testid="connection" role="status">Not connected</p>
+          <p id="participants" class="hint">Waiting for participants.</p>
+          <div class="button-row">
+            <button id="start-xr" disabled>Enter XR</button>
+            <button id="end-xr" disabled class="secondary">End XR</button>
+          </div>
+          <p id="xr-support" class="notice" role="status">Checking XR support…</p>
+          <p class="hint">iPhone 16 can use the mobile view. Physical phone tracking on iPhone Chrome is pending. Meta Quest 3 uses the immersive VR view.</p>
+          <button id="leave-session" class="secondary" disabled>Leave session</button>
+          <p id="error" role="alert" hidden></p>
+        </section>
+        <section class="panel scene-panel" aria-labelledby="scene-heading">
+          <div class="scene-heading"><h2 id="scene-heading">Shared marker</h2><span id="tracking" data-testid="tracking">Inactive</span></div>
+          <div id="scene" aria-label="Three-dimensional diagnostic scene"></div>
+          <p id="marker-position" data-testid="marker-position" class="position">No accepted position</p>
+          <p class="hint">Coordinates are meters in the phone's XR reference space. The display uses a fixed offset to keep the marker in front of the viewer; room alignment comes later.</p>
+          <fieldset id="simulator" hidden>
+            <legend>SIMULATOR — synthetic input, not phone tracking</legend>
+            <div class="coordinates">
+              <label>X<input id="sim-x" type="number" step="0.05" min="-100" max="100" value="0" aria-label="Simulator X (meters)" /></label>
+              <label>Y<input id="sim-y" type="number" step="0.05" min="-100" max="100" value="0" aria-label="Simulator Y (meters)" /></label>
+              <label>Z<input id="sim-z" type="number" step="0.05" min="-100" max="100" value="0" aria-label="Simulator Z (meters)" /></label>
+            </div>
+            <button id="send-simulated">Send simulated pose</button>
+          </fieldset>
+          <details><summary>Device smoke-test diagnostics</summary>
+            <p>This report records browser observations. It does not certify a completed hardware test.</p>
+            <pre id="device-report"></pre>
+            <button id="download-report" class="secondary">Download diagnostic report</button>
+          </details>
+        </section>
+      </div>
+    </main>
+    <div id="xr-overlay" hidden>
+      <p id="xr-hud">Connection diagnostic</p>
+      <button id="hold-probe">Hold input probe</button>
+      <button id="overlay-end-xr">End XR</button>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

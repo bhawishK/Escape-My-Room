@@ -2,3 +2,16 @@
 /.review/
 /.scratch/escape-my-room/drafts/
 /.scratch/escape-my-room/drafts-v2/
+
+# Local application dependencies and generated output
+/.venv/
+**/__pycache__/
+/.pytest_cache/
+/.mypy_cache/
+/.ruff_cache/
+/frontend/node_modules/
+/frontend/dist/
+/frontend/test-results/
+/frontend/playwright-report/
+/.certs/
+*.egg-info/
