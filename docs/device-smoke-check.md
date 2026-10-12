@@ -1,6 +1,6 @@
 # Issue #1: device smoke-check record
 
-Status: **shared-room software implemented; Quest joining and grid visibility confirmed by the user; iPhone report captured; exit/re-entry and permission recovery pending**.
+Status: **shared-room software implemented; Quest joining/grid visibility user-confirmed; iPhone Chrome mobile role/shared state captured; exit/re-entry and Quest permission recovery pending**.
 
 Targets are iPhone 16 Chrome for the mobile master and Meta Quest 3 for immersive VR. The user approved: “Build the iPhone page first; add movement tracking later.” On 12 October 2026, the user also requested removing the simulator and session IDs/authentication in favor of a simple VR connected status. This supersedes the original session-enrollment design. [Issue #1](https://github.com/bhawishK/Escape-My-Room/issues/1) covers connection status and Quest entry/exit; deferred physical phone tracking and its tracking-mode lifecycle now belong to [Issue #19](https://github.com/bhawishK/Escape-My-Room/issues/19). Tracking no longer blocks completion of Issue #1.
 
@@ -30,6 +30,13 @@ Automated on Windows, 2026-10-12:
 - `role: null` records no selected role, and `marker: null` records no accepted marker snapshot. This report does not establish a successful mobile-role connection or the phone's VR status display. Capture another report after **Connect phone** to record the joined role.
 - Quest OS/browser versions and its own diagnostic report remain pending. Do not mark the combined exit/re-entry or complete device-record criteria passed from these observations alone.
 
+Follow-up iPhone Chrome report at `2026-10-12T12:01:53.005Z`:
+
+- The [joined-role report](device-reports/2026-10-12-iphone-chrome-connected.json) records `role: mobile_master` and a non-null marker snapshot. It establishes the selected mobile role and receipt of shared state, resolving the earlier report's missing-role evidence. The report does not include current socket status or the VR connected boolean, so it cannot independently establish those live status observations.
+- Its user-agent reports iOS `26_6_1` and `CriOS/155.0.8059.37`, identifying the planned Chrome browser. The trailing `Safari/604.1` token does not change that Chrome identifier. Use these as reported version values; exact model and settings confirmation are separate.
+- A secure context is confirmed; WebXR remains unavailable. The marker is `inactive` with null position/reference space, as expected while physical phone tracking is deferred. No mobile XR or held-overlay test occurred; Issue #19 owns physical tracking.
+- The earlier Safari-like report remains preserved as a separate observation. This newer Chrome report is the current mobile record. Quest versions, exit/re-entry, and permission recovery remain pending.
+
 ## Actual device record
 
 “Pending” is not a pass or a measured capability.
@@ -38,16 +45,16 @@ Automated on Windows, 2026-10-12:
 | --- | --- | --- |
 | Planned device | iPhone 16 | Meta Quest 3 |
 | Planned browser | Chrome on iPhone | Quest WebXR browser; exact version pending |
-| Actual OS / browser version | UA reports iOS 18_7, Safari Version/26.6.1; settings confirmation pending | Pending |
-| Date and tester | 2026-10-12, user-provided report at 11:56:26 UTC | 2026-10-12, user-reported join/grid and earlier VR entry |
+| Actual OS / browser version | Latest UA reports iOS 26_6_1, Chrome 155.0.8059.37; settings confirmation pending | Pending |
+| Date and tester | 2026-10-12, user-provided Chrome report at 12:01:53 UTC | 2026-10-12, user-reported join/grid and earlier VR entry |
 | Shared trusted HTTPS URL | Secure context confirmed; exact URL absent from report | Cloudflare route previously used |
-| New direct role connection / peer status | Report role null; joined-role/status evidence pending | Join and grid visibility confirmed; full peer-status observations pending |
+| New direct role connection / peer status | Mobile-master role and received shared marker snapshot recorded; live VR-status observation not in report | Join and grid visibility confirmed; full peer-status observations pending |
 | Immersive entry / exit / re-entry | Phone tracking deferred | Earlier entry confirmed; current join/grid confirmed; exit/re-entry pending |
 | Reference space / positional tracking | Phone tracking deferred | Pending |
 | DOM overlay / held control events | Not exercised | Pending or unavailable |
 | Physically tracked marker delivery | Deferred | Pending |
-| Permission denial / recovery | Pending | Pending |
-| Saved report | [User-provided JSON](device-reports/2026-10-12-iphone.json); no selected role recorded | Pending |
+| Permission denial / recovery | No XR API or mode exercised; tracking permission work deferred | Pending |
+| Saved report | [Latest Chrome/mobile role JSON](device-reports/2026-10-12-iphone-chrome-connected.json); [earlier report](device-reports/2026-10-12-iphone.json) preserved | Pending |
 
 ## Test the current first slice
 
