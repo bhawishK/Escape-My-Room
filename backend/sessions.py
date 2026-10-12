@@ -1,113 +1,49 @@
-"""In-memory diagnostic sessions; socket identity is assigned by the server."""
+"""One shared room for the connected phone and VR prototype."""
 
 import asyncio
-import secrets
 from dataclasses import dataclass, field
 from typing import Any
-from uuid import uuid4
 
-from fastapi import HTTPException, WebSocket
+from fastapi import WebSocket
 
-from backend.protocol import JoinRequest, MarkerState, PoseMessage, Role, TrackingSource
-
-
-@dataclass
-class Participant:
-    participant_id: str
-    role: Role
-    tracking_source: TrackingSource
-    token: str = field(default_factory=lambda: secrets.token_urlsafe(32))
-    generation: int = 0
-    sequence: int = 0
-    socket: WebSocket | None = None
+from backend.protocol import MarkerState, PoseMessage, Role
 
 
 @dataclass
-class Session:
-    session_id: str
-    participants: dict[str, Participant] = field(default_factory=lambda: dict[str, Participant]())
+class PrototypeRoom:
+    sockets: dict[Role, WebSocket] = field(default_factory=lambda: dict[Role, WebSocket]())
     revision: int = 0
     marker: MarkerState = field(default_factory=MarkerState)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def snapshot(self) -> dict[str, Any]:
         return {
-            "session_id": self.session_id,
             "revision": self.revision,
-            "participants": [
-                {
-                    "participant_id": p.participant_id,
-                    "role": p.role,
-                    "tracking_source": p.tracking_source,
-                    "connected": p.socket is not None,
-                    "connection_generation": p.generation,
-                }
-                for p in self.participants.values()
-            ],
+            "mobile_connected": "mobile_master" in self.sockets,
+            "vr_connected": "vr_solver" in self.sockets,
             "marker": self.marker.model_dump(),
         }
 
     async def broadcast(self, exclude: WebSocket | None = None) -> None:
         event = {"type": "state", "state": self.snapshot()}
-        for participant in list(self.participants.values()):
-            socket = participant.socket
-            if socket is not None and socket is not exclude:
+        for socket in list(self.sockets.values()):
+            if socket is not exclude:
                 try:
                     await asyncio.wait_for(socket.send_json(event), timeout=2)
                 except (RuntimeError, OSError, TimeoutError):
-                    # Its endpoint's disconnect handler owns removal and state cleanup.
+                    # The socket endpoint owns disconnect cleanup.
                     continue
 
-    def accept_pose(self, participant: Participant, pose: PoseMessage) -> None:
-        participant.sequence = pose.sequence
+    def accept_pose(self, pose: PoseMessage) -> None:
         self.marker = MarkerState(
-            participant_id=participant.participant_id,
-            source=participant.tracking_source,
             tracking_status=pose.tracking_status,
             reference_space=pose.reference_space,
             position=pose.position,
         )
         self.revision += 1
 
-    def reset_master_marker(self, participant: Participant) -> None:
-        if participant.role == "mobile_master":
-            self.marker = MarkerState(
-                participant_id=participant.participant_id, source=participant.tracking_source
-            )
-
-    def remove_participant(self, participant: Participant) -> None:
-        participant.socket = None
-        self.participants.pop(participant.participant_id, None)
-        if self.marker.participant_id == participant.participant_id:
-            self.marker = MarkerState(
-                participant_id=participant.participant_id,
-                source=participant.tracking_source,
-                tracking_status="lost",
-                reference_space=self.marker.reference_space,
-            )
+    def disconnect(self, role: Role) -> None:
+        self.sockets.pop(role, None)
+        if role == "mobile_master":
+            self.marker = MarkerState(tracking_status="lost")
         self.revision += 1
-
-
-class SessionStore:
-    def __init__(self) -> None:
-        self.sessions: dict[str, Session] = {}
-
-    def create(self) -> Session:
-        session = Session(str(uuid4()))
-        self.sessions[session.session_id] = session
-        return session
-
-    def get(self, session_id: str) -> Session:
-        session = self.sessions.get(session_id)
-        if session is None:
-            raise HTTPException(404, "Session not found. Ask the master for its current link.")
-        return session
-
-    async def join(self, session_id: str, request: JoinRequest) -> Participant:
-        session = self.get(session_id)
-        async with session.lock:
-            if any(p.role == request.role for p in session.participants.values()):
-                raise HTTPException(409, "That role is already occupied in this session.")
-            participant = Participant(str(uuid4()), request.role, request.tracking_source)
-            session.participants[participant.participant_id] = participant
-            return participant

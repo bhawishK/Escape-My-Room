@@ -12,9 +12,11 @@ Phone movement uses positional WebXR poses relative to a chosen reference space,
 
 ## Technical contracts to establish through the slices
 
+The user simplified Issue #1 on 12 October 2026: direct phone/VR role buttons connect to one shared room, with VR connected status and no session IDs, authentication, or simulator. Physical iPhone movement tracking remains deferred by the earlier mobile-page-first decision. Published ticket snapshots retain their original wording; Issue #1 and the protocol document record the current approved scope.
+
 | Contract | Initial content | First delivered in |
 |---|---|---|
-| Session identity | Session, participant, role, connection generation, room version | 01–02 |
+| Prototype connection | One shared room, phone/VR roles, VR connected status; room version when assets are added | 01–02 |
 | Room entities | Stable ID, transform, bounds/proxy, static/movable flags | 02 |
 | Coordinate mapping | Canonical room frame, meters, client XR-to-room transform, alignment validity | 03 |
 | Manipulation commands | Acquire, movement, release; object ID, manipulation ID, movement sequence | 06 |

@@ -1,30 +1,43 @@
-# Diagnostic session contract
+# Prototype connection and pose contract
 
-The browser joins through HTTP and receives authoritative state over JSON WebSockets. Python state is local to one process. This contract concerns a marker only; room alignment, selection, object ownership, and manipulation are later slices.
+Python owns one shared room in one process. There are no session IDs, participant IDs, join grants, tokens, accounts, or simulator inputs. Room alignment, selection, object ownership, and manipulation remain later slices.
 
-## Join and identity
+## Connect a device
 
 | Request | Result |
 | --- | --- |
 | `GET /api/health` | `{ "status": "ok" }` |
-| `POST /api/sessions` | HTTP 201 with server-assigned `session_id` |
-| `POST /api/sessions/{session_id}/participants` | HTTP 201 with `participant_id`, `connection_token`, and `role` |
-| `POST /api/sessions/{session_id}/participants/{participant_id}/release` | HTTP 204 after authenticated release; body `{ "connection_token": "..." }` |
+| WebSocket `/api/ws?role=mobile_master` | Connect the phone |
+| WebSocket `/api/ws?role=vr_solver` | Connect the VR headset page |
 
-The join body is `{ "role": "mobile_master", "tracking_source": "webxr" }`. The other role is `vr_solver`; the explicit development source is `simulator`. Unknown fields and values are rejected with HTTP 422, a missing session with 404, and an occupied role with 409. Each session has at most one participant in each role. If its first socket fails, the page releases its grant over HTTP before allowing a manual retry in the same session. Release checks the participant credential, closes any existing socket, clears its usable marker, and frees the role. A repeated release after removal is harmless; an incorrect credential for an existing participant gets 403. If HTTP is also unreachable, the page explains that recovery requires restored connectivity and a new master session. Automatic reservation expiry is not implemented.
+Both devices use the same origin, with WSS on HTTPS. Unknown roles fail the handshake. One socket is active per role. Connecting a new tab in a role replaces the old socket, whose close reason explains that another tab connected. The old endpoint cannot remove the replacement. A new phone connection resets the marker and starts a fresh pose sequence.
 
-Connect to `/api/sessions/{session_id}/ws?participant_id={participant_id}` using WebSocket subprotocols `["escape-my-room", connection_token]`. Python selects `escape-my-room` and validates the credential against that participant in that session. The token is not included in shared state, invitation links, or query strings. Treat it as a connection credential. The invitation shares only the session ID.
+The first event is `{ "type": "welcome", "state": ... }`. Later events are `{ "type": "state", "state": ... }`; both roles receive the same accepted state, including their own updates:
 
-The first message is `welcome`, containing the assigned `connection_generation` and the current state. A new socket for the same credential replaces the old one, increments its generation, resets its sequence, and clears an old master pose. A client must use the generation it received. The UI does not reconnect automatically: leave and rejoin after a dropped connection. On disconnect, Python removes that participant and releases its role.
+```json
+{
+  "revision": 2,
+  "mobile_connected": true,
+  "vr_connected": true,
+  "marker": {
+    "tracking_status": "inactive",
+    "reference_space": null,
+    "position": null
+  }
+}
+```
+
+Revision increases for joins, accepted poses, and disconnects. Closing the VR socket sets `vr_connected` to false. Closing the phone socket also clears its marker to `lost`, without disconnecting VR. Restarting Python removes all state. There is no automatic reconnect; the role button starts a fresh connection. There are no HTTP reservations to release if a socket fails.
+
+Connected status represents a live page connection, not proof that immersive VR has started or positional tracking works. Roles constrain message behavior; they are not authentication. Anyone who can access this prototype URL can choose either role.
 
 ## Publish a marker pose
 
-Only the mobile master can publish a pose. Example from an XR frame:
+Only the phone role can publish:
 
 ```json
 {
   "type": "pose",
-  "connection_generation": 1,
   "sequence": 1,
   "tracking_status": "tracked",
   "reference_space": "local",
@@ -32,22 +45,12 @@ Only the mobile master can publish a pose. Example from an XR frame:
 }
 ```
 
-Sequence numbers strictly increase within the current connection. Position contains finite numeric coordinates bounded to ±100 meters for this diagnostic. It is not an accelerometer estimate: the XR path sends `XRFrame.getViewerPose(localReferenceSpace).transform.position` only when positional tracking is not emulated and visibility is usable. The app samples at most 20 times per second and drops frames rather than buffering offline poses.
+Sequences strictly increase within each socket, starting at 1. Coordinates must be finite numbers within ±100 meters. Unknown fields are rejected. A tracked pose requires position and `local` or `local-floor`; this client requests `local`. `inactive`, `lost`, and `emulated` statuses require a null position. Simulated status is no longer accepted.
 
-| Tracking status | Position | Meaning |
-| --- | --- | --- |
-| `tracked` | Required | Non-emulated WebXR position |
-| `simulated` | Required | Explicit simulator input, never labelled tracked |
-| `inactive` | `null` | XR has not started or has ended |
-| `lost` | `null` | No usable pose, visibility lost, or master disconnected |
-| `emulated` | `null` | Runtime is emulating position; not accepted as positional evidence |
+The retained WebXR path samples `XRFrame.getViewerPose(localReferenceSpace).transform.position` at most 20 times per second when position is not emulated and visibility is usable. It drops frames instead of buffering offline poses. An unsupported iPhone page sends no positional input; the agreed iPhone tracking mechanism remains deferred.
 
-Usable poses require `local` or `local-floor`; this client requests `local`. Simulator-source participants cannot publish `tracked`/`emulated`, and WebXR-source participants cannot publish `simulated`. These checks distinguish declared paths; they cannot attest to a browser's physical sensors. An unsupported iPhone view sends no positional input.
-
-Malformed JSON, binary frames, schema violations, non-finite values, invalid sources, solver publications, stale generations, and repeated sequences are rejected without updating the marker. Application errors have `type: "error"`, a stable `code`, and an actionable `message`. Text payloads are limited to 16 KiB; the documented server invocation also enforces that limit at the WebSocket transport (oversized frames may close the socket). Invalid handshake credentials are refused before accepting the socket.
+Malformed JSON, binary frames, schema violations, solver publications, and repeated sequences produce `{ "type": "error", "code": "...", "message": "..." }` without changing the marker. Codes are `invalid_message`, `role_forbidden`, and `stale_sequence`. Text messages are limited to 16 KiB; the documented server invocation enforces the same transport limit, which may close oversized frames. These are correctness checks, not sensor attestation.
 
 ## Render accepted state
 
-Both clients render `state` events with `session_id`, monotonically increasing `revision`, public `participants`, and `marker`. Participants report role, declared source, connected status, and connection generation. Marker state includes the originating participant/source, tracking status, reference space, and position. The publisher also waits for accepted state before moving its own marker. Session broadcasts go only to that session's sockets.
-
-Coordinates are the sender's raw XR meters. The diagnostic places their origin at a visible presentation offset `(0, 1.2, -3)` in each viewer's scene. This is deliberately not a shared physical room origin or calibration. Unavailable positions hide the sphere; simulated positions use amber and an explicit label. Axes/grid remain visible as the neutral scene.
+Both clients render the Python-accepted marker. Missing positions hide the sphere; the neutral grid and axes remain visible. Raw XR meters use a presentation offset `(0, 1.2, -3)` in each viewer's scene. This is not shared physical alignment or room calibration. Manual coordinate controls have been removed.

@@ -47,7 +47,6 @@ export class DiagnosticScene {
     const position = state.marker.position;
     this.marker.visible = position !== null;
     if (position) this.marker.position.set(position.x, position.y, position.z);
-    this.marker.material.color.set(state.marker.source === 'simulator' ? 0xffbd69 : 0x66e6cf);
   }
 
   setAR(enabled: boolean): void {

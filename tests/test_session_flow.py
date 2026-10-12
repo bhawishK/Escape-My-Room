@@ -1,40 +1,13 @@
-"""Client-visible acceptance checks for Issue #1 (not hardware evidence)."""
+"""Public WebSocket checks for the single shared prototype room; not hardware evidence."""
 
 import json
 
-import httpx
 import pytest
-from websockets.exceptions import InvalidStatus
 from websockets.sync.client import connect
 
 
-def create_session(url):
-    response = httpx.post(f"{url}/api/sessions")
-    response.raise_for_status()
-    return response.json()["session_id"]
-
-
-def join(url, session_id, role="mobile_master", source="webxr"):
-    response = httpx.post(
-        f"{url}/api/sessions/{session_id}/participants",
-        json={"role": role, "tracking_source": source},
-    )
-    response.raise_for_status()
-    return response.json()
-
-
-def socket_url(url, session_id, identity):
-    return (
-        f"{url.replace('http://', 'ws://')}/api/sessions/{session_id}/ws"
-        f"?participant_id={identity['participant_id']}"
-    )
-
-
-def open_socket(url, session_id, identity):
-    return connect(
-        socket_url(url, session_id, identity),
-        subprotocols=["escape-my-room", identity["connection_token"]],
-    )
+def open_socket(url, role):
+    return connect(f"{url.replace('http://', 'ws://')}/api/ws?role={role}")
 
 
 def receive_until(ws, predicate):
@@ -42,261 +15,139 @@ def receive_until(ws, predicate):
         message = json.loads(ws.recv(timeout=2))
         if predicate(message):
             return message
-    raise AssertionError("Expected client-visible event was not received")
+    raise AssertionError("Expected public state was not received")
 
 
-def pose(generation, sequence=1, position=None, **overrides):
-    message = {
+def pose(sequence=1, **overrides):
+    return {
         "type": "pose",
-        "connection_generation": generation,
         "sequence": sequence,
         "tracking_status": "tracked",
         "reference_space": "local",
-        "position": position or {"x": 0.25, "y": -0.1, "z": -0.5},
-    }
-    return message | overrides
+        "position": {"x": 0.25, "y": -0.1, "z": -0.5},
+    } | overrides
 
 
-def test_phone_pose_reaches_python_and_both_views(service_url):
-    session_id = create_session(service_url)
-    master = join(service_url, session_id)
-    solver = join(service_url, session_id, "vr_solver")
-    with open_socket(service_url, session_id, master) as phone:
+def test_phone_and_vr_connect_directly_and_share_accepted_state(service_url):
+    with open_socket(service_url, "mobile_master") as phone:
         welcome = json.loads(phone.recv(timeout=2))
         assert welcome["type"] == "welcome"
-        assert welcome["participant_id"] == master["participant_id"]
-        with open_socket(service_url, session_id, solver) as headset:
-            solver_welcome = json.loads(headset.recv(timeout=2))
-            assert {p["role"] for p in solver_welcome["state"]["participants"]} == {
-                "mobile_master",
-                "vr_solver",
-            }
-            phone.send(json.dumps(pose(welcome["connection_generation"])))
+        assert welcome["state"]["mobile_connected"] is True
+        with open_socket(service_url, "vr_solver") as headset:
+            state = json.loads(headset.recv(timeout=2))["state"]
+            assert state["mobile_connected"] is True
+            assert state["vr_connected"] is True
+            phone.send(json.dumps(pose()))
             for view in (phone, headset):
-                state = receive_until(
+                accepted = receive_until(
                     view,
-                    lambda msg: (
-                        msg.get("state", {}).get("marker", {}).get("tracking_status") == "tracked"
+                    lambda event: (
+                        event.get("state", {}).get("marker", {}).get("tracking_status") == "tracked"
                     ),
                 )["state"]
-                assert state["marker"]["position"] == {"x": 0.25, "y": -0.1, "z": -0.5}
-                assert state["marker"]["source"] == "webxr"
+                assert accepted["marker"]["position"] == {"x": 0.25, "y": -0.1, "z": -0.5}
 
 
-def test_solver_cannot_publish_master_pose(service_url):
-    session_id = create_session(service_url)
-    solver = join(service_url, session_id, "vr_solver")
-    with open_socket(service_url, session_id, solver) as headset:
-        welcome = json.loads(headset.recv(timeout=2))
-        headset.send(json.dumps(pose(welcome["connection_generation"])))
+def test_vr_cannot_overwrite_phone_pose(service_url):
+    with open_socket(service_url, "vr_solver") as headset:
+        headset.recv(timeout=2)
+        headset.send(json.dumps(pose()))
         rejection = json.loads(headset.recv(timeout=2))
         assert rejection["type"] == "error"
         assert rejection["code"] == "role_forbidden"
 
 
-@pytest.mark.parametrize(
-    "override,code",
-    [
-        ({"connection_generation": 999}, "stale_connection"),
-        ({"sequence": 1}, "stale_sequence"),
-        ({"tracking_status": "simulated"}, "source_mismatch"),
-        ({"position": {"x": "0.5", "y": 0.0, "z": 0.0}}, "invalid_message"),
-        ({"position": {"x": float("inf"), "y": 0.0, "z": 0.0}}, "invalid_message"),
-        ({"participant_id": "someone-else"}, "invalid_message"),
-    ],
-)
-def test_rejected_pose_does_not_replace_last_accepted_position(service_url, override, code):
-    session_id = create_session(service_url)
-    master = join(service_url, session_id)
-    with open_socket(service_url, session_id, master) as phone:
-        generation = json.loads(phone.recv(timeout=2))["connection_generation"]
-        phone.send(json.dumps(pose(generation)))
-        accepted = json.loads(phone.recv(timeout=2))
-        phone.send(json.dumps(pose(generation, sequence=2) | override))
-        rejection = json.loads(phone.recv(timeout=2))
-        assert rejection["type"] == "error"
-        assert rejection["code"] == code
-        # A new viewer observes the unchanged authoritative position.
-        solver = join(service_url, session_id, "vr_solver")
-        with open_socket(service_url, session_id, solver) as headset:
-            state = json.loads(headset.recv(timeout=2))["state"]
-            assert state["marker"] == accepted["state"]["marker"]
-
-
-def test_two_sessions_keep_their_marker_and_participants_isolated(service_url):
-    first = create_session(service_url)
-    second = create_session(service_url)
-    master_a = join(service_url, first)
-    master_b = join(service_url, second, source="simulator")
-    with open_socket(service_url, first, master_a) as a:
-        gen_a = json.loads(a.recv(timeout=2))["connection_generation"]
-        with open_socket(service_url, second, master_b) as b:
-            gen_b = json.loads(b.recv(timeout=2))["connection_generation"]
-            a.send(json.dumps(pose(gen_a)))
-            assert json.loads(a.recv(timeout=2))["state"]["session_id"] == first
-            b.send(
-                json.dumps(
-                    pose(
-                        gen_b, position={"x": 2.0, "y": 0.0, "z": -1.0}, tracking_status="simulated"
-                    )
-                )
-            )
-            state_b = json.loads(b.recv(timeout=2))["state"]
-            assert state_b["marker"]["position"] == {"x": 2.0, "y": 0.0, "z": -1.0}
-            assert state_b["marker"]["source"] == "simulator"
-            assert {p["participant_id"] for p in state_b["participants"]} == {
-                master_b["participant_id"],
-            }
-
-
-def test_socket_credentials_cannot_cross_sessions(service_url):
-    first = create_session(service_url)
-    second = create_session(service_url)
-    master = join(service_url, first)
-    with pytest.raises(InvalidStatus) as denied:
-        with open_socket(service_url, second, master):
-            pass
-    assert denied.value.response.status_code == 403
-
-
-def test_missing_session_invalid_role_and_duplicate_role_have_actionable_errors(service_url):
-    missing = httpx.post(
-        f"{service_url}/api/sessions/not-a-session/participants", json={"role": "vr_solver"}
-    )
-    assert missing.status_code == 404
-    session = create_session(service_url)
-    invalid = httpx.post(
-        f"{service_url}/api/sessions/{session}/participants", json={"role": "admin"}
-    )
-    assert invalid.status_code == 422
-    join(service_url, session)
-    duplicate = httpx.post(
-        f"{service_url}/api/sessions/{session}/participants", json={"role": "mobile_master"}
-    )
-    assert duplicate.status_code == 409
-    assert "occupied" in duplicate.json()["detail"]
-
-
-def test_stopped_tracking_and_disconnect_remove_usable_marker(service_url):
-    session = create_session(service_url)
-    master = join(service_url, session)
-    solver = join(service_url, session, "vr_solver")
-    with open_socket(service_url, session, solver) as headset:
-        headset.recv(timeout=2)
-        with open_socket(service_url, session, master) as phone:
-            gen = json.loads(phone.recv(timeout=2))["connection_generation"]
-            phone.send(json.dumps(pose(gen)))
-            receive_until(
-                headset,
-                lambda e: e.get("state", {}).get("marker", {}).get("tracking_status") == "tracked",
-            )
-            phone.recv(timeout=2)
-            phone.send(
-                json.dumps(
-                    pose(gen, sequence=2, position=None)
-                    | {
-                        "tracking_status": "inactive",
-                        "position": None,
-                    }
-                )
-            )
-            state = receive_until(
-                headset,
-                lambda e: e.get("state", {}).get("marker", {}).get("tracking_status") == "inactive",
-            )["state"]
-            assert state["marker"]["position"] is None
-        disconnected = receive_until(
-            headset, lambda e: e.get("state", {}).get("marker", {}).get("tracking_status") == "lost"
-        )["state"]
-        assert disconnected["marker"]["position"] is None
-        assert [p["role"] for p in disconnected["participants"]] == ["vr_solver"]
-
-
-def test_binary_message_is_rejected_without_killing_connection(service_url):
-    session = create_session(service_url)
-    master = join(service_url, session)
-    with open_socket(service_url, session, master) as phone:
-        generation = json.loads(phone.recv(timeout=2))["connection_generation"]
-        phone.send(b"not-json-text")
-        assert json.loads(phone.recv(timeout=2))["code"] == "invalid_message"
-        phone.send(json.dumps(pose(generation)))
-        assert json.loads(phone.recv(timeout=2))["state"]["marker"]["tracking_status"] == "tracked"
-
-
-def test_replacement_connection_has_new_generation_and_no_old_usable_pose(service_url):
-    session = create_session(service_url)
-    master = join(service_url, session)
-    with open_socket(service_url, session, master) as first:
-        generation = json.loads(first.recv(timeout=2))["connection_generation"]
-        first.send(json.dumps(pose(generation)))
-        first.recv(timeout=2)
-        with open_socket(service_url, session, master) as replacement:
-            welcome = json.loads(replacement.recv(timeout=2))
-            assert welcome["connection_generation"] == generation + 1
-            assert welcome["state"]["marker"]["position"] is None
-            replacement.send(json.dumps(pose(generation)))
-            assert json.loads(replacement.recv(timeout=2))["code"] == "stale_connection"
-            replacement.send(json.dumps(pose(welcome["connection_generation"])))
-            assert json.loads(replacement.recv(timeout=2))["state"]["marker"]["position"] == {
+def test_old_pose_does_not_replace_current_position(service_url):
+    with open_socket(service_url, "mobile_master") as phone:
+        phone.recv(timeout=2)
+        phone.send(json.dumps(pose()))
+        phone.recv(timeout=2)
+        phone.send(json.dumps(pose(position={"x": 4.0, "y": 0.0, "z": 0.0})))
+        assert json.loads(phone.recv(timeout=2))["code"] == "stale_sequence"
+        with open_socket(service_url, "vr_solver") as headset:
+            assert json.loads(headset.recv(timeout=2))["state"]["marker"]["position"] == {
                 "x": 0.25,
                 "y": -0.1,
                 "z": -0.5,
             }
 
 
-def test_failed_socket_join_can_release_its_grant_and_retry_without_losing_session(service_url):
-    session = create_session(service_url)
-    solver = join(service_url, session, "vr_solver")
-    release_url = (
-        f"{service_url}/api/sessions/{session}/participants/{solver['participant_id']}/release"
-    )
-    denied = httpx.post(release_url, json={"connection_token": "incorrect"})
-    assert denied.status_code == 403
-    occupied = httpx.post(
-        f"{service_url}/api/sessions/{session}/participants", json={"role": "vr_solver"}
-    )
-    assert occupied.status_code == 409
-    released = httpx.post(release_url, json={"connection_token": solver["connection_token"]})
-    assert released.status_code == 204
-    assert (
-        httpx.post(release_url, json={"connection_token": solver["connection_token"]}).status_code
-        == 204
-    )
-    retry = join(service_url, session, "vr_solver")
-    with open_socket(service_url, session, retry) as headset:
-        welcome = json.loads(headset.recv(timeout=2))
-        assert welcome["state"]["session_id"] == session
-        assert [p["role"] for p in welcome["state"]["participants"]] == ["vr_solver"]
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"tracking_status": "simulated"},
+        {"position": {"x": "0.5", "y": 0.0, "z": 0.0}},
+        {"position": {"x": float("inf"), "y": 0.0, "z": 0.0}},
+        {"position": {"x": 101.0, "y": 0.0, "z": 0.0}},
+        {"tracking_status": "lost"},
+    ],
+)
+def test_invalid_or_simulated_pose_preserves_last_accepted_position(service_url, override):
+    with open_socket(service_url, "mobile_master") as phone:
+        phone.recv(timeout=2)
+        phone.send(json.dumps(pose()))
+        phone.recv(timeout=2)
+        phone.send(json.dumps(pose(sequence=2, **override)))
+        assert json.loads(phone.recv(timeout=2))["code"] == "invalid_message"
+        with open_socket(service_url, "vr_solver") as headset:
+            assert json.loads(headset.recv(timeout=2))["state"]["marker"]["position"] == {
+                "x": 0.25,
+                "y": -0.1,
+                "z": -0.5,
+            }
 
 
-def test_releasing_active_master_clears_peer_marker_and_revokes_old_credential(service_url):
-    session = create_session(service_url)
-    master = join(service_url, session)
-    solver = join(service_url, session, "vr_solver")
-    with open_socket(service_url, session, solver) as headset:
+@pytest.mark.parametrize("raw", [b"not-json-text", "{malformed"])
+def test_bad_frame_does_not_kill_connection(service_url, raw):
+    with open_socket(service_url, "mobile_master") as phone:
+        phone.recv(timeout=2)
+        phone.send(raw)
+        assert json.loads(phone.recv(timeout=2))["code"] == "invalid_message"
+        phone.send(json.dumps(pose()))
+        assert json.loads(phone.recv(timeout=2))["state"]["marker"]["tracking_status"] == "tracked"
+
+
+def test_phone_disconnect_clears_marker_and_can_reconnect_directly(service_url):
+    with open_socket(service_url, "vr_solver") as headset:
         headset.recv(timeout=2)
-        with open_socket(service_url, session, master) as phone:
-            generation = json.loads(phone.recv(timeout=2))["connection_generation"]
-            phone.send(json.dumps(pose(generation)))
+        with open_socket(service_url, "mobile_master") as phone:
+            phone.recv(timeout=2)
+            phone.send(json.dumps(pose()))
             receive_until(
                 headset,
                 lambda e: e.get("state", {}).get("marker", {}).get("tracking_status") == "tracked",
             )
-            release = httpx.post(
-                f"{service_url}/api/sessions/{session}/participants/{master['participant_id']}/release",
-                json={"connection_token": master["connection_token"]},
+        gone = receive_until(
+            headset, lambda e: e.get("state", {}).get("mobile_connected") is False
+        )["state"]
+        assert gone["vr_connected"] is True
+        assert gone["marker"]["position"] is None
+        with open_socket(service_url, "mobile_master") as phone:
+            assert json.loads(phone.recv(timeout=2))["state"]["marker"]["position"] is None
+            phone.send(json.dumps(pose()))
+            assert (
+                json.loads(phone.recv(timeout=2))["state"]["marker"]["tracking_status"] == "tracked"
             )
-            assert release.status_code == 204
-            cleared = receive_until(
-                headset,
-                lambda e: e.get("state", {}).get("marker", {}).get("tracking_status") == "lost",
-            )["state"]
-            assert cleared["marker"]["position"] is None
-            assert [p["role"] for p in cleared["participants"]] == ["vr_solver"]
-        with pytest.raises(InvalidStatus) as revoked:
-            with open_socket(service_url, session, master):
-                pass
-        assert revoked.value.response.status_code == 403
-        replacement = join(service_url, session)
-        with open_socket(service_url, session, replacement) as new_phone:
-            assert json.loads(new_phone.recv(timeout=2))["state"]["marker"]["position"] is None
+
+
+def test_new_vr_tab_replaces_old_without_clearing_connected_status(service_url):
+    with open_socket(service_url, "mobile_master") as phone:
+        phone.recv(timeout=2)
+        with open_socket(service_url, "vr_solver") as old_vr:
+            old_vr.recv(timeout=2)
+            with open_socket(service_url, "vr_solver") as new_vr:
+                assert json.loads(new_vr.recv(timeout=2))["state"]["vr_connected"] is True
+                phone.send(json.dumps(pose()))
+                current = receive_until(
+                    new_vr,
+                    lambda e: (
+                        e.get("state", {}).get("marker", {}).get("tracking_status") == "tracked"
+                    ),
+                )["state"]
+                assert current["vr_connected"] is True
+            assert (
+                receive_until(phone, lambda e: e.get("state", {}).get("vr_connected") is False)[
+                    "state"
+                ]["mobile_connected"]
+                is True
+            )

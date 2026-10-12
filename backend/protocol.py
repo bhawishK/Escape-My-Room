@@ -1,26 +1,16 @@
-"""Public request contract. Positions are meters in the sender's XR reference space."""
+"""The shared prototype's WebSocket contract; positions are XR meters."""
 
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Role = Literal["mobile_master", "vr_solver"]
-TrackingSource = Literal["webxr", "simulator"]
-TrackingStatus = Literal["inactive", "tracked", "lost", "emulated", "simulated"]
+TrackingStatus = Literal["inactive", "tracked", "lost", "emulated"]
 ReferenceSpace = Literal["local", "local-floor"]
 
 
 class WireModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
-
-
-class JoinRequest(WireModel):
-    role: Role
-    tracking_source: TrackingSource = "webxr"
-
-
-class ReleaseRequest(WireModel):
-    connection_token: str = Field(min_length=1, max_length=128)
 
 
 class Position(WireModel):
@@ -30,8 +20,6 @@ class Position(WireModel):
 
 
 class MarkerState(WireModel):
-    participant_id: str | None = None
-    source: TrackingSource | None = None
     tracking_status: TrackingStatus = "inactive"
     reference_space: ReferenceSpace | None = None
     position: Position | None = None
@@ -39,7 +27,6 @@ class MarkerState(WireModel):
 
 class PoseMessage(WireModel):
     type: Literal["pose"]
-    connection_generation: int = Field(ge=1)
     sequence: int = Field(ge=1)
     tracking_status: TrackingStatus
     reference_space: ReferenceSpace | None
@@ -47,9 +34,9 @@ class PoseMessage(WireModel):
 
     @model_validator(mode="after")
     def check_position(self) -> Self:
-        if self.tracking_status in ("tracked", "simulated"):
+        if self.tracking_status == "tracked":
             if self.position is None or self.reference_space is None:
-                raise ValueError("A usable pose requires position and reference space")
+                raise ValueError("Tracked input requires a position and reference space")
         elif self.position is not None:
             raise ValueError("Unavailable tracking must not supply a usable position")
         return self

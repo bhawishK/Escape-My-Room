@@ -17,7 +17,7 @@ npm --prefix frontend run build
 
 Open `http://localhost:8000` on the server computer. Building before starting Python is required: Python mounts `frontend/dist` at startup. If the page is missing, build it and restart Python. Stop the server with Ctrl+C.
 
-The application uses one Python worker and in-memory sessions. A restart removes all sessions. Each session reserves one master and one solver role; leaving closes the connection and releases that role. The server chooses participant IDs and connection credentials. See the [protocol](diagnostic-protocol.md) for the wire format.
+The application uses one Python worker and one in-memory shared room. A restart disconnects both devices. There are no session IDs, participant credentials, or accounts. Each role has one connection; connecting another tab in that role replaces the previous tab. See the [protocol](diagnostic-protocol.md) for the wire format.
 
 For frontend editing, keep Python running and use `npm --prefix frontend run dev` in a second terminal. Vite proxies `/api` and WebSockets to Python on port 8000. Its loopback development URL is for the server computer; use the built app for device testing.
 
@@ -31,7 +31,7 @@ A temporary public tunnel is the easiest certificate route for a remote headset.
 cloudflared tunnel --url http://127.0.0.1:8000
 ```
 
-Open the generated HTTPS URL on both devices. Create the master session from that address, then copy the **Solver invite URL** to the headset. Quick Tunnels provide a temporary hostname, require no account, and stop when the tunnel process stops. The URL gives access to this development service; the application has session credentials but no user accounts. This route is documented, not tested in this implementation session. See [Cloudflare's Quick Tunnel instructions](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/).
+Open the generated HTTPS URL on both devices. Quick Tunnels provide a temporary hostname, require no account, and stop when the tunnel process stops. Anyone with the URL can choose either role in this shared prototype. The user previously confirmed Quest VR entry through this route; the simplified join flow needs a fresh hardware check. See [Cloudflare's Quick Tunnel instructions](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/).
 
 For a local network alternative, install [mkcert](https://github.com/FiloSottile/mkcert), substitute the server computer's actual LAN IP below, and generate a matching certificate:
 
@@ -46,11 +46,11 @@ Open `https://192.168.1.10:8443` using the IP you substituted. Allow incoming po
 
 ## Use the two views
 
-1. On iPhone, leave **Pose input** on WebXR and select **Create session**. Connection and participant status appear without XR. On an unsupported browser, the page explains that movement tracking is pending.
-2. Open the displayed solver invite URL on Quest and select **Join as solver**. Select **Enter VR** to enter the neutral scene. With the current iPhone path, no physical phone pose is expected yet.
-3. To check the transport visually, create a separate session on the computer with **Simulator (testing only)** selected. Join it from the solver device. Enter coordinates and select **Send simulated pose**. Both pages show the accepted coordinates; the marker and status identify simulated input.
-4. Leave with **Leave session**. End XR using **End XR** when the overlay is available, or a controller select action when it is not. The diagnostic intentionally uses select as its headset exit control; puzzle controls come in later issues.
-5. Download the browser report and fill in the hardware record. The report is capability/pose telemetry, not proof of a passed device test.
+1. On iPhone, select **Connect phone**. The page shows **Waiting for VR device** until the headset joins. On an unsupported browser, it explains that phone movement tracking is pending.
+2. Open the same URL on Quest and select **Connect VR headset**. The phone should show **VR device connected**. Select **Enter VR** on Quest to enter the neutral grid and axes. This separate click provides the browser gesture required to start immersive XR.
+3. End XR using **End XR** when the overlay is available, or a controller select action when it is not. Select **Disconnect** to leave the shared room. The phone returns to **Waiting for VR device** after the VR page disconnects. Connected status means the headset page is connected; it does not prove immersive mode or positional tracking.
+4. After a dropped connection, use the role button to connect again. There is no session ID to copy or reservation to clear. Opening a second tab in the same role replaces the first.
+5. Optional diagnostics are collapsed below the preview. Download the browser report and fill in the hardware record. The report is capability/pose telemetry, not proof of a passed device test. The simulator and coordinate entry controls are removed; phone movement tracking remains deferred.
 
 ## Automated checks
 
@@ -67,4 +67,4 @@ npm --prefix frontend test
 
 Pytest runs real HTTP/WebSocket exchanges against a spawned Python service. Playwright starts another service on port 8771 and loads the built app. Windows defaults to installed Microsoft Edge; to use installed Chrome, set `$env:PW_BROWSER_CHANNEL = 'chrome'` first. On other platforms, Playwright defaults to bundled Chromium; install it with `npm --prefix frontend exec -- playwright install chromium` and use the platform's `.venv/bin/python` for Python commands. The Python lock was verified on Windows only.
 
-Desktop tests verify shared state, isolation, rejected messages, mobile layout, unavailable XR, and denied permission handling. They do not verify phone tracking, Quest XR rendering, DOM overlays, or held input on either actual device.
+Desktop tests verify shared state, VR connected status, rejected messages, role replacement, mobile layout, unavailable XR, and denied permission handling. They do not verify phone tracking, Quest XR rendering, DOM overlays, or held input on either actual device.

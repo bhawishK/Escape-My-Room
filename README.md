@@ -21,10 +21,10 @@ The [local ticket files](.scratch/escape-my-room/issues/) remain source snapshot
 
 ## Current state
 
-Issue #1 now has a Python session service and a responsive browser diagnostic: the mobile master creates a session, the solver joins it, and both render the server's accepted marker state. Supported devices can enter WebXR; an explicit simulator exercises the shared transport without claiming physical tracking.
+Issue #1 now has a Python service and a responsive browser diagnostic. Open the same URL on both devices, choose **Connect phone** on the phone and **Connect VR headset** on Quest, then **Enter VR**. The phone shows **VR device connected** when the headset page joins. One shared room replaces session IDs, invite links, and authentication. The simulator and manual coordinate controls have been removed.
 
 The agreed first target is **iPhone 16 Chrome for the mobile page and Meta Quest 3 for immersive VR**. The user chose to build the iPhone page first and add movement tracking later. Quest VR entry has been confirmed by the user through the HTTPS tunnel. The remaining iPhone/Quest smoke checks and the original phone-translation acceptance criterion are pending; Issue #1 is not yet complete on hardware.
 
 - [Start the diagnostic](docs/diagnostic-startup.md) — installation, HTTPS/WSS, and checks.
-- [Session and pose contract](docs/diagnostic-protocol.md) — identities, generations, validation, and marker coordinates.
+- [Connection and pose contract](docs/diagnostic-protocol.md) — shared device status, validation, and marker coordinates.
 - [Device smoke-check record](docs/device-smoke-check.md) — approved scope adjustment, evidence, and remaining manual checks.

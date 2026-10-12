@@ -1,5 +1,7 @@
 # Issue #1 code review
 
+The initial review below describes the original session-based diagnostic. Its credential, session-isolation, and simulator design was superseded by the user's 12 October request for one shared room, direct role buttons, no simulator, and simple VR connected status. The updated review is recorded separately at the end.
+
 Baseline approved by the user: `507970ce3d0f20d8ae1f212fc96607f151a8c128`. Initial review used `git diff 507970c...0d8027f`, covering `0d8027f Implement mobile-first connected diagnostic for #1`. Two independent agents reviewed Standards and Spec in parallel, then reviewed the fixes separately. Original findings and follow-up reports are kept under their respective axes.
 
 ## Standards
