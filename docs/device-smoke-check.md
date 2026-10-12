@@ -1,6 +1,8 @@
 # Issue #1: device smoke-check record
 
-Status: **shared-room software implemented; Quest joining/grid visibility user-confirmed; iPhone Chrome mobile role/shared state captured; exit/re-entry and Quest permission recovery pending**.
+Status: **connection prototype accepted by the user for Issue #1 closure; iPhone Chrome role/shared state recorded and VR side user-confirmed**.
+
+Closure decision on 12 October 2026: the user confirmed that the VR side works and approved closing the ticket without a Quest report now. Quest versions, detailed exit/re-entry observations, and permission-recovery results were not supplied. They remain unrecorded evidence, not measured passes or blockers to the user's acceptance. The observations below preserve that distinction. Physical phone tracking remains separate work in Issue #19; closing the issue does not merge PR #18.
 
 Targets are iPhone 16 Chrome for the mobile master and Meta Quest 3 for immersive VR. The user approved: “Build the iPhone page first; add movement tracking later.” On 12 October 2026, the user also requested removing the simulator and session IDs/authentication in favor of a simple VR connected status. This supersedes the original session-enrollment design. [Issue #1](https://github.com/bhawishK/Escape-My-Room/issues/1) covers connection status and Quest entry/exit; deferred physical phone tracking and its tracking-mode lifecycle now belong to [Issue #19](https://github.com/bhawishK/Escape-My-Room/issues/19). Tracking no longer blocks completion of Issue #1.
 
