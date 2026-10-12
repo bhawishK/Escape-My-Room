@@ -12,13 +12,14 @@ Automated on Windows, 2026-10-12:
 - **4 Playwright browser checks passed:** phone sees VR join/disconnect without session fields or simulator; mobile-sized page works with XR unavailable; VR permission denial leaves the connection usable; a failed initial socket retries with one role button.
 - The permission and unavailable-XR checks use browser API overrides. They are desktop Microsoft Edge checks, not iPhone or headset emulation. Generated test messages are protocol fixtures, not physical tracking evidence.
 - Visual inspection of the live preview: desktop at 1440 pixels and mobile at 390 pixels show the new role buttons and VR connected status. No page errors or mobile horizontal overflow were observed in Edge 155.0.4283.45.
-- Strict TypeScript/Python checks, Ruff, and the production build are documented in the [startup guide](diagnostic-startup.md). Independent review is recorded in [the review record](issue-1-code-review.md).
+- Strict TypeScript/Python checks and Ruff passed; the production build succeeded. Vite reports its chunk-size warning for the approximately 544 kB Three.js bundle (136 kB compressed). Commands are in the [startup guide](diagnostic-startup.md). Independent review found no actionable defects in this simplification; see [the review record](issue-1-code-review.md).
 
 ## Earlier manual observations
 
 - The user started a Cloudflare Quick Tunnel to the laptop's port 8000. The public application returned HTTP 200 and the backend health endpoint returned `status: ok` when checked by the agent.
 - The user confirmed that **Enter VR** worked on the selected Meta Quest 3, before this connection simplification. This is user-reported immersive entry; the new role-button flow still needs a fresh actual-device check.
 - A brief tunnel QUIC interruption was followed by reconnection. Application reconnection is manual: press the role button after a dropped socket.
+- After the simplification, the local preview was restarted successfully. The earlier temporary tunnel hostname no longer resolved and no cloudflared process was running; start a new tunnel before another Quest test.
 - iPhone participation, physical phone translation, Quest marker movement, exit/re-entry, and actual overlay/held-input behavior remain unrecorded. Simulator controls are now removed.
 
 ## Actual device record

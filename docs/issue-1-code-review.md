@@ -36,3 +36,21 @@ The new service regression checks unauthorized release rejection and successful 
 If HTTP release also fails, the explicit recovery message accurately explains the remaining limitation. Actual iPhone/Quest evidence and physical phone tracking remain pending as agreed.
 
 Findings: Standards 1 optional, resolved; Spec 1 code defect, resolved, with actual-device acceptance still pending. No outstanding code blocker on either axis.
+
+## Updated review: direct prototype connection
+
+Reviewed `git diff 507970c...7df72b4`, focusing on `5993dd5..7df72b4`. The latest user request supersedes the original session/authentication/simulator requirements. Standards and Spec were reviewed independently in parallel.
+
+### Standards
+
+No material findings. No additional repository standards files were found outside dependencies, and no hard breaches were identified. Removing grants, authentication, generations, and simulator controls reduces complexity in accordance with the latest request. `MarkerState` remains typed, keeping the earlier Primitive Obsession concern resolved. Socket replacement and cleanup use explicit identity checks; no material new duplication, speculative abstraction, or scattered lifecycle logic was found. The remaining modules are proportionate to the prototype. Tooling-enforced formatting and type rules were excluded.
+
+### Spec
+
+No actionable correctness finding identified. The request to remove the simulator and simplify joining is reflected in both browser and backend. Devices use the same room with direct role buttons and no IDs, invite links, grants, tokens, or coordinate controls. The phone receives VR connection/disconnection status.
+
+Role replacement follows the updated contract; old endpoints cannot clear their replacements. A failed initial socket can retry without leaving a reservation. Phone reconnection clears stale marker state. No scope creep found: neutral rendering and collapsed diagnostics support this slice; object interaction, alignment, ownership, and AI remain later work.
+
+Partial acceptance remains accurately documented. Physical phone tracking and fresh hardware checks are pending under the approved mobile-page-first decision. Earlier Quest entry is distinguished from testing the new connection flow, and connected status means a page connection rather than proof of immersive VR. Removing the reservation flow eliminates the former failed-join reservation defect.
+
+Findings: Standards 0; Spec 0 actionable defects. Actual-device acceptance remains pending on the Spec axis.
