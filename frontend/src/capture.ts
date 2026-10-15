@@ -1,4 +1,5 @@
 /** Room photos: choose or take photos, save them as one capture, and show the latest capture. */
+import { errorMessage } from './api';
 import { element } from './dom';
 
 type MediaType = 'image/jpeg' | 'image/png';
@@ -31,17 +32,6 @@ export interface CaptureSummary {
 }
 
 interface PendingPhoto { file: File; url: string }
-
-/** The server's refusal message, or a generic one when the response has none. */
-async function errorMessage(response: Response): Promise<string> {
-  try {
-    const body = await response.json() as { detail?: unknown };
-    if (typeof body.detail === 'string') return body.detail;
-  } catch {
-    // Fall through to a generic message.
-  }
-  return `The photos could not be saved (HTTP ${response.status}). Try again.`;
-}
 
 /** One photo in a list: picture, name, an overview choice, and any extra controls. */
 function photoTile(src: string, name: string, overview: HTMLInputElement, ...extra: HTMLElement[]) {
@@ -79,7 +69,8 @@ export class RoomPhotos {
   private readonly error = element('capture-error');
   private readonly overviewStatus = element('overview-status');
 
-  constructor() {
+  /** `onShown` is told about every capture this panel shows. */
+  constructor(private readonly onShown: (capture: CaptureSummary) => void) {
     for (const id of ['camera-input', 'photo-input']) {
       const input = element<HTMLInputElement>(id);
       input.addEventListener('change', () => {
@@ -94,7 +85,7 @@ export class RoomPhotos {
     const request = this.shown;
     const response = await fetch('/api/captures');
     if (request !== this.shown) return;
-    if (!response.ok) return this.showError(await errorMessage(response));
+    if (!response.ok) return this.showError(await errorMessage(response, 'Saved photos could not be loaded'));
     const { captures } = await response.json() as { captures: CaptureSummary[] };
     if (request === this.shown && captures.length > 0) this.showSaved(captures[0]);
   }
@@ -137,7 +128,7 @@ export class RoomPhotos {
     form.append('instructions', this.instructions.value);
     try {
       const response = await fetch('/api/captures', { method: 'POST', body: form });
-      if (!response.ok) return this.showError(await errorMessage(response));
+      if (!response.ok) return this.showError(await errorMessage(response, 'The photos could not be saved'));
       this.showSaved(await response.json() as CaptureSummary);
       this.overviewStatus.textContent = '';
       for (const photo of this.pending) URL.revokeObjectURL(photo.url);
@@ -163,6 +154,7 @@ export class RoomPhotos {
       choice.addEventListener('change', () => { void this.chooseOverview(capture, photo); });
       return photoTile(photo.processed_url, name, choice);
     }));
+    this.onShown(capture);
   }
 
   private async chooseOverview(capture: CaptureSummary, photo: CaptureImage): Promise<void> {
@@ -174,7 +166,7 @@ export class RoomPhotos {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image_id: photo.id }),
       });
-      if (!response.ok) throw new Error(await errorMessage(response));
+      if (!response.ok) throw new Error(await errorMessage(response, 'The overview could not be saved'));
       this.showSaved(await response.json() as CaptureSummary);
       this.overviewStatus.textContent = `Overview saved: ${photo.original_filename}`;
     } catch (error) {

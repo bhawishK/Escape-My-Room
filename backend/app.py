@@ -21,12 +21,13 @@ from pydantic import ValidationError
 
 from backend.captures import (
     Capture,
-    CaptureError,
     CaptureLimits,
     CaptureStore,
     ImageKind,
     Upload,
 )
+from backend.errors import Refusal
+from backend.preparation import JobRequest, PreparationService, worker_from_environment
 from backend.prepared_room import ASSET_URL_PREFIX, PreparedRoomError, load_prepared_room
 from backend.protocol import (
     EntityTransformMessage,
@@ -48,6 +49,9 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     repository = Path(__file__).resolve().parents[1]
     data = data_dir or Path(os.environ.get("ESCAPE_ROOM_DATA_DIR") or repository / "data")
     captures = CaptureStore(data / "captures", CaptureLimits.from_environment())
+    preparations = PreparationService(
+        data / "jobs", captures, worker_from_environment(repository)
+    )
     default = repository / "assets" / "prepared-room"
     directory = prepared_dir or Path(os.environ.get("ESCAPE_ROOM_PREPARED_DIR") or default)
     try:
@@ -75,8 +79,8 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
         description.pop("loaded_by", None)
         return description
 
-    @app.exception_handler(CaptureError)
-    async def capture_refused(_: Request, exc: CaptureError) -> JSONResponse:
+    @app.exception_handler(Refusal)
+    async def refused(_: Request, exc: Refusal) -> JSONResponse:
         return JSONResponse(status_code=exc.status, content={"detail": str(exc)})
 
     def describe(capture: Capture) -> dict[str, Any]:
@@ -113,6 +117,22 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     def capture_image(capture_id: str, image_id: str, kind: ImageKind) -> FileResponse:
         path, media_type = captures.photo_file(capture_id, image_id, kind)
         return FileResponse(path, media_type=media_type)
+
+    @app.get("/api/preparations")
+    def list_preparations() -> dict[str, list[dict[str, Any]]]:
+        return {"jobs": [job.model_dump() for job in preparations.newest_first()]}
+
+    @app.post("/api/preparations", status_code=202)
+    def submit_preparation(request: JobRequest) -> dict[str, Any]:
+        return preparations.submit(request).model_dump()
+
+    @app.get("/api/preparations/{job_id}")
+    def get_preparation(job_id: str) -> dict[str, Any]:
+        return preparations.get(job_id).model_dump()
+
+    @app.get("/api/preparations/{job_id}/files/{relative:path}")
+    def preparation_file(job_id: str, relative: str) -> FileResponse:
+        return FileResponse(preparations.file(job_id, relative))
 
     @app.websocket("/api/ws")
     async def room_socket(socket: WebSocket, role: Role) -> None:

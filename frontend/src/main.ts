@@ -1,6 +1,7 @@
 import './style.css';
 import { RoomPhotos } from './capture';
 import { element } from './dom';
+import { RoomPreparation } from './preparation';
 import type { Role, SessionState } from './protocol';
 import { SessionClient } from './session';
 import { DiagnosticScene } from './scene';
@@ -184,5 +185,6 @@ element('download-report').addEventListener('click', () => {
 window.addEventListener('pagehide', () => client.leave());
 controls();
 
-const roomPhotos = new RoomPhotos();
+const roomPreparation = new RoomPreparation();
+const roomPhotos = new RoomPhotos(capture => { void roomPreparation.showCapture(capture); });
 void roomPhotos.showLatest().catch(() => undefined);
