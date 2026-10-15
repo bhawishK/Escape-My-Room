@@ -36,5 +36,22 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
 #xr-overlay { position: fixed; top: 14px; left: 14px; width: min(300px, calc(100vw - 28px)); padding: 12px; background: #08111ee8; border-radius: 12px; }
 #xr-overlay button { margin-top: 8px; touch-action: none; }
 #hold-probe[data-held='true'] { background: #ffd399; }
+.photos-panel { margin-top: 20px; display: grid; gap: 14px; }
+.photos-panel h2, .photos-panel h3, .photos-panel p { margin: 0; }
+.file-button { position: relative; flex: 1; display: flex; align-items: center; justify-content: center; min-height: 44px; margin: 0; border-radius: 8px; background: #81ded1; color: #0b2426; font-size: 16px; font-weight: 650; cursor: pointer; }
+.file-button.secondary { border: 1px solid #3a5068; background: #172b41; color: #e0eaf3; }
+.file-button:focus-within { outline: 3px solid #a9f5e9; outline-offset: 3px; }
+.file-button input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.photo-grid { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.photo-grid:empty { display: none; }
+.photo-grid li { padding: 8px; border: 1px solid #25374c; border-radius: 10px; background: #0c1828; font-size: 12px; display: grid; gap: 6px; }
+.photo-grid img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 6px; background: #172b41; }
+.photo-grid label { display: flex; gap: 6px; align-items: center; margin: 0; }
+.photo-grid button { min-height: 32px; padding: 4px 8px; font-size: 12px; }
+.photo-name { overflow-wrap: anywhere; color: #d5e2ee; }
+textarea { font: inherit; width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #3a5068; background: #0c1828; color: #e8f1f7; }
+#capture-error { color: #ffcdbe; background: #3b2429; padding: 12px; border-radius: 8px; font-size: 13px; }
+#saved-capture { display: grid; gap: 10px; border-top: 1px solid #293f55; padding-top: 14px; }
+#saved-instructions { white-space: pre-wrap; }
 [hidden] { display: none !important; }
 @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } main { padding: 24px 16px; } .panel { padding: 20px; } #scene { height: 300px; } }

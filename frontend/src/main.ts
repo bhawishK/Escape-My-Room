@@ -1,14 +1,10 @@
 import './style.css';
+import { RoomPhotos } from './capture';
+import { element } from './dom';
 import type { Role, SessionState } from './protocol';
 import { SessionClient } from './session';
 import { DiagnosticScene } from './scene';
 import { XRDiagnostic, xrError } from './xr';
-
-function element<T extends HTMLElement>(id: string): T {
-  const found = document.getElementById(id);
-  if (!found) throw new Error(`Missing interface element: ${id}`);
-  return found as T;
-}
 
 const phoneButton = element<HTMLButtonElement>('connect-phone');
 const vrButton = element<HTMLButtonElement>('connect-vr');
@@ -187,3 +183,6 @@ element('download-report').addEventListener('click', () => {
 });
 window.addEventListener('pagehide', () => client.leave());
 controls();
+
+const roomPhotos = new RoomPhotos();
+void roomPhotos.showLatest().catch(() => undefined);

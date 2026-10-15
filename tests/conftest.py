@@ -5,8 +5,8 @@ import socket
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 
 import httpx
@@ -16,19 +16,25 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(scope="session")
-def service_url() -> Iterator[str]:
-    with _service(ROOT / "assets" / "prepared-room") as url:
+def service_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    with _service(ROOT / "assets" / "prepared-room", tmp_path_factory.mktemp("data")) as url:
         yield url
 
 
 @pytest.fixture(scope="session")
-def multi_asset_service_url() -> Iterator[str]:
-    with _service(ROOT / "assets" / "multi-asset-room") as url:
+def multi_asset_service_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    with _service(ROOT / "assets" / "multi-asset-room", tmp_path_factory.mktemp("data")) as url:
         yield url
 
 
+@pytest.fixture
+def start_service() -> Callable[[Path], AbstractContextManager[str]]:
+    """Start a fresh service process that keeps its data in the given directory."""
+    return lambda data_dir: _service(ROOT / "assets" / "prepared-room", data_dir)
+
+
 @contextmanager
-def _service(prepared_dir: Path) -> Iterator[str]:
+def _service(prepared_dir: Path, data_dir: Path) -> Iterator[str]:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
@@ -46,7 +52,8 @@ def _service(prepared_dir: Path) -> Iterator[str]:
             "16384",
         ],
         cwd=ROOT,
-        env=os.environ | {"ESCAPE_ROOM_PREPARED_DIR": str(prepared_dir)},
+        env=os.environ
+        | {"ESCAPE_ROOM_PREPARED_DIR": str(prepared_dir), "ESCAPE_ROOM_DATA_DIR": str(data_dir)},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

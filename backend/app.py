@@ -6,10 +6,27 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
+from backend.captures import (
+    Capture,
+    CaptureError,
+    CaptureLimits,
+    CaptureStore,
+    ImageKind,
+    Upload,
+)
 from backend.prepared_room import ASSET_URL_PREFIX, PreparedRoomError, load_prepared_room
 from backend.protocol import (
     EntityTransformMessage,
@@ -17,13 +34,21 @@ from backend.protocol import (
     PoseMessage,
     Role,
     RoomLoadedMessage,
+    WireModel,
 )
 from backend.sessions import PrototypeRoom
 
 
-def create_app(prepared_dir: Path | None = None) -> FastAPI:
+class OverviewChoice(WireModel):
+    image_id: str
+
+
+def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -> FastAPI:
     app = FastAPI(title="Escape My Room prototype")
-    default = Path(__file__).resolve().parents[1] / "assets" / "prepared-room"
+    repository = Path(__file__).resolve().parents[1]
+    data = data_dir or Path(os.environ.get("ESCAPE_ROOM_DATA_DIR") or repository / "data")
+    captures = CaptureStore(data / "captures", CaptureLimits.from_environment())
+    default = repository / "assets" / "prepared-room"
     directory = prepared_dir or Path(os.environ.get("ESCAPE_ROOM_PREPARED_DIR") or default)
     try:
         prepared = load_prepared_room(directory)
@@ -49,6 +74,45 @@ def create_app(prepared_dir: Path | None = None) -> FastAPI:
         description = dict(room.snapshot()["room"])
         description.pop("loaded_by", None)
         return description
+
+    @app.exception_handler(CaptureError)
+    async def capture_refused(_: Request, exc: CaptureError) -> JSONResponse:
+        return JSONResponse(status_code=exc.status, content={"detail": str(exc)})
+
+    def describe(capture: Capture) -> dict[str, Any]:
+        """The capture as clients see it, with each photo's original and processed URLs."""
+        data = capture.model_dump()
+        for image in data["images"]:
+            for kind in ("original", "processed"):
+                path = app.url_path_for(
+                    "capture_image", capture_id=capture.id, image_id=image["id"], kind=kind
+                )
+                image[f"{kind}_url"] = str(path)
+        return data
+
+    @app.get("/api/captures")
+    def list_captures() -> dict[str, list[dict[str, Any]]]:
+        return {"captures": [describe(capture) for capture in captures.newest_first()]}
+
+    @app.post("/api/captures", status_code=201)
+    def create_capture(
+        images: list[UploadFile], overview: int = Form(), instructions: str = Form("")
+    ) -> dict[str, Any]:
+        uploads = [Upload(image.filename or "photo", image.file.read()) for image in images]
+        return describe(captures.create(uploads, instructions, overview))
+
+    @app.get("/api/captures/{capture_id}")
+    def get_capture(capture_id: str) -> dict[str, Any]:
+        return describe(captures.get(capture_id))
+
+    @app.put("/api/captures/{capture_id}/overview")
+    def choose_overview(capture_id: str, choice: OverviewChoice) -> dict[str, Any]:
+        return describe(captures.set_overview(capture_id, choice.image_id))
+
+    @app.get("/api/captures/{capture_id}/images/{image_id}/{kind}")
+    def capture_image(capture_id: str, image_id: str, kind: ImageKind) -> FileResponse:
+        path, media_type = captures.photo_file(capture_id, image_id, kind)
+        return FileResponse(path, media_type=media_type)
 
     @app.websocket("/api/ws")
     async def room_socket(socket: WebSocket, role: Role) -> None:
@@ -163,7 +227,7 @@ def create_app(prepared_dir: Path | None = None) -> FastAPI:
 
     if directory.is_dir():
         app.mount(ASSET_URL_PREFIX, StaticFiles(directory=directory), name="prepared-room")
-    dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+    dist = repository / "frontend" / "dist"
     if dist.is_dir():
         app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")
     return app
