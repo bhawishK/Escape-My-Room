@@ -142,3 +142,56 @@ The paper focuses on rigid objects; articulated and deformable objects are futur
 ## Final recommendation
 
 Use REST3D as a leading candidate for the object/support/placement portion of the Python GPU pipeline. Preserve the user's many-photo capture and interchangeable-model orchestration. Start with a small single-view REST3D reproduction and an object export/synchronization experiment; evaluate multi-view geometry as a separate provider and measured adapter task. Reproduce the legacy simulator environment before committing to a Blackwell or Hugging Face deployment. Keep the current WebXR client and shared-state design, with backend story planning added after independent-object manipulation works.
+## Integration into the current application
+
+This section maps the proposal to the checked local application on 2026-10-14. It is a design, not implemented functionality. The browser-based product is feasible: capture and master interaction run in iPhone Chrome; immersive rendering and input run in the Quest browser; Python owns reconstruction scheduling, scene state and AI orchestration. REST3D's CUDA models and Isaac Gym remain GPU-server workloads. The VLM is valuable for identifying and relating objects, while geometry and simulation determine validated placements.
+
+### Existing implementation and required changes
+
+| Current file | Inspected behavior | Proposed extension |
+|---|---|---|
+| `backend/app.py` | FastAPI, health route, `/api/ws`, static frontend; socket accepts only phone marker poses. | Add capture uploads, reconstruction-job endpoints, scene/asset serving and typed object-event dispatch. Dispatch long-running work outside the socket handler and room lock. |
+| `backend/protocol.py` and `frontend/src/protocol.ts` | Roles, tracking states, marker position and state revision. | Add a scene manifest, object transforms, permitted actions, selection/hold/release events and revision-aware updates. Keep wire formats consistent and explicitly distinguish XR device poses from scene-object poses. |
+| `backend/sessions.py` | One shared room, connected-device flags and marker state. | Add the active scene and authoritative object states, validate edits by role, persist accepted scene data, and send full snapshots on reconnect. Retain simple joining; internal asset/job identifiers do not become user-facing session codes. |
+| `frontend/src/scene.ts` | Three.js WebGL renderer with WebXR enabled, grid and marker. | Load individual GLBs, maintain an object-ID-to-instance map, apply transforms and support object highlighting. Recenter/normalize assets and validate world units before publishing. |
+| `frontend/src/xr.ts` | Starts immersive sessions; `select` currently ends XR. | Replace that diagnostic select handler with controller-ray selection and explicit exit behavior; add hold/release interaction for permitted actions. Request and implement optional hand tracking only in a later increment if useful. |
+| `frontend/src/session.ts` | WebSocket lifecycle, snapshots and marker sends. | Add typed object-event sends and scene/state handling without transferring meshes through WebSockets. |
+| `frontend/src/main.ts` | Diagnostic controls and connection status. | Add guided capture, preparation progress, master object selection/map controls, and active-scene UI. The AI remains backend machinery; an AI chat UI is unnecessary. |
+
+The use of GLTFLoader for assets and WebXRManager for controller/grip input is supported by official [Three.js loader documentation](https://threejs.org/docs/pages/GLTFLoader.html) and [WebXR documentation](https://threejs.org/docs/pages/WebXRManager.html). Browser camera capture uses a permission-granted HTTPS camera stream or photograph uploads; verify capture behavior on the actual iPhone rather than assuming XR support from camera access. [Camera API](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia).
+
+### Data and worker boundaries
+
+Proposed endpoints, names subject to implementation:
+
+- `POST /api/captures`: upload photographs and the user's room/scanning instructions. Retain original photographs and annotations.
+- `POST /api/reconstructions`: schedule a job with the capture ID and explicit provider/stage configuration.
+- `GET /api/reconstructions/{job_id}`: return queued/running/failed/ready state and completed-stage progress.
+- `GET /api/scene`: return the current published manifest.
+- `/assets/...`: serve immutable GLBs and supporting files through HTTPS.
+- Existing `/api/ws`: broadcast scene readiness and accepted object-state updates.
+
+Provider contract: `CaptureBundle + StageConfig -> PreparedScene`. A prepared scene must contain independent asset URLs; stable object IDs and descriptive labels; local pivots and bounding/collision geometry; declared units and frame; initial position, rotation and scale; inferred support edges; interaction permissions; and source/correction provenance. Keep geometry, semantic hypotheses and mutable gameplay transforms distinct. A model inference failure must leave the existing published scene playable; publish the replacement only after adapter validation.
+
+REST3D runs behind that contract as separate stage processes/environments. A Python GPU host is the first reproduction target. Hugging Face hosting remains an option after reproducing its environment; this proposal does not assume a standard hosted inference API can execute the entire multi-stage simulator pipeline. The user's orchestration chooses models, prompts, retries and stage combinations.
+
+### Live interaction and AI placement
+
+Render assets locally on Quest. Send small pose/action messages to Python, and broadcast accepted transforms back to both clients. Reconstruction preparation is asynchronous; regular object movement does not wait for VLM reasoning or rerun scene generation. Smooth remote visual updates as needed, but use the server's accepted revision as the common state. Reject out-of-date or unauthorized edits and send an updated snapshot after reconnect.
+
+The master controls layout manipulation. Solver actions require explicit puzzle permissions rather than inheriting the master's edit rights. The first placement controls can use touch selection and a 2D map with height controls. This is ordinary interaction with reconstructed objects, not a simulator or a claim of physical phone translation. The supplied iPhone reports have no WebXR API; full phone movement tracking and camera-aligned AR remain separately deferred. REST3D does not remove that browser tracking limitation.
+
+For story planning, the VLM-derived object/support record becomes input to a backend plan generator. A request such as `place(book_01, on=desk_02)` must reference an existing object and an allowed action. Geometry resolves a valid placement; role, bounds and collision checks validate it; the server commits the pose and updated relation. Add puzzle-specific capabilities only after validating them. An inferred shelf or container label is not a guarantee of usable reconstructed geometry.
+
+Preparation-time stability in Isaac Gym does not automatically provide gameplay gravity/collisions in Three.js. Choose an explicit runtime-physics policy when implementing release behavior. If dynamic simulation is required, use one authoritative simulation and synchronize its state; avoid allowing each client's independent physics to decide conflicting object positions. A controlled-placement first slice can demonstrate live manipulation without promising the paper's dexterous-hand simulation.
+
+### Implementation sequence and acceptance
+
+1. Establish the scene manifest and asset adapter using available example objects; validate independent instance transforms, vertex color, pivots and units. Load them in desktop and Quest browsers.
+2. Extend shared state and role-checked object edits. Verify a master's edit moves only the selected instance in both clients, survives reconnect and rejects stale/unauthorized changes. Replace the diagnostic select-to-exit mapping.
+3. Add guided browser capture, asynchronous job states and a reproduced REST3D worker. Test stage failure and a successful table-plus-two-object capture; measure time, memory, exported mesh complexity and actual-device rendering.
+4. Expose VLM support/object results for master correction. Compare them with the capture and store corrections independently of model outputs.
+5. Add one backend story-placement action and validate both an accepted support placement and an invalid request. Preserve responsiveness while AI work is pending.
+6. Evaluate multi-view registration/geometry adapters and richer runtime physics after the complete capture-to-shared-interaction slice works.
+
+Successful browser integration means a user can capture through Chrome, wait for a prepared scene, enter VR through Quest's browser, and manipulate distinct reconstructed objects through the shared application. It does not require in-browser CUDA inference, native phone software, continuous video streaming to the headset, or model fine-tuning.
