@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +10,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
-from backend.prepared_room import PreparedRoomError, load_prepared_room
+from backend.prepared_room import ASSET_URL_PREFIX, PreparedRoomError, load_prepared_room
 from backend.protocol import (
     EntityTransformMessage,
     MarkerState,
@@ -22,7 +23,8 @@ from backend.sessions import PrototypeRoom
 
 def create_app(prepared_dir: Path | None = None) -> FastAPI:
     app = FastAPI(title="Escape My Room prototype")
-    directory = prepared_dir or Path(__file__).resolve().parents[1] / "assets" / "prepared-room"
+    default = Path(__file__).resolve().parents[1] / "assets" / "prepared-room"
+    directory = prepared_dir or Path(os.environ.get("ESCAPE_ROOM_PREPARED_DIR") or default)
     try:
         prepared = load_prepared_room(directory)
         load_error = None
@@ -33,8 +35,6 @@ def create_app(prepared_dir: Path | None = None) -> FastAPI:
     if prepared is not None:
         room.entities = [entity.model_copy(deep=True) for entity in prepared.entities]
         room.room_version = prepared.room_version
-        room.units = prepared.units
-        room.asset_url = f"/assets/prepared-room/{prepared.asset}"
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:
@@ -162,7 +162,7 @@ def create_app(prepared_dir: Path | None = None) -> FastAPI:
                     await room.broadcast()
 
     if directory.is_dir():
-        app.mount("/assets/prepared-room", StaticFiles(directory=directory), name="prepared-room")
+        app.mount(ASSET_URL_PREFIX, StaticFiles(directory=directory), name="prepared-room")
     dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"
     if dist.is_dir():
         app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")

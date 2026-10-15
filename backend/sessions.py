@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from backend.prepared_room import RoomEntity
+from backend.prepared_room import FRAME, QUATERNION_ORDER, UNITS, SceneEntity
 from backend.protocol import MarkerState, PoseMessage, Position, Role
 
 
@@ -16,10 +16,8 @@ class PrototypeRoom:
     revision: int = 0
     marker: MarkerState = field(default_factory=MarkerState)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    entities: list[RoomEntity] = field(default_factory=list)
+    entities: list[SceneEntity] = field(default_factory=lambda: list[SceneEntity]())
     room_version: int | None = None
-    units: str | None = None
-    asset_url: str | None = None
     load_error: str | None = None
     loaded_versions: dict[Role, int | None] = field(
         default_factory=lambda: {"mobile_master": None, "vr_solver": None}
@@ -35,8 +33,9 @@ class PrototypeRoom:
             "room": {
                 "available": available,
                 "room_version": self.room_version,
-                "units": self.units,
-                "asset_url": self.asset_url,
+                "units": UNITS if available else None,
+                "frame": FRAME if available else None,
+                "quaternion_order": QUATERNION_ORDER if available else None,
                 "error": self.load_error,
                 "entities": [entity.model_dump() for entity in self.entities],
                 "loaded_by": dict(self.loaded_versions),

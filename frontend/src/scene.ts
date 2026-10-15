@@ -1,10 +1,11 @@
 import * as THREE from 'three';
-import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
-import type { RoomEntity, SessionState } from './protocol';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import type { SessionState } from './protocol';
+import { applyPlacement, placeEntities } from './room';
 
 const emptyRoom = (): SessionState['room'] => ({
-  available: false, room_version: null, units: null, asset_url: null, error: null, entities: [],
-  loaded_by: { mobile_master: null, vr_solver: null },
+  available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
+  entities: [], loaded_by: { mobile_master: null, vr_solver: null },
 });
 
 export class DiagnosticScene {
@@ -15,6 +16,7 @@ export class DiagnosticScene {
   private readonly grid: THREE.GridHelper;
   private readonly loader = new GLTFLoader();
   private roomGroup: THREE.Group | null = null;
+  private entityRoots = new Map<string, THREE.Object3D>();
   private loadedVersion: number | null = null;
   private loadingVersion: number | null = null;
   private loadToken = 0;
@@ -63,7 +65,7 @@ export class DiagnosticScene {
 
   async syncRoom(state: SessionState): Promise<{ version: number; acknowledge: boolean } | null> {
     const room = state.room ?? emptyRoom();
-    if (!room.available || room.room_version === null || room.asset_url === null) {
+    if (!room.available || room.room_version === null) {
       this.clearRoom();
       if (room.error) throw new Error(room.error);
       return null;
@@ -73,27 +75,27 @@ export class DiagnosticScene {
       const token = ++this.loadToken;
       const version = room.room_version;
       this.loadingVersion = version;
-      let gltf: GLTF;
+      // Load every asset before showing any, so a failure never leaves a partial room.
+      const urls = [...new Set(room.entities.map(entity => entity.asset_url))];
+      let roots: Map<string, THREE.Object3D>;
       try {
-        gltf = await this.loader.loadAsync(room.asset_url);
-      } catch {
+        const scenes = await Promise.all(urls.map(url => this.loader.loadAsync(url).then(
+          gltf => [url, gltf.scene] as const,
+          () => { throw new Error(`The prepared room asset ${url.split('/').pop()} could not be loaded.`); },
+        )));
+        if (token !== this.loadToken) return null;
+        roots = placeEntities(new Map(scenes), room.entities);
+      } catch (error) {
         if (token !== this.loadToken) return null;
         this.clearRoom();
-        throw new Error('The prepared room model could not be loaded.');
+        throw error;
       }
-      if (token !== this.loadToken) return null;
-      const missing = room.entities.find(entity => gltf.scene.getObjectByName(entity.node) === undefined);
-      if (missing) {
-        this.clearRoom();
-        throw new Error(`The prepared room model is missing ${missing.id}.`);
-      }
-      this.attach(gltf, room.entities);
+      this.attach(roots);
       this.loadedVersion = version;
       this.loadingVersion = null;
-      this.applyEntities(room.entities);
       return { version, acknowledge: true };
     }
-    this.applyEntities(room.entities);
+    applyPlacement(this.entityRoots, room.entities);
     return { version: room.room_version, acknowledge: false };
   }
 
@@ -103,6 +105,7 @@ export class DiagnosticScene {
     this.loadingVersion = null;
     this.roomGroup?.removeFromParent();
     this.roomGroup = null;
+    this.entityRoots = new Map();
     this.grid.visible = true;
   }
 
@@ -110,27 +113,14 @@ export class DiagnosticScene {
     this.scene.background = enabled ? null : new THREE.Color('#0c1828');
   }
 
-  private attach(gltf: GLTF, entities: RoomEntity[]): void {
+  private attach(roots: Map<string, THREE.Object3D>): void {
     this.roomGroup?.removeFromParent();
     const group = new THREE.Group();
     group.name = 'prepared-room';
-    for (const entity of entities) {
-      const object = gltf.scene.getObjectByName(entity.node);
-      if (!object) throw new Error(`The prepared room model is missing ${entity.id}.`);
-      object.removeFromParent();
-      object.userData.entityId = entity.id;
-      group.add(object);
-    }
+    group.add(...roots.values());
     this.roomGroup = group;
+    this.entityRoots = roots;
     this.scene.add(group);
     this.grid.visible = false;
-  }
-
-  private applyEntities(entities: RoomEntity[]): void {
-    for (const entity of entities) {
-      this.roomGroup?.getObjectByName(entity.node)?.position.set(
-        entity.position.x, entity.position.y, entity.position.z,
-      );
-    }
   }
 }

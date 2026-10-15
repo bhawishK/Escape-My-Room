@@ -65,6 +65,6 @@ npm --prefix frontend run build
 npm --prefix frontend test
 ```
 
-Pytest runs real HTTP/WebSocket exchanges against a spawned Python service. Playwright starts another service on port 8771 and loads the built app. Windows defaults to installed Microsoft Edge; to use installed Chrome, set `$env:PW_BROWSER_CHANNEL = 'chrome'` first. On other platforms, Playwright defaults to bundled Chromium; install it with `npm --prefix frontend exec -- playwright install chromium` and use the platform's `.venv/bin/python` for Python commands. The Python lock was verified on Windows only.
+Pytest runs real HTTP/WebSocket exchanges against spawned Python services, one for the stand-in room and one for the multi-asset room. Playwright starts the same two rooms on ports 8771 and 8772 and loads the built app. Windows defaults to installed Microsoft Edge; to use installed Chrome, set `$env:PW_BROWSER_CHANNEL = 'chrome'` first. On other platforms, Playwright defaults to bundled Chromium; install it with `npm --prefix frontend exec -- playwright install chromium` and use the platform's `.venv/bin/python` for Python commands. The Python lock was verified on Windows only.
 
 Desktop tests verify shared state, VR connected status, rejected messages, role replacement, mobile layout, unavailable XR, and denied permission handling. They do not verify phone tracking, Quest XR rendering, DOM overlays, or held input on either actual device.
