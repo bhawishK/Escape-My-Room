@@ -14,9 +14,13 @@ export default defineConfig({
     headless: true,
     screenshot: 'only-on-failure',
   },
-  webServer: {
-    command: `"${python}" -m uvicorn backend.app:app --app-dir "${root}" --host 127.0.0.1 --port 8771`,
-    url: 'http://127.0.0.1:8771/api/health',
+  webServer: [
+    { port: 8771, room: 'prepared-room' },
+    { port: 8772, room: 'multi-asset-room' },
+  ].map(({ port, room }) => ({
+    command: `"${python}" -m uvicorn backend.app:app --app-dir "${root}" --host 127.0.0.1 --port ${port}`,
+    url: `http://127.0.0.1:${port}/api/health`,
+    env: { ESCAPE_ROOM_PREPARED_DIR: join(root, 'assets', room) },
     reuseExistingServer: false,
-  },
+  })),
 });

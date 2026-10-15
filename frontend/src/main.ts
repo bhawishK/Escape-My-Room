@@ -94,8 +94,8 @@ const client = new SessionClient({
           revision: 0, mobile_connected: false, vr_connected: false,
           marker: { position: null, tracking_status: 'inactive', reference_space: null },
           room: {
-            available: false, room_version: null, units: null, asset_url: null, error: null, entities: [],
-            loaded_by: { mobile_master: null, vr_solver: null },
+            available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
+            entities: [], loaded_by: { mobile_master: null, vr_solver: null },
           },
         });
       }

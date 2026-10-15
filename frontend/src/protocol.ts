@@ -2,22 +2,28 @@ export type Role = 'mobile_master' | 'vr_solver';
 export type TrackingStatus = 'inactive' | 'tracked' | 'lost' | 'emulated';
 export type ReferenceSpace = 'local' | 'local-floor';
 export interface Position { x: number; y: number; z: number }
+/** A unit quaternion in (x, y, z, w) order. */
+export interface Rotation { x: number; y: number; z: number; w: number }
 
+/** Room frame: meters, right-handed, +Y up; position and rotation place the bottom-face center. */
 export interface RoomEntity {
   id: string;
+  label: string;
+  asset_url: string;
   node: string;
   kind: 'static' | 'movable';
   selectable: boolean;
-  color: string;
   position: Position;
+  rotation: Rotation;
   size: { width: number; height: number; depth: number };
 }
 
 export interface RoomState {
   available: boolean;
   room_version: number | null;
-  units: string | null;
-  asset_url: string | null;
+  units: 'meters' | null;
+  frame: 'y_up_right_handed' | null;
+  quaternion_order: 'xyzw' | null;
   error: string | null;
   entities: RoomEntity[];
   loaded_by: { mobile_master: number | null; vr_solver: number | null };

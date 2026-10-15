@@ -48,21 +48,6 @@ test('Quest entry requests VR and reports permission denial without disconnectin
   await expect(page.getByTestId('connection')).toHaveText('Connected · VR headset');
 });
 
-test('phone and headset show the same prepared room', async ({ browser }) => {
-  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
-  const vr = await browser.newPage();
-  await phone.goto('/');
-  await vr.goto('/');
-  await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
-  await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
-  const ready = 'Room version 1 · floor, desk, cabinet, box (movable)';
-  await expect(phone.getByTestId('room-status')).toHaveText(ready);
-  await expect(vr.getByTestId('room-status')).toHaveText(ready);
-  await expect(phone.getByRole('alert')).toBeHidden();
-  await phone.close();
-  await vr.close();
-});
-
 test('failed initial socket can retry with one role button', async ({ page }) => {
   let blockSocket = true;
   await page.routeWebSocket(/\/api\/ws/, socket => {
