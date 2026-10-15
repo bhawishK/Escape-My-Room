@@ -32,7 +32,6 @@ button:focus-visible, summary:focus-visible { outline: 3px solid #a9f5e9; outlin
 details { border-top: 1px solid #293f55; margin-top: 22px; padding-top: 18px; font-size: 12px; color: #a8bcd0; }
 summary { cursor: pointer; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
-#error { color: #ffcdbe; background: #3b2429; padding: 12px; border-radius: 8px; font-size: 13px; }
 #xr-overlay { position: fixed; top: 14px; left: 14px; width: min(300px, calc(100vw - 28px)); padding: 12px; background: #08111ee8; border-radius: 12px; }
 #xr-overlay button { margin-top: 8px; touch-action: none; }
 #hold-probe[data-held='true'] { background: #ffd399; }
@@ -50,8 +49,18 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
 .photo-grid button { min-height: 32px; padding: 4px 8px; font-size: 12px; }
 .photo-name { overflow-wrap: anywhere; color: #d5e2ee; }
 textarea { font: inherit; width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #3a5068; background: #0c1828; color: #e8f1f7; }
-#capture-error { color: #ffcdbe; background: #3b2429; padding: 12px; border-radius: 8px; font-size: 13px; }
-#saved-capture { display: grid; gap: 10px; border-top: 1px solid #293f55; padding-top: 14px; }
+.error-message { color: #ffcdbe; background: #3b2429; padding: 12px; border-radius: 8px; font-size: 13px; }
+.divided { display: grid; gap: 10px; border-top: 1px solid #293f55; padding-top: 14px; }
 #saved-instructions { white-space: pre-wrap; }
+.preparation-stages { margin: 0; padding-left: 20px; display: grid; gap: 4px; font-size: 13px; }
+.preparation-stages:empty { display: none; }
+.preparation-stages [data-status='running'] { color: #a9f5e9; }
+.preparation-stages [data-status='failed'] { color: #ffcdbe; }
+.preparation-stages [data-status='pending'] { color: #8ba5be; }
+#preparation-state { font-weight: 650; }
+.candidate { display: grid; gap: 8px; padding: 12px; border: 1px dashed #e4b66e; border-radius: 10px; }
+.fixture-label { color: #e4b66e; font-weight: 650; font-size: 13px; }
+#candidate-overview { width: 100%; max-height: 220px; object-fit: contain; border-radius: 6px; background: #0c1828; }
+#candidate-objects { margin: 0; padding-left: 18px; font-size: 13px; }
 [hidden] { display: none !important; }
 @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } main { padding: 24px 16px; } .panel { padding: 20px; } #scene { height: 300px; } }

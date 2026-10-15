@@ -14,14 +14,15 @@ import secrets
 import shutil
 import threading
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path, PurePath
 from typing import Literal
 
 from PIL import Image, ImageOps, UnidentifiedImageError
-from pydantic import Field, ValidationError
+from pydantic import Field
 
+from backend.errors import Refusal
 from backend.protocol import WireModel
+from backend.records import RecordFolder, StoredRecord, now, write_json
 
 CAPTURE_ID = re.compile(r"^cap_[0-9a-f]{32}$")
 IMAGE_ID = re.compile(r"^img_[0-9a-f]{32}$")
@@ -37,12 +38,8 @@ SUFFIXES: dict[MediaType, str] = {"image/jpeg": ".jpg", "image/png": ".png"}
 PNG_MODES = {"1", "L", "LA", "P", "RGB", "RGBA", "I", "I;16"}
 
 
-class CaptureError(Exception):
+class CaptureError(Refusal):
     """A capture request cannot be accepted; the message is shown to the user."""
-
-    def __init__(self, message: str, status: int = 400) -> None:
-        super().__init__(message)
-        self.status = status
 
 
 @dataclass(frozen=True)
@@ -92,9 +89,8 @@ class CaptureImage(WireModel):
         return PurePath("originals", f"{self.id}{SUFFIXES[self.media_type]}"), self.media_type
 
 
-class Capture(WireModel):
+class Capture(StoredRecord):
     id: str = Field(pattern=CAPTURE_ID.pattern)
-    created_at: str
     instructions: str
     overview_image_id: str
     images: list[CaptureImage]
@@ -117,6 +113,7 @@ class CaptureStore:
     def __init__(self, root: Path, limits: CaptureLimits) -> None:
         self.root = root
         self.limits = limits
+        self._records = RecordFolder(root, Capture, CAPTURE_ID, "capture")
         self._lock = threading.Lock()
 
     def create(self, uploads: list[Upload], instructions: str, overview: int) -> Capture:
@@ -136,7 +133,7 @@ class CaptureStore:
         photos = [self._check(upload) for upload in uploads]
         capture = Capture(
             id=f"cap_{secrets.token_hex(16)}",
-            created_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+            created_at=now(),
             instructions=instructions,
             overview_image_id=photos[overview].record.id,
             images=[photo.record for photo in photos],
@@ -150,7 +147,7 @@ class CaptureStore:
                 (incoming / photo.record.file("original")[0]).write_bytes(photo.original)
                 if photo.upright_png is not None:
                     (incoming / photo.record.file("processed")[0]).write_bytes(photo.upright_png)
-            (incoming / "capture.json").write_text(capture.model_dump_json(indent=2))
+            write_json(incoming / "capture.json", capture)
             incoming.rename(self.root / capture.id)
         finally:
             shutil.rmtree(incoming, ignore_errors=True)
@@ -162,21 +159,14 @@ class CaptureStore:
             if image_id not in {image.id for image in capture.images}:
                 raise CaptureError("That photo is not part of this capture.")
             capture.overview_image_id = image_id
-            record = self.root / capture.id / "capture.json"
-            pending = record.with_suffix(".json.tmp")
-            pending.write_text(capture.model_dump_json(indent=2))
-            pending.replace(record)
+            self._records.save(capture)
             return capture
 
     def newest_first(self) -> list[Capture]:
-        if not self.root.is_dir():
-            return []
-        found = (self._read(folder.name) for folder in self.root.iterdir())
-        captures = [capture for capture in found if capture is not None]
-        return sorted(captures, key=lambda capture: capture.created_at, reverse=True)
+        return self._records.newest_first()
 
     def get(self, capture_id: str) -> Capture:
-        capture = self._read(capture_id)
+        capture = self._records.read(capture_id)
         if capture is None:
             raise CaptureError("That capture does not exist.", 404)
         return capture
@@ -188,15 +178,6 @@ class CaptureStore:
             raise CaptureError("That photo does not exist.", 404)
         relative, media_type = image.file(kind)
         return self.root / capture.id / relative, media_type
-
-    def _read(self, capture_id: str) -> Capture | None:
-        if not CAPTURE_ID.match(capture_id):
-            return None
-        try:
-            text = (self.root / capture_id / "capture.json").read_text(encoding="utf-8")
-            return Capture.model_validate_json(text)
-        except (OSError, ValidationError):
-            return None
 
     def _check(self, upload: Upload) -> _CheckedPhoto:
         """Decode one upload fully, enforce the limits, and make its upright copy if needed."""

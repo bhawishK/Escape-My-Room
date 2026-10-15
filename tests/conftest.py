@@ -5,9 +5,10 @@ import socket
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
+from typing import Protocol
 
 import httpx
 import pytest
@@ -27,14 +28,22 @@ def multi_asset_service_url(tmp_path_factory: pytest.TempPathFactory) -> Iterato
         yield url
 
 
+class StartService(Protocol):
+    def __call__(self, data_dir: Path, **settings: str) -> AbstractContextManager[str]: ...
+
+
 @pytest.fixture
-def start_service() -> Callable[[Path], AbstractContextManager[str]]:
-    """Start a fresh service process that keeps its data in the given directory."""
-    return lambda data_dir: _service(ROOT / "assets" / "prepared-room", data_dir)
+def start_service() -> StartService:
+    """Start a fresh service process with its data in the given directory and extra settings."""
+
+    def start(data_dir: Path, **settings: str) -> AbstractContextManager[str]:
+        return _service(ROOT / "assets" / "prepared-room", data_dir, **settings)
+
+    return start
 
 
 @contextmanager
-def _service(prepared_dir: Path, data_dir: Path) -> Iterator[str]:
+def _service(prepared_dir: Path, data_dir: Path, **settings: str) -> Iterator[str]:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
@@ -53,7 +62,8 @@ def _service(prepared_dir: Path, data_dir: Path) -> Iterator[str]:
         ],
         cwd=ROOT,
         env=os.environ
-        | {"ESCAPE_ROOM_PREPARED_DIR": str(prepared_dir), "ESCAPE_ROOM_DATA_DIR": str(data_dir)},
+        | {"ESCAPE_ROOM_PREPARED_DIR": str(prepared_dir), "ESCAPE_ROOM_DATA_DIR": str(data_dir)}
+        | settings,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

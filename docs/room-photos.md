@@ -14,6 +14,8 @@ The **Room photos** panel sits below the connection panels.
 
 The panel always shows the most recent capture. No capture or photo ID is shown or typed, and none is used to join the shared room.
 
+A saved capture can be turned into a candidate room with **Prepare room**; see [room preparation jobs](room-preparation.md).
+
 ## What is stored
 
 Captures live in `data/captures/` (gitignored), or in `$ESCAPE_ROOM_DATA_DIR/captures/` when that variable is set.
