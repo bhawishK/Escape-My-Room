@@ -1,0 +1,75 @@
+{
+  "room_version": 1,
+  "units": "meters",
+  "asset": "room.gltf",
+  "entities": [
+    {
+      "id": "floor",
+      "node": "floor",
+      "kind": "static",
+      "selectable": false,
+      "color": "#8d9399",
+      "size": {
+        "width": 4.0,
+        "height": 0.02,
+        "depth": 4.0
+      },
+      "position": {
+        "x": 0.0,
+        "y": -0.02,
+        "z": 0.0
+      }
+    },
+    {
+      "id": "desk",
+      "node": "desk",
+      "kind": "static",
+      "selectable": false,
+      "color": "#8b5a2b",
+      "size": {
+        "width": 1.2,
+        "height": 0.75,
+        "depth": 0.6
+      },
+      "position": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": -1.2
+      }
+    },
+    {
+      "id": "cabinet",
+      "node": "cabinet",
+      "kind": "static",
+      "selectable": false,
+      "color": "#5c4033",
+      "size": {
+        "width": 0.8,
+        "height": 1.2,
+        "depth": 0.4
+      },
+      "position": {
+        "x": 1.4,
+        "y": 0.0,
+        "z": -1.2
+      }
+    },
+    {
+      "id": "box",
+      "node": "box",
+      "kind": "movable",
+      "selectable": true,
+      "color": "#66e6cf",
+      "size": {
+        "width": 0.2,
+        "height": 0.2,
+        "depth": 0.2
+      },
+      "position": {
+        "x": -0.5,
+        "y": 0.0,
+        "z": -0.4
+      }
+    }
+  ]
+}

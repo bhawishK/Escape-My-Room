@@ -3,6 +3,26 @@ export type TrackingStatus = 'inactive' | 'tracked' | 'lost' | 'emulated';
 export type ReferenceSpace = 'local' | 'local-floor';
 export interface Position { x: number; y: number; z: number }
 
+export interface RoomEntity {
+  id: string;
+  node: string;
+  kind: 'static' | 'movable';
+  selectable: boolean;
+  color: string;
+  position: Position;
+  size: { width: number; height: number; depth: number };
+}
+
+export interface RoomState {
+  available: boolean;
+  room_version: number | null;
+  units: string | null;
+  asset_url: string | null;
+  error: string | null;
+  entities: RoomEntity[];
+  loaded_by: { mobile_master: number | null; vr_solver: number | null };
+}
+
 export interface SessionState {
   revision: number;
   mobile_connected: boolean;
@@ -12,6 +32,7 @@ export interface SessionState {
     reference_space: ReferenceSpace | null;
     position: Position | null;
   };
+  room: RoomState;
 }
 
 export interface PoseInput {

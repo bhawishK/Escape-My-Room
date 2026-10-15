@@ -23,11 +23,20 @@ The first event is `{ "type": "welcome", "state": ... }`. Later events are `{ "t
     "tracking_status": "inactive",
     "reference_space": null,
     "position": null
+  },
+  "room": {
+    "available": true,
+    "room_version": 1,
+    "units": "meters",
+    "asset_url": "/assets/prepared-room/room.gltf",
+    "error": null,
+    "entities": [],
+    "loaded_by": { "mobile_master": null, "vr_solver": null }
   }
 }
 ```
 
-Revision increases for joins, accepted poses, and disconnects. Closing the VR socket sets `vr_connected` to false. Closing the phone socket also clears its marker to `lost`, without disconnecting VR. Restarting Python removes all state. There is no automatic reconnect; the role button starts a fresh connection. There are no HTTP reservations to release if a socket fails.
+The example omits the four entity objects. A live room lists `floor`, `desk`, `cabinet`, and `box` with their kinds and starting positions. Revision increases for joins, accepted poses, room acknowledgements, accepted entity moves, and disconnects. Closing the VR socket sets `vr_connected` to false. Closing the phone socket also clears its marker to `lost`, without disconnecting VR. Restarting Python removes all state. There is no automatic reconnect; the role button starts a fresh connection. There are no HTTP reservations to release if a socket fails.
 
 Connected status represents a live page connection, not proof that immersive VR has started or positional tracking works. Roles constrain message behavior; they are not authentication. Anyone who can access this prototype URL can choose either role.
 
@@ -51,6 +60,14 @@ The retained WebXR path samples `XRFrame.getViewerPose(localReferenceSpace).tran
 
 Malformed JSON, binary frames, schema violations, solver publications, and repeated sequences produce `{ "type": "error", "code": "...", "message": "..." }` without changing the marker. Codes are `invalid_message`, `role_forbidden`, and `stale_sequence`. Text messages are limited to 16 KiB; the documented server invocation enforces the same transport limit, which may close oversized frames. These are correctness checks, not sensor attestation.
 
+## Prepared room
+
+`GET /api/room` returns the same room descriptor served in `state.room`, without `loaded_by`. Python loads `assets/prepared-room/manifest.json` at startup. The manifest is the identity contract: room version, entity IDs, static or movable kind, selectable flag, and bottom-center positions in meters. Node names in the glTF are only pointers. If the manifest is missing or invalid, the model file or its geometry is missing, a manifest node is absent, two entities share one mesh, or a node translation disagrees with the manifest, the room is unavailable. `/api/room` then returns HTTP 503 with that reason, and both sockets receive `room.available: false` plus the same `room.error`. Neither device is given a different room.
+
+A client that has drawn the model sends `{ "type": "room_loaded", "room_version": 1 }`. A version other than the server's room version returns `room_version_mismatch` and that socket is closed, so it does not remain in the session. `loaded_by` records the version each connected role has acknowledged.
+
+`{ "type": "entity_transform", "id": "box", "position": { "x": 0.25, "y": 0.0, "z": 0.1 } }` changes only that entity. Static furniture returns `entity_not_movable` and does not change any position. An unknown ID returns `unknown_entity`. This proves the movable item is independently addressable. It is not phone manipulation; selection and phone movement remain later issues.
+
 ## Render accepted state
 
-Both clients render the Python-accepted marker. Missing positions hide the sphere; the neutral grid and axes remain visible. Raw XR meters use a presentation offset `(0, 1.2, -3)` in each viewer's scene. This is not shared physical alignment or room calibration. Manual coordinate controls have been removed.
+Both clients render the Python-accepted marker and the prepared room. The room model is loaded from `asset_url` and each entity is placed from the manifest position. The floor, desk, and cabinet stay fixed. The box is a separate object. A failed model load shows the error and removes any partial room. The marker still uses a presentation offset `(0, 1.2, -3)`. The room itself is in manifest meters at the scene origin. This is not shared physical alignment or room calibration. Manual coordinate controls have been removed.

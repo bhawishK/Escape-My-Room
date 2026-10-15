@@ -6,7 +6,8 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from backend.protocol import MarkerState, PoseMessage, Role
+from backend.prepared_room import RoomEntity
+from backend.protocol import MarkerState, PoseMessage, Position, Role
 
 
 @dataclass
@@ -15,14 +16,53 @@ class PrototypeRoom:
     revision: int = 0
     marker: MarkerState = field(default_factory=MarkerState)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    entities: list[RoomEntity] = field(default_factory=list)
+    room_version: int | None = None
+    units: str | None = None
+    asset_url: str | None = None
+    load_error: str | None = None
+    loaded_versions: dict[Role, int | None] = field(
+        default_factory=lambda: {"mobile_master": None, "vr_solver": None}
+    )
 
     def snapshot(self) -> dict[str, Any]:
+        available = self.load_error is None and self.room_version is not None
         return {
             "revision": self.revision,
             "mobile_connected": "mobile_master" in self.sockets,
             "vr_connected": "vr_solver" in self.sockets,
             "marker": self.marker.model_dump(),
+            "room": {
+                "available": available,
+                "room_version": self.room_version,
+                "units": self.units,
+                "asset_url": self.asset_url,
+                "error": self.load_error,
+                "entities": [entity.model_dump() for entity in self.entities],
+                "loaded_by": dict(self.loaded_versions),
+            },
         }
+
+    def accept_room_version(self, role: Role, version: int) -> str:
+        if self.load_error is not None or self.room_version is None:
+            return "unavailable"
+        if version != self.room_version:
+            return "mismatch"
+        self.loaded_versions[role] = version
+        self.revision += 1
+        return "ok"
+
+    def move_entity(self, entity_id: str, position: Position) -> str:
+        if self.load_error is not None or self.room_version is None:
+            return "unavailable"
+        for entity in self.entities:
+            if entity.id == entity_id:
+                if entity.kind != "movable":
+                    return "static"
+                entity.position = position
+                self.revision += 1
+                return "ok"
+        return "unknown"
 
     async def broadcast(self, exclude: WebSocket | None = None) -> None:
         event = {"type": "state", "state": self.snapshot()}
@@ -44,6 +84,7 @@ class PrototypeRoom:
 
     def disconnect(self, role: Role) -> None:
         self.sockets.pop(role, None)
+        self.loaded_versions[role] = None
         if role == "mobile_master":
             self.marker = MarkerState(tracking_status="lost")
         self.revision += 1

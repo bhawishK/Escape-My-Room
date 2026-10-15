@@ -23,7 +23,7 @@ button:focus-visible, summary:focus-visible { outline: 3px solid #a9f5e9; outlin
 .button-row { display: flex; gap: 8px; }
 .device-buttons { display: grid; gap: 10px; }
 .device-status { padding: 12px; border-radius: 8px; background: #172b41; font-size: 15px; }
-.device-status[data-connected='true'] { color: #a9f5e9; background: #173b38; }
+.device-status[data-connected='true'], .device-status[data-available='true'] { color: #a9f5e9; background: #173b38; }
 .scene-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 18px; }
 .scene-heading h2 { margin: 0; }
 #tracking { color: #8ba5be; font-size: 12px; }

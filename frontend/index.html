@@ -22,6 +22,7 @@
           <p class="hint">Both devices connect to the same prototype automatically.</p>
           <p id="connection" data-testid="connection" role="status">Not connected</p>
           <p id="vr-status" data-testid="vr-status" class="device-status" role="status">Connect to see VR device status</p>
+          <p id="room-status" data-testid="room-status" class="device-status" role="status">Room not loaded</p>
           <div class="button-row">
             <button id="start-xr" disabled>Enter XR</button>
             <button id="end-xr" disabled class="secondary">End XR</button>
@@ -34,7 +35,7 @@
         <section class="panel scene-panel" aria-labelledby="scene-heading">
           <div class="scene-heading"><h2 id="scene-heading">VR preview</h2></div>
           <div id="scene" aria-label="Three-dimensional diagnostic scene"></div>
-          <p class="hint">On Quest, connect the headset and select Enter VR to look around.</p>
+          <p class="hint">Both devices show the same prepared room. The teal box is the only movable object. Floor, desk, and cabinet stay fixed.</p>
           <details><summary>Device smoke-test diagnostics</summary>
             <p id="tracking" data-testid="tracking">Inactive</p>
             <p id="marker-position" data-testid="marker-position">No accepted position</p>

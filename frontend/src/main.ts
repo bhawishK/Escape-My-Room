@@ -38,10 +38,33 @@ function controls(): void {
   startButton.textContent = role === 'vr_solver' ? 'Enter VR' : role === 'mobile_master' ? 'Enter AR' : 'Enter XR';
 }
 
+function roomLabel(next: SessionState, ready: boolean): string {
+  if (!next.room.available || next.room.room_version === null) return 'Room not loaded';
+  if (!ready) return `Room version ${next.room.room_version} · loading`;
+  const names = next.room.entities.map(entity => (
+    entity.kind === 'movable' ? `${entity.id} (movable)` : entity.id
+  ));
+  return `Room version ${next.room.room_version} · ${names.join(', ')}`;
+}
+
 function applyState(next: SessionState): void {
   if (state && next.revision < state.revision) return;
   state = next;
   view?.apply(next);
+  const roomStatus = element('room-status');
+  roomStatus.dataset.available = 'false';
+  roomStatus.textContent = roomLabel(next, false);
+  void view?.syncRoom(next).then(result => {
+    if (!result || state?.room.room_version !== result.version) return;
+    if (result.acknowledge) client.sendRoomLoaded(result.version);
+    roomStatus.dataset.available = 'true';
+    roomStatus.textContent = roomLabel(state ?? next, true);
+  }).catch(error => {
+    const message = error instanceof Error ? error.message : 'The prepared room could not be loaded.';
+    roomStatus.dataset.available = 'false';
+    roomStatus.textContent = message;
+    showError(message);
+  });
   const p = next.marker.position;
   element('marker-position').textContent = p ? `${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)} m` : 'No accepted position';
   const labels = { inactive: 'Inactive · no positional input', tracked: 'Tracked · WebXR',
@@ -63,9 +86,19 @@ const client = new SessionClient({
       element('tracking').textContent = 'Disconnected · state unavailable';
       element('vr-status').textContent = 'Connect to see VR device status';
       element('vr-status').dataset.connected = 'false';
-      if (view) view.apply({ revision: 0, mobile_connected: false, vr_connected: false, marker: {
-        position: null, tracking_status: 'inactive', reference_space: null,
-      } });
+      element('room-status').textContent = 'Room not loaded';
+      element('room-status').dataset.available = 'false';
+      if (view) {
+        view.clearRoom();
+        view.apply({
+          revision: 0, mobile_connected: false, vr_connected: false,
+          marker: { position: null, tracking_status: 'inactive', reference_space: null },
+          room: {
+            available: false, room_version: null, units: null, asset_url: null, error: null, entities: [],
+            loaded_by: { mobile_master: null, vr_solver: null },
+          },
+        });
+      }
       void xr?.end().catch(error => showError(xrError(error)));
     }
     controls();
