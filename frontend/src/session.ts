@@ -74,6 +74,11 @@ export class SessionClient {
     this.socket.send(JSON.stringify({ type: 'pose', sequence: ++this.sequence, ...pose }));
   }
 
+  sendRoomLoaded(roomVersion: number): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: 'room_loaded', room_version: roomVersion }));
+  }
+
   leave(): void {
     this.socket?.close();
     this.socket = null;

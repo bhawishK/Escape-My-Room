@@ -25,6 +25,17 @@ class MarkerState(WireModel):
     position: Position | None = None
 
 
+class RoomLoadedMessage(WireModel):
+    type: Literal["room_loaded"]
+    room_version: int = Field(ge=1)
+
+
+class EntityTransformMessage(WireModel):
+    type: Literal["entity_transform"]
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")
+    position: Position
+
+
 class PoseMessage(WireModel):
     type: Literal["pose"]
     sequence: int = Field(ge=1)

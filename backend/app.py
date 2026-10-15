@@ -3,22 +3,52 @@
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
-from backend.protocol import MarkerState, PoseMessage, Role
+from backend.prepared_room import PreparedRoomError, load_prepared_room
+from backend.protocol import (
+    EntityTransformMessage,
+    MarkerState,
+    PoseMessage,
+    Role,
+    RoomLoadedMessage,
+)
 from backend.sessions import PrototypeRoom
 
 
-def create_app() -> FastAPI:
+def create_app(prepared_dir: Path | None = None) -> FastAPI:
     app = FastAPI(title="Escape My Room prototype")
-    room = PrototypeRoom()
+    directory = prepared_dir or Path(__file__).resolve().parents[1] / "assets" / "prepared-room"
+    try:
+        prepared = load_prepared_room(directory)
+        load_error = None
+    except PreparedRoomError as exc:
+        prepared = None
+        load_error = str(exc)
+    room = PrototypeRoom(load_error=load_error)
+    if prepared is not None:
+        room.entities = [entity.model_copy(deep=True) for entity in prepared.entities]
+        room.room_version = prepared.room_version
+        room.units = prepared.units
+        room.asset_url = f"/assets/prepared-room/{prepared.asset}"
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/room")
+    async def prepared_room() -> dict[str, Any]:
+        if room.load_error is not None or room.room_version is None:
+            raise HTTPException(
+                status_code=503, detail=room.load_error or "Prepared room is unavailable."
+            )
+        description = dict(room.snapshot()["room"])
+        description.pop("loaded_by", None)
+        return description
 
     @app.websocket("/api/ws")
     async def room_socket(socket: WebSocket, role: Role) -> None:
@@ -32,6 +62,7 @@ def create_app() -> FastAPI:
                 await socket.accept()
                 previous = room.sockets.get(role)
                 room.sockets[role] = socket
+                room.loaded_versions[role] = None
                 if role == "mobile_master":
                     room.marker = MarkerState()
                 if previous is not None:
@@ -54,24 +85,74 @@ def create_app() -> FastAPI:
                     await reject("invalid_message", "Send a JSON text pose of at most 16 KiB.")
                     continue
                 try:
-                    pose = PoseMessage.model_validate(json.loads(raw))
-                except (ValueError, ValidationError):
+                    payload = json.loads(raw)
+                except ValueError:
+                    await reject("invalid_message", "Send a valid XR pose using the contract.")
+                    continue
+                if not isinstance(payload, dict):
+                    await reject("invalid_message", "Send a valid XR pose using the contract.")
+                    continue
+                try:
+                    if payload.get("type") == "pose":
+                        incoming: PoseMessage | RoomLoadedMessage | EntityTransformMessage = (
+                            PoseMessage.model_validate(payload)
+                        )
+                    elif payload.get("type") == "room_loaded":
+                        incoming = RoomLoadedMessage.model_validate(payload)
+                    elif payload.get("type") == "entity_transform":
+                        incoming = EntityTransformMessage.model_validate(payload)
+                    else:
+                        await reject("invalid_message", "Send a valid XR pose using the contract.")
+                        continue
+                except ValidationError:
                     await reject("invalid_message", "Send a valid XR pose using the contract.")
                     continue
                 async with room.lock:
                     if room.sockets.get(role) is not socket:
                         return
-                    if role != "mobile_master":
-                        await reject("role_forbidden", "Only the phone sends the marker pose.")
-                        continue
-                    if pose.sequence <= sequence:
-                        await reject(
-                            "stale_sequence", "Pose sequences must increase on this socket."
-                        )
-                        continue
-                    sequence = pose.sequence
-                    room.accept_pose(pose)
-                    await room.broadcast()
+                    if isinstance(incoming, PoseMessage):
+                        if role != "mobile_master":
+                            await reject("role_forbidden", "Only the phone sends the marker pose.")
+                            continue
+                        if incoming.sequence <= sequence:
+                            await reject(
+                                "stale_sequence", "Pose sequences must increase on this socket."
+                            )
+                            continue
+                        sequence = incoming.sequence
+                        room.accept_pose(incoming)
+                        await room.broadcast()
+                    elif isinstance(incoming, RoomLoadedMessage):
+                        result = room.accept_room_version(role, incoming.room_version)
+                        if result == "mismatch":
+                            await reject(
+                                "room_version_mismatch",
+                                "Room version does not match. Reload and connect again.",
+                            )
+                            await socket.close(code=1008, reason="Room version mismatch")
+                            return
+                        if result == "unavailable":
+                            await reject(
+                                "room_unavailable",
+                                room.load_error or "Prepared room is unavailable.",
+                            )
+                            continue
+                        await room.broadcast()
+                    else:
+                        result = room.move_entity(incoming.id, incoming.position)
+                        if result == "static":
+                            await reject("entity_not_movable", "Static furniture cannot be moved.")
+                            continue
+                        if result == "unknown":
+                            await reject("unknown_entity", "That room object does not exist.")
+                            continue
+                        if result == "unavailable":
+                            await reject(
+                                "room_unavailable",
+                                room.load_error or "Prepared room is unavailable.",
+                            )
+                            continue
+                        await room.broadcast()
         except WebSocketDisconnect:
             pass
         finally:
@@ -80,6 +161,8 @@ def create_app() -> FastAPI:
                     room.disconnect(role)
                     await room.broadcast()
 
+    if directory.is_dir():
+        app.mount("/assets/prepared-room", StaticFiles(directory=directory), name="prepared-room")
     dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"
     if dist.is_dir():
         app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")
