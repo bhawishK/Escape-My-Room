@@ -46,6 +46,26 @@
           </details>
         </section>
       </div>
+      <section id="room-photos" class="panel photos-panel" aria-labelledby="photos-heading">
+        <h2 id="photos-heading">Room photos</h2>
+        <p class="hint">Take photos of your room or choose saved ones (JPEG or PNG). Mark the photo that shows the most of the room as the overview.</p>
+        <div class="button-row">
+          <label class="file-button">Take photo<input id="camera-input" type="file" accept="image/jpeg,image/png" capture="environment" /></label>
+          <label class="file-button secondary">Choose photos<input id="photo-input" type="file" accept="image/jpeg,image/png" multiple /></label>
+        </div>
+        <ul id="pending-photos" class="photo-grid" aria-label="Photos to save"></ul>
+        <label for="instructions">Room instructions</label>
+        <textarea id="instructions" rows="3" placeholder="Describe the room and the objects that matter."></textarea>
+        <button id="save-capture" disabled>Save photos</button>
+        <p id="capture-error" data-testid="capture-error" role="alert" hidden></p>
+        <div id="saved-capture" data-testid="saved-capture" hidden>
+          <h3>Saved photos</h3>
+          <p id="saved-time" class="hint"></p>
+          <p id="saved-instructions" data-testid="saved-instructions"></p>
+          <ul id="saved-photos" class="photo-grid" aria-label="Saved photos"></ul>
+          <p id="overview-status" data-testid="overview-status" class="hint" role="status"></p>
+        </div>
+      </section>
     </main>
     <div id="xr-overlay" hidden>
       <p id="xr-hud">Connection diagnostic</p>

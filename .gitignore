@@ -14,4 +14,5 @@
 /frontend/test-results/
 /frontend/playwright-report/
 /.certs/
+/data/
 *.egg-info/
