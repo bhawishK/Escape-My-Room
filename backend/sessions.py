@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import WebSocket
 
+from backend.alignment import Alignment
 from backend.prepared_room import RoomEntity
 from backend.protocol import MarkerState, PoseMessage, Position, Role
 
@@ -24,6 +25,12 @@ class PrototypeRoom:
     loaded_versions: dict[Role, int | None] = field(
         default_factory=lambda: {"mobile_master": None, "vr_solver": None}
     )
+    alignment: dict[Role, Alignment] = field(
+        default_factory=lambda: {
+            "mobile_master": Alignment(),
+            "vr_solver": Alignment(),
+        }
+    )
 
     def snapshot(self) -> dict[str, Any]:
         available = self.load_error is None and self.room_version is not None
@@ -32,6 +39,7 @@ class PrototypeRoom:
             "mobile_connected": "mobile_master" in self.sockets,
             "vr_connected": "vr_solver" in self.sockets,
             "marker": self.marker.model_dump(),
+            "alignment": {role: value.model_dump() for role, value in self.alignment.items()},
             "room": {
                 "available": available,
                 "room_version": self.room_version,
@@ -64,6 +72,13 @@ class PrototypeRoom:
                 return "ok"
         return "unknown"
 
+    def accept_alignment(self, role: Role, yaw: float, origin: Position) -> str:
+        if self.load_error is not None or self.room_version is None:
+            return "unavailable"
+        self.alignment[role] = Alignment(status="aligned", yaw=yaw, origin=origin)
+        self.revision += 1
+        return "ok"
+
     async def broadcast(self, exclude: WebSocket | None = None) -> None:
         event = {"type": "state", "state": self.snapshot()}
         for socket in list(self.sockets.values()):
@@ -85,6 +100,7 @@ class PrototypeRoom:
     def disconnect(self, role: Role) -> None:
         self.sockets.pop(role, None)
         self.loaded_versions[role] = None
+        self.alignment[role] = Alignment()
         if role == "mobile_master":
             self.marker = MarkerState(tracking_status="lost")
         self.revision += 1

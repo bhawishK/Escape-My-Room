@@ -13,6 +13,7 @@ function element<T extends HTMLElement>(id: string): T {
 const phoneButton = element<HTMLButtonElement>('connect-phone');
 const vrButton = element<HTMLButtonElement>('connect-vr');
 const disconnectButton = element<HTMLButtonElement>('disconnect');
+const alignButton = element<HTMLButtonElement>('confirm-alignment');
 const startButton = element<HTMLButtonElement>('start-xr');
 const endButton = element<HTMLButtonElement>('end-xr');
 const overlay = element('xr-overlay');
@@ -33,9 +34,18 @@ function controls(): void {
   phoneButton.disabled = connected || busy;
   vrButton.disabled = connected || busy;
   disconnectButton.disabled = !connected;
+  alignButton.disabled = !connected;
   startButton.disabled = !connected || busy || xrActive || xr === null;
   endButton.disabled = !xrActive;
   startButton.textContent = role === 'vr_solver' ? 'Enter VR' : role === 'mobile_master' ? 'Enter AR' : 'Enter XR';
+}
+
+function alignmentLabel(next: SessionState): string {
+  if (!role) return 'Not aligned';
+  const mine = next.alignment[role];
+  if (mine.status !== 'aligned') return 'Not aligned';
+  const origin = mine.origin;
+  return `Aligned · yaw ${mine.yaw.toFixed(2)} rad · origin ${origin.x.toFixed(2)}, ${origin.y.toFixed(2)}, ${origin.z.toFixed(2)}`;
 }
 
 function roomLabel(next: SessionState, ready: boolean): string {
@@ -51,6 +61,7 @@ function applyState(next: SessionState): void {
   if (state && next.revision < state.revision) return;
   state = next;
   view?.apply(next);
+  if (role) view?.applyView(next.alignment[role]);
   const roomStatus = element('room-status');
   roomStatus.dataset.available = 'false';
   roomStatus.textContent = roomLabel(next, false);
@@ -70,6 +81,7 @@ function applyState(next: SessionState): void {
   const labels = { inactive: 'Inactive · no positional input', tracked: 'Tracked · WebXR',
     lost: 'Lost · marker unavailable', emulated: 'Emulated · not positional tracking' };
   element('tracking').textContent = labels[next.marker.tracking_status];
+  element('alignment-status').textContent = alignmentLabel(next);
   element('vr-status').textContent = next.vr_connected ? 'VR device connected' : 'Waiting for VR device';
   element('vr-status').dataset.connected = String(next.vr_connected);
   element('xr-hud').textContent = next.mobile_connected ? 'Phone connected' : 'Waiting for phone';
@@ -88,11 +100,17 @@ const client = new SessionClient({
       element('vr-status').dataset.connected = 'false';
       element('room-status').textContent = 'Room not loaded';
       element('room-status').dataset.available = 'false';
+      element('alignment-status').textContent = 'Not aligned';
       if (view) {
+        view.applyView({ status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } });
         view.clearRoom();
         view.apply({
           revision: 0, mobile_connected: false, vr_connected: false,
           marker: { position: null, tracking_status: 'inactive', reference_space: null },
+          alignment: {
+            mobile_master: { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } },
+            vr_solver: { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } },
+          },
           room: {
             available: false, room_version: null, units: null, asset_url: null, error: null, entities: [],
             loaded_by: { mobile_master: null, vr_solver: null },
@@ -117,7 +135,7 @@ try {
       'WebXR unavailable. Mobile view works; physical phone tracking is pending on iPhone Chrome.' :
       `AR ${report.immersive_ar ? 'available' : 'unavailable'} · VR ${report.immersive_vr ? 'available' : 'unavailable'}. Enter XR to test tracking and input.`;
     controls();
-  });
+  }, () => confirmAlignment());
   const sceneView = view;
   sceneView.renderer.setAnimationLoop((time, frame) => {
     xr?.frame(time, frame);
@@ -160,6 +178,12 @@ const endXR = () => { void xr?.end().catch(error => showError(xrError(error))); 
 endButton.addEventListener('click', endXR);
 element('overlay-end-xr').addEventListener('click', endXR);
 disconnectButton.addEventListener('click', () => { client.leave(); endXR(); });
+const confirmAlignment = () => {
+  if (!connected) return;
+  client.sendCalibration(xr?.confirmedAlignment() ?? { yaw: 0, origin: { x: 0, y: 0, z: 0 } });
+};
+alignButton.addEventListener('click', confirmAlignment);
+element('overlay-confirm-alignment').addEventListener('click', confirmAlignment);
 
 let holdEvents = 0;
 const holdProbe = element<HTMLButtonElement>('hold-probe');

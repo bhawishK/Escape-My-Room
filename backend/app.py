@@ -9,8 +9,10 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
+from backend.alignment import Alignment
 from backend.prepared_room import PreparedRoomError, load_prepared_room
 from backend.protocol import (
+    CalibrateMessage,
     EntityTransformMessage,
     MarkerState,
     PoseMessage,
@@ -63,6 +65,7 @@ def create_app(prepared_dir: Path | None = None) -> FastAPI:
                 previous = room.sockets.get(role)
                 room.sockets[role] = socket
                 room.loaded_versions[role] = None
+                room.alignment[role] = Alignment()
                 if role == "mobile_master":
                     room.marker = MarkerState()
                 if previous is not None:
@@ -94,13 +97,18 @@ def create_app(prepared_dir: Path | None = None) -> FastAPI:
                     continue
                 try:
                     if payload.get("type") == "pose":
-                        incoming: PoseMessage | RoomLoadedMessage | EntityTransformMessage = (
-                            PoseMessage.model_validate(payload)
-                        )
+                        incoming: (
+                            PoseMessage
+                            | RoomLoadedMessage
+                            | EntityTransformMessage
+                            | CalibrateMessage
+                        ) = PoseMessage.model_validate(payload)
                     elif payload.get("type") == "room_loaded":
                         incoming = RoomLoadedMessage.model_validate(payload)
                     elif payload.get("type") == "entity_transform":
                         incoming = EntityTransformMessage.model_validate(payload)
+                    elif payload.get("type") == "calibrate":
+                        incoming = CalibrateMessage.model_validate(payload)
                     else:
                         await reject("invalid_message", "Send a valid XR pose using the contract.")
                         continue
@@ -131,6 +139,15 @@ def create_app(prepared_dir: Path | None = None) -> FastAPI:
                             )
                             await socket.close(code=1008, reason="Room version mismatch")
                             return
+                        if result == "unavailable":
+                            await reject(
+                                "room_unavailable",
+                                room.load_error or "Prepared room is unavailable.",
+                            )
+                            continue
+                        await room.broadcast()
+                    elif isinstance(incoming, CalibrateMessage):
+                        result = room.accept_alignment(role, incoming.yaw, incoming.origin)
                         if result == "unavailable":
                             await reject(
                                 "room_unavailable",

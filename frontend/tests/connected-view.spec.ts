@@ -63,6 +63,15 @@ test('phone and headset show the same prepared room', async ({ browser }) => {
   await vr.close();
 });
 
+test('confirming alignment marks this device aligned', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
+  await expect(page.getByTestId('alignment-status')).toHaveText('Not aligned');
+  await page.locator('#confirm-alignment').click();
+  await expect(page.getByTestId('alignment-status')).toHaveText('Aligned · yaw 0.00 rad · origin 0.00, 0.00, 0.00');
+  await expect(page.locator('#scene')).toHaveAttribute('data-view', 'calibrated');
+});
+
 test('failed initial socket can retry with one role button', async ({ page }) => {
   let blockSocket = true;
   await page.routeWebSocket(/\/api\/ws/, socket => {
