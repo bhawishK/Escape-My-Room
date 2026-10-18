@@ -2,15 +2,34 @@
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from backend.alignment import Alignment
-from backend.prepared_room import PreparedRoomError, load_prepared_room
+from backend.captures import (
+    Capture,
+    CaptureLimits,
+    CaptureStore,
+    ImageKind,
+    Upload,
+)
+from backend.errors import Refusal
+from backend.preparation import JobRequest, PreparationService, worker_from_environment
+from backend.prepared_room import ASSET_URL_PREFIX, PreparedRoomError, load_prepared_room
 from backend.protocol import (
     CalibrateMessage,
     EntityTransformMessage,
@@ -18,13 +37,25 @@ from backend.protocol import (
     PoseMessage,
     Role,
     RoomLoadedMessage,
+    WireModel,
 )
 from backend.sessions import PrototypeRoom
 
 
-def create_app(prepared_dir: Path | None = None) -> FastAPI:
+class OverviewChoice(WireModel):
+    image_id: str
+
+
+def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -> FastAPI:
     app = FastAPI(title="Escape My Room prototype")
-    directory = prepared_dir or Path(__file__).resolve().parents[1] / "assets" / "prepared-room"
+    repository = Path(__file__).resolve().parents[1]
+    data = data_dir or Path(os.environ.get("ESCAPE_ROOM_DATA_DIR") or repository / "data")
+    captures = CaptureStore(data / "captures", CaptureLimits.from_environment())
+    preparations = PreparationService(
+        data / "jobs", captures, worker_from_environment(repository)
+    )
+    default = repository / "assets" / "prepared-room"
+    directory = prepared_dir or Path(os.environ.get("ESCAPE_ROOM_PREPARED_DIR") or default)
     try:
         prepared = load_prepared_room(directory)
         load_error = None
@@ -35,8 +66,6 @@ def create_app(prepared_dir: Path | None = None) -> FastAPI:
     if prepared is not None:
         room.entities = [entity.model_copy(deep=True) for entity in prepared.entities]
         room.room_version = prepared.room_version
-        room.units = prepared.units
-        room.asset_url = f"/assets/prepared-room/{prepared.asset}"
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:
@@ -51,6 +80,61 @@ def create_app(prepared_dir: Path | None = None) -> FastAPI:
         description = dict(room.snapshot()["room"])
         description.pop("loaded_by", None)
         return description
+
+    @app.exception_handler(Refusal)
+    async def refused(_: Request, exc: Refusal) -> JSONResponse:
+        return JSONResponse(status_code=exc.status, content={"detail": str(exc)})
+
+    def describe(capture: Capture) -> dict[str, Any]:
+        """The capture as clients see it, with each photo's original and processed URLs."""
+        data = capture.model_dump()
+        for image in data["images"]:
+            for kind in ("original", "processed"):
+                path = app.url_path_for(
+                    "capture_image", capture_id=capture.id, image_id=image["id"], kind=kind
+                )
+                image[f"{kind}_url"] = str(path)
+        return data
+
+    @app.get("/api/captures")
+    def list_captures() -> dict[str, list[dict[str, Any]]]:
+        return {"captures": [describe(capture) for capture in captures.newest_first()]}
+
+    @app.post("/api/captures", status_code=201)
+    def create_capture(
+        images: list[UploadFile], overview: int = Form(), instructions: str = Form("")
+    ) -> dict[str, Any]:
+        uploads = [Upload(image.filename or "photo", image.file.read()) for image in images]
+        return describe(captures.create(uploads, instructions, overview))
+
+    @app.get("/api/captures/{capture_id}")
+    def get_capture(capture_id: str) -> dict[str, Any]:
+        return describe(captures.get(capture_id))
+
+    @app.put("/api/captures/{capture_id}/overview")
+    def choose_overview(capture_id: str, choice: OverviewChoice) -> dict[str, Any]:
+        return describe(captures.set_overview(capture_id, choice.image_id))
+
+    @app.get("/api/captures/{capture_id}/images/{image_id}/{kind}")
+    def capture_image(capture_id: str, image_id: str, kind: ImageKind) -> FileResponse:
+        path, media_type = captures.photo_file(capture_id, image_id, kind)
+        return FileResponse(path, media_type=media_type)
+
+    @app.get("/api/preparations")
+    def list_preparations() -> dict[str, list[dict[str, Any]]]:
+        return {"jobs": [job.model_dump() for job in preparations.newest_first()]}
+
+    @app.post("/api/preparations", status_code=202)
+    def submit_preparation(request: JobRequest) -> dict[str, Any]:
+        return preparations.submit(request).model_dump()
+
+    @app.get("/api/preparations/{job_id}")
+    def get_preparation(job_id: str) -> dict[str, Any]:
+        return preparations.get(job_id).model_dump()
+
+    @app.get("/api/preparations/{job_id}/files/{relative:path}")
+    def preparation_file(job_id: str, relative: str) -> FileResponse:
+        return FileResponse(preparations.file(job_id, relative))
 
     @app.websocket("/api/ws")
     async def room_socket(socket: WebSocket, role: Role) -> None:
@@ -179,8 +263,8 @@ def create_app(prepared_dir: Path | None = None) -> FastAPI:
                     await room.broadcast()
 
     if directory.is_dir():
-        app.mount("/assets/prepared-room", StaticFiles(directory=directory), name="prepared-room")
-    dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+        app.mount(ASSET_URL_PREFIX, StaticFiles(directory=directory), name="prepared-room")
+    dist = repository / "frontend" / "dist"
     if dist.is_dir():
         app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")
     return app

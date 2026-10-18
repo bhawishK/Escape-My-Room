@@ -28,7 +28,8 @@ The first event is `{ "type": "welcome", "state": ... }`. Later events are `{ "t
     "available": true,
     "room_version": 1,
     "units": "meters",
-    "asset_url": "/assets/prepared-room/room.gltf",
+    "frame": "y_up_right_handed",
+    "quaternion_order": "xyzw",
     "error": null,
     "entities": [],
     "loaded_by": { "mobile_master": null, "vr_solver": null }
@@ -36,7 +37,7 @@ The first event is `{ "type": "welcome", "state": ... }`. Later events are `{ "t
 }
 ```
 
-The example omits the four entity objects. A live room lists `floor`, `desk`, `cabinet`, and `box` with their kinds and starting positions. Revision increases for joins, accepted poses, room acknowledgements, accepted entity moves, and disconnects. Closing the VR socket sets `vr_connected` to false. Closing the phone socket also clears its marker to `lost`, without disconnecting VR. Restarting Python removes all state. There is no automatic reconnect; the role button starts a fresh connection. There are no HTTP reservations to release if a socket fails.
+The example omits the entity objects. The default room lists `floor`, `desk`, `cabinet`, and `box`. Each entity has `id`, `label`, `asset_url`, `node`, `kind`, `selectable`, `size`, `position`, and a unit-quaternion `rotation` in `(x, y, z, w)` order. In the stand-in room every entity shares `/assets/prepared-room/room.gltf` and has the identity rotation; a multi-asset room gives each entity its own GLB. `units`, `frame`, and `quaternion_order` are null while the room is unavailable. Revision increases for joins, accepted poses, room acknowledgements, accepted entity moves, and disconnects. Closing the VR socket sets `vr_connected` to false. Closing the phone socket also clears its marker to `lost`, without disconnecting VR. Restarting Python removes all state. There is no automatic reconnect; the role button starts a fresh connection. There are no HTTP reservations to release if a socket fails.
 
 Connected status represents a live page connection, not proof that immersive VR has started or positional tracking works. Roles constrain message behavior; they are not authentication. Anyone who can access this prototype URL can choose either role.
 
@@ -62,7 +63,7 @@ Malformed JSON, binary frames, schema violations, solver publications, and repea
 
 ## Prepared room
 
-`GET /api/room` returns the same room descriptor served in `state.room`, without `loaded_by`. Python loads `assets/prepared-room/manifest.json` at startup. The manifest is the identity contract: room version, entity IDs, static or movable kind, selectable flag, and bottom-center positions in meters. Node names in the glTF are only pointers. If the manifest is missing or invalid, the model file or its geometry is missing, a manifest node is absent, two entities share one mesh, or a node translation disagrees with the manifest, the room is unavailable. `/api/room` then returns HTTP 503 with that reason, and both sockets receive `room.available: false` plus the same `room.error`. Neither device is given a different room.
+`GET /api/room` returns the same room descriptor served in `state.room`, without `loaded_by`. Python loads `manifest.json` from `assets/prepared-room/`, or from `ESCAPE_ROOM_PREPARED_DIR` when set, at startup. The manifest is the identity contract: room version, entity IDs, static or movable kind, selectable flag, and bottom-center placement in meters. Node names in the assets are only pointers. If the manifest is missing or invalid, or an asset disagrees with it, the room is unavailable. The [prepared room note](prepared-room.md) lists both manifest forms and their checks. `/api/room` then returns HTTP 503 with that reason, and both sockets receive `room.available: false` plus the same `room.error`. Neither device is given a different room.
 
 A client that has drawn the model sends `{ "type": "room_loaded", "room_version": 1 }`. A version other than the server's room version returns `room_version_mismatch` and that socket is closed, so it does not remain in the session. `loaded_by` records the version each connected role has acknowledged.
 
@@ -70,4 +71,4 @@ A client that has drawn the model sends `{ "type": "room_loaded", "room_version"
 
 ## Render accepted state
 
-Both clients render the Python-accepted marker and the prepared room. The room model is loaded from `asset_url` and each entity is placed from the manifest position. The floor, desk, and cabinet stay fixed. The box is a separate object. A failed model load shows the error and removes any partial room. The marker still uses a presentation offset `(0, 1.2, -3)`. The room itself is in manifest meters at the scene origin. This is not shared physical alignment or room calibration. Manual coordinate controls have been removed.
+Both clients render the Python-accepted marker and the prepared room. Each distinct `asset_url` is loaded once. Every entity gets its own placement root at the manifest position and rotation, and its node keeps its child transforms. Nothing is drawn until every asset has loaded. The floor, desk, and cabinet stay fixed. The box is a separate object. A failed asset load shows the asset name and removes any partial room. The marker still uses a presentation offset `(0, 1.2, -3)`. The room itself is in manifest meters at the scene origin. This is not shared physical alignment or room calibration. Manual coordinate controls have been removed.

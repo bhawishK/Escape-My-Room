@@ -1,14 +1,11 @@
 import './style.css';
+import { RoomPhotos } from './capture';
+import { element } from './dom';
+import { RoomPreparation } from './preparation';
 import type { Role, SessionState } from './protocol';
 import { SessionClient } from './session';
 import { DiagnosticScene } from './scene';
 import { XRDiagnostic, xrError } from './xr';
-
-function element<T extends HTMLElement>(id: string): T {
-  const found = document.getElementById(id);
-  if (!found) throw new Error(`Missing interface element: ${id}`);
-  return found as T;
-}
 
 const phoneButton = element<HTMLButtonElement>('connect-phone');
 const vrButton = element<HTMLButtonElement>('connect-vr');
@@ -112,8 +109,8 @@ const client = new SessionClient({
             vr_solver: { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } },
           },
           room: {
-            available: false, room_version: null, units: null, asset_url: null, error: null, entities: [],
-            loaded_by: { mobile_master: null, vr_solver: null },
+            available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
+            entities: [], loaded_by: { mobile_master: null, vr_solver: null },
           },
         });
       }
@@ -211,3 +208,7 @@ element('download-report').addEventListener('click', () => {
 });
 window.addEventListener('pagehide', () => client.leave());
 controls();
+
+const roomPreparation = new RoomPreparation();
+const roomPhotos = new RoomPhotos(capture => { void roomPreparation.showCapture(capture); });
+void roomPhotos.showLatest().catch(() => undefined);

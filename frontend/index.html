@@ -33,12 +33,12 @@
           <p id="xr-support" class="notice" role="status">Checking XR support…</p>
           <p class="hint">iPhone 16 can use the mobile view. Physical phone tracking on iPhone Chrome is pending. Meta Quest 3 uses the immersive VR view.</p>
           <button id="disconnect" class="secondary" disabled>Disconnect</button>
-          <p id="error" role="alert" hidden></p>
+          <p id="error" class="error-message" role="alert" hidden></p>
         </section>
         <section class="panel scene-panel" aria-labelledby="scene-heading">
           <div class="scene-heading"><h2 id="scene-heading">VR preview</h2></div>
           <div id="scene" aria-label="Three-dimensional diagnostic scene"></div>
-          <p class="hint">Both devices show the same prepared room. The teal box is the only movable object. Floor, desk, and cabinet stay fixed.</p>
+          <p class="hint">Both devices show the same prepared room. Objects marked movable move independently; the rest stay fixed.</p>
           <details><summary>Device smoke-test diagnostics</summary>
             <p id="tracking" data-testid="tracking">Inactive</p>
             <p id="marker-position" data-testid="marker-position">No accepted position</p>
@@ -49,6 +49,40 @@
           </details>
         </section>
       </div>
+      <section id="room-photos" class="panel photos-panel" aria-labelledby="photos-heading">
+        <h2 id="photos-heading">Room photos</h2>
+        <p class="hint">Take photos of your room or choose saved ones (JPEG or PNG). Mark the photo that shows the most of the room as the overview.</p>
+        <div class="button-row">
+          <label class="file-button">Take photo<input id="camera-input" type="file" accept="image/jpeg,image/png" capture="environment" /></label>
+          <label class="file-button secondary">Choose photos<input id="photo-input" type="file" accept="image/jpeg,image/png" multiple /></label>
+        </div>
+        <ul id="pending-photos" class="photo-grid" aria-label="Photos to save"></ul>
+        <label for="instructions">Room instructions</label>
+        <textarea id="instructions" rows="3" placeholder="Describe the room and the objects that matter."></textarea>
+        <button id="save-capture" disabled>Save photos</button>
+        <p id="capture-error" data-testid="capture-error" class="error-message" role="alert" hidden></p>
+        <div id="saved-capture" data-testid="saved-capture" class="divided" hidden>
+          <h3>Saved photos</h3>
+          <p id="saved-time" class="hint"></p>
+          <p id="saved-instructions" data-testid="saved-instructions"></p>
+          <ul id="saved-photos" class="photo-grid" aria-label="Saved photos"></ul>
+          <p id="overview-status" data-testid="overview-status" class="hint" role="status"></p>
+          <section id="room-preparation" class="divided" aria-labelledby="preparation-heading">
+            <h3 id="preparation-heading">Room preparation</h3>
+            <p class="hint">Turn these photos into a candidate room for review. The active room is not changed.</p>
+            <button id="prepare-room">Prepare room</button>
+            <p id="preparation-state" data-testid="preparation-state" role="status" hidden></p>
+            <p id="preparation-elapsed" data-testid="preparation-elapsed" class="hint" hidden></p>
+            <ol id="preparation-stages" class="preparation-stages" aria-label="Preparation stages"></ol>
+            <p id="preparation-error" data-testid="preparation-error" class="error-message" role="alert" hidden></p>
+            <div id="candidate" data-testid="candidate" class="candidate" hidden>
+              <p id="candidate-label" data-testid="candidate-label" class="fixture-label"></p>
+              <img id="candidate-overview" alt="" />
+              <ul id="candidate-objects" aria-label="Candidate objects"></ul>
+            </div>
+          </section>
+        </div>
+      </section>
     </main>
     <div id="xr-overlay" hidden>
       <p id="xr-hud">Connection diagnostic</p>
