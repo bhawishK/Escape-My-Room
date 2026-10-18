@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
+from backend.alignment import Alignment
 from backend.captures import (
     Capture,
     CaptureLimits,
@@ -30,6 +31,7 @@ from backend.errors import Refusal
 from backend.preparation import JobRequest, PreparationService, worker_from_environment
 from backend.prepared_room import ASSET_URL_PREFIX, PreparedRoomError, load_prepared_room
 from backend.protocol import (
+    CalibrateMessage,
     EntityTransformMessage,
     MarkerState,
     PoseMessage,
@@ -147,6 +149,7 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                 previous = room.sockets.get(role)
                 room.sockets[role] = socket
                 room.loaded_versions[role] = None
+                room.alignment[role] = Alignment()
                 if role == "mobile_master":
                     room.marker = MarkerState()
                 if previous is not None:
@@ -178,13 +181,18 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                     continue
                 try:
                     if payload.get("type") == "pose":
-                        incoming: PoseMessage | RoomLoadedMessage | EntityTransformMessage = (
-                            PoseMessage.model_validate(payload)
-                        )
+                        incoming: (
+                            PoseMessage
+                            | RoomLoadedMessage
+                            | EntityTransformMessage
+                            | CalibrateMessage
+                        ) = PoseMessage.model_validate(payload)
                     elif payload.get("type") == "room_loaded":
                         incoming = RoomLoadedMessage.model_validate(payload)
                     elif payload.get("type") == "entity_transform":
                         incoming = EntityTransformMessage.model_validate(payload)
+                    elif payload.get("type") == "calibrate":
+                        incoming = CalibrateMessage.model_validate(payload)
                     else:
                         await reject("invalid_message", "Send a valid XR pose using the contract.")
                         continue
@@ -215,6 +223,15 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                             )
                             await socket.close(code=1008, reason="Room version mismatch")
                             return
+                        if result == "unavailable":
+                            await reject(
+                                "room_unavailable",
+                                room.load_error or "Prepared room is unavailable.",
+                            )
+                            continue
+                        await room.broadcast()
+                    elif isinstance(incoming, CalibrateMessage):
+                        result = room.accept_alignment(role, incoming.yaw, incoming.origin)
                         if result == "unavailable":
                             await reject(
                                 "room_unavailable",

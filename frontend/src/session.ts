@@ -1,3 +1,4 @@
+import type { CalibrationInput } from './alignment';
 import type { PoseInput, Role, ServerEvent, SessionState } from './protocol';
 
 interface SessionEvents {
@@ -72,6 +73,11 @@ export class SessionClient {
   sendPose(pose: PoseInput): void {
     if (this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > 16384) return;
     this.socket.send(JSON.stringify({ type: 'pose', sequence: ++this.sequence, ...pose }));
+  }
+
+  sendCalibration(input: CalibrationInput): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: 'calibrate', ...input }));
   }
 
   sendRoomLoaded(roomVersion: number): void {

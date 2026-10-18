@@ -48,6 +48,30 @@ test('Quest entry requests VR and reports permission denial without disconnectin
   await expect(page.getByTestId('connection')).toHaveText('Connected · VR headset');
 });
 
+test('phone and headset show the same prepared room', async ({ browser }) => {
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const vr = await browser.newPage();
+  await phone.goto('/');
+  await vr.goto('/');
+  await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
+  const ready = 'Room version 1 · floor, desk, cabinet, box (movable)';
+  await expect(phone.getByTestId('room-status')).toHaveText(ready);
+  await expect(vr.getByTestId('room-status')).toHaveText(ready);
+  await expect(phone.getByRole('alert')).toBeHidden();
+  await phone.close();
+  await vr.close();
+});
+
+test('confirming alignment marks this device aligned', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
+  await expect(page.getByTestId('alignment-status')).toHaveText('Not aligned');
+  await page.locator('#confirm-alignment').click();
+  await expect(page.getByTestId('alignment-status')).toHaveText('Aligned · yaw 0.00 rad · origin 0.00, 0.00, 0.00');
+  await expect(page.locator('#scene')).toHaveAttribute('data-view', 'calibrated');
+});
+
 test('failed initial socket can retry with one role button', async ({ page }) => {
   let blockSocket = true;
   await page.routeWebSocket(/\/api\/ws/, socket => {

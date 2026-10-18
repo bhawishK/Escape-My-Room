@@ -30,6 +30,12 @@ class RoomLoadedMessage(WireModel):
     room_version: int = Field(ge=1)
 
 
+class CalibrateMessage(WireModel):
+    type: Literal["calibrate"]
+    yaw: float = Field(ge=-3.141592653589793, le=3.141592653589793)
+    origin: Position
+
+
 class EntityTransformMessage(WireModel):
     type: Literal["entity_transform"]
     id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")

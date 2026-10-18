@@ -29,6 +29,12 @@ export interface RoomState {
   loaded_by: { mobile_master: number | null; vr_solver: number | null };
 }
 
+export interface AlignmentState {
+  status: 'not_aligned' | 'aligned';
+  yaw: number;
+  origin: Position;
+}
+
 export interface SessionState {
   revision: number;
   mobile_connected: boolean;
@@ -38,6 +44,7 @@ export interface SessionState {
     reference_space: ReferenceSpace | null;
     position: Position | null;
   };
+  alignment: { mobile_master: AlignmentState; vr_solver: AlignmentState };
   room: RoomState;
 }
 

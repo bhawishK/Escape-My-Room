@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import type { SessionState } from './protocol';
+import type { AlignmentState, SessionState } from './protocol';
 import { applyPlacement, placeEntities } from './room';
 
 const emptyRoom = (): SessionState['room'] => ({
@@ -15,13 +15,22 @@ export class DiagnosticScene {
   private readonly marker: THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>;
   private readonly grid: THREE.GridHelper;
   private readonly loader = new GLTFLoader();
+  private readonly container: HTMLElement;
+  private readonly roomAnchor = new THREE.Group();
   private roomGroup: THREE.Group | null = null;
+  private presenting = false;
+  private alignment: AlignmentState = { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } };
   private entityRoots = new Map<string, THREE.Object3D>();
   private loadedVersion: number | null = null;
   private loadingVersion: number | null = null;
   private loadToken = 0;
+  private readonly statusCanvas = document.createElement('canvas');
+  private readonly statusTexture: THREE.CanvasTexture;
+  private readonly statusLabel: THREE.Sprite;
+  private statusText = '';
 
   constructor(container: HTMLElement) {
+    this.container = container;
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.xr.enabled = true;
@@ -45,7 +54,21 @@ export class DiagnosticScene {
     this.marker.visible = false;
     diagnostic.add(this.marker);
     this.scene.add(diagnostic);
+    this.roomAnchor.name = 'room-anchor';
+    this.scene.add(this.roomAnchor);
+    this.statusCanvas.width = 512;
+    this.statusCanvas.height = 160;
+    this.statusTexture = new THREE.CanvasTexture(this.statusCanvas);
+    this.statusTexture.colorSpace = THREE.SRGBColorSpace;
+    this.statusLabel = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: this.statusTexture, transparent: true, depthTest: false,
+    }));
+    this.statusLabel.scale.set(1.4, 0.44, 1);
+    this.statusLabel.position.set(0, 1.45, -0.8);
+    this.statusLabel.visible = false;
+    this.roomAnchor.add(this.statusLabel);
     container.append(this.renderer.domElement);
+    container.dataset.view = 'overview';
     const resize = () => {
       const width = container.clientWidth;
       const height = container.clientHeight;
@@ -113,6 +136,53 @@ export class DiagnosticScene {
     this.scene.background = enabled ? null : new THREE.Color('#0c1828');
   }
 
+  setPresenting(active: boolean): void {
+    this.presenting = active;
+    this.applyView(this.alignment);
+  }
+
+  applyView(alignment: AlignmentState): void {
+    this.alignment = alignment;
+    const aligned = alignment.status === 'aligned';
+    if (this.presenting && aligned) {
+      const yaw = alignment.yaw;
+      const cosine = Math.cos(yaw);
+      const sine = Math.sin(yaw);
+      const { x, y, z } = alignment.origin;
+      this.roomAnchor.rotation.y = -yaw;
+      this.roomAnchor.position.set(-cosine * x + sine * z, -y, -sine * x - cosine * z);
+    } else {
+      this.roomAnchor.rotation.y = 0;
+      this.roomAnchor.position.set(0, 0, 0);
+    }
+    if (!this.presenting && aligned) {
+      this.camera.position.set(0, 1.6, 0);
+      this.camera.lookAt(0, 1.6, -1.2);
+    } else if (!this.presenting) {
+      this.camera.position.set(0, 1.6, 2.4);
+      this.camera.lookAt(0, 0.6, -1.2);
+    }
+    this.container.dataset.view = aligned ? 'calibrated' : 'overview';
+    this.paintStatus(aligned ? 'Aligned' : 'Press A');
+    this.statusLabel.visible = this.presenting;
+  }
+
+  private paintStatus(text: string): void {
+    if (this.statusText === text) return;
+    this.statusText = text;
+    const context = this.statusCanvas.getContext('2d');
+    if (!context) return;
+    context.clearRect(0, 0, this.statusCanvas.width, this.statusCanvas.height);
+    context.fillStyle = '#08111ee8';
+    context.fillRect(0, 0, this.statusCanvas.width, this.statusCanvas.height);
+    context.fillStyle = text === 'Aligned' ? '#81ded1' : '#ffd399';
+    context.font = '700 72px sans-serif';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(text, this.statusCanvas.width / 2, this.statusCanvas.height / 2);
+    this.statusTexture.needsUpdate = true;
+  }
+
   private attach(roots: Map<string, THREE.Object3D>): void {
     this.roomGroup?.removeFromParent();
     const group = new THREE.Group();
@@ -120,7 +190,7 @@ export class DiagnosticScene {
     group.add(...roots.values());
     this.roomGroup = group;
     this.entityRoots = roots;
-    this.scene.add(group);
+    this.roomAnchor.add(group);
     this.grid.visible = false;
   }
 }

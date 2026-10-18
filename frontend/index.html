@@ -23,6 +23,9 @@
           <p id="connection" data-testid="connection" role="status">Not connected</p>
           <p id="vr-status" data-testid="vr-status" class="device-status" role="status">Connect to see VR device status</p>
           <p id="room-status" data-testid="room-status" class="device-status" role="status">Room not loaded</p>
+          <p id="alignment-status" data-testid="alignment-status" class="device-status" role="status">Not aligned</p>
+          <button id="confirm-alignment" disabled>Confirm alignment</button>
+          <p class="hint">Stand at the floor center and face the desk, then confirm. In the headset, press the A button when you see the words Press A. Without tracking, the page button records the origin.</p>
           <div class="button-row">
             <button id="start-xr" disabled>Enter XR</button>
             <button id="end-xr" disabled class="secondary">End XR</button>
@@ -39,7 +42,7 @@
           <details><summary>Device smoke-test diagnostics</summary>
             <p id="tracking" data-testid="tracking">Inactive</p>
             <p id="marker-position" data-testid="marker-position">No accepted position</p>
-            <p>Positions are meters in the phone's XR reference space. Room alignment comes later.</p>
+            <p>Positions are meters. Confirm alignment places this device at the floor center, facing the desk. The furniture positions stay fixed.</p>
             <p>This report records browser observations. It does not certify a completed hardware test.</p>
             <pre id="device-report"></pre>
             <button id="download-report" class="secondary">Download diagnostic report</button>
@@ -83,6 +86,8 @@
     </main>
     <div id="xr-overlay" hidden>
       <p id="xr-hud">Connection diagnostic</p>
+      <p>Squeeze either grip button to confirm. Point the laser here and pull the trigger to press a button.</p>
+      <button id="overlay-confirm-alignment">Confirm alignment</button>
       <button id="hold-probe">Hold input probe</button>
       <button id="overlay-end-xr">End XR</button>
     </div>

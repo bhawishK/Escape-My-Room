@@ -1,3 +1,4 @@
+import { alignmentFromPose, type CalibrationInput } from './alignment';
 import type { DiagnosticScene } from './scene';
 import type { PoseInput, ReferenceSpace, Role } from './protocol';
 
@@ -20,6 +21,8 @@ export class XRDiagnostic {
   private referenceType: ReferenceSpace | null = null;
   private role: Role = 'mobile_master';
   private lastPoseAt = -Infinity;
+  private latest: CalibrationInput | null = null;
+  private confirmHeld = false;
   private readonly report: XRReport = {
     secure_context: isSecureContext, api_available: Boolean(navigator.xr),
     immersive_ar: false, immersive_vr: false, mode: null, reference_space: null,
@@ -32,6 +35,7 @@ export class XRDiagnostic {
     private readonly overlay: HTMLElement,
     private readonly publish: (pose: PoseInput) => void,
     private readonly changed: (report: XRReport, active: boolean) => void,
+    private readonly confirm: () => void,
   ) {}
 
   async inspect(): Promise<XRReport> {
@@ -52,18 +56,29 @@ export class XRDiagnostic {
     if (!isSecureContext) throw new Error('Open the trusted HTTPS URL to start XR. LAN HTTP cannot enable tracking.');
     if (!navigator.xr) throw new Error('WebXR is unavailable here. The iPhone mobile view works; physical phone tracking is pending.');
     this.role = role;
+    // Quest composites this panel from its state at session start, so it must already be visible.
+    this.overlay.hidden = false;
     // Called immediately from the user's button gesture; don't await capability probing first.
-    const session = await navigator.xr.requestSession(mode, {
-      requiredFeatures: ['local'],
-      optionalFeatures: ['local-floor', 'dom-overlay'],
-      domOverlay: { root: this.overlay },
-    });
+    let session: XRSession;
+    try {
+      session = await navigator.xr.requestSession(mode, {
+        requiredFeatures: ['local'],
+        optionalFeatures: ['local-floor', 'dom-overlay'],
+        domOverlay: { root: this.overlay },
+      });
+    } catch (error) {
+      this.overlay.hidden = true;
+      throw error;
+    }
     this.session = session;
     const ended = () => {
       this.session = null;
       this.reference = null;
       this.referenceType = null;
+      this.latest = null;
+      this.confirmHeld = false;
       this.view.setAR(false);
+      this.view.setPresenting(false);
       this.report.mode = null;
       if (this.role === 'mobile_master') this.publishUnavailable('inactive');
       this.changed({ ...this.report }, false);
@@ -77,6 +92,11 @@ export class XRDiagnostic {
       this.report.mode = mode;
       this.report.reference_space = this.referenceType;
       this.report.dom_overlay = session.domOverlayState?.type ?? 'unavailable';
+      // Grip and the A or X button confirm while the headset pose is live.
+      session.addEventListener('squeezestart', () => this.confirm());
+      if (this.report.dom_overlay === 'unavailable') {
+        session.addEventListener('select', () => { void this.end(); });
+      }
       this.report.positional_tracking = 'not-tested';
       this.lastPoseAt = -Infinity;
       const updateInputs = () => {
@@ -89,11 +109,10 @@ export class XRDiagnostic {
       session.addEventListener('visibilitychange', () => {
         if (session.visibilityState !== 'visible') this.publishUnavailable('lost');
       });
-      // Select is a usable headset exit fallback when there is no DOM overlay.
-      session.addEventListener('select', () => { void this.end(); });
       this.view.renderer.xr.setReferenceSpaceType(this.referenceType);
       this.view.setAR(mode === 'immersive-ar');
       await this.view.renderer.xr.setSession(session);
+      this.view.setPresenting(true);
       updateInputs();
     } catch (error) {
       await session.end();
@@ -104,11 +123,20 @@ export class XRDiagnostic {
   frame(time: number, frame?: XRFrame): void {
     if (!frame || !this.reference || !this.session) return;
     const pose = frame.getViewerPose(this.reference);
+    if (pose && !pose.emulatedPosition) {
+      const p = pose.transform.position;
+      const q = pose.transform.orientation;
+      this.latest = alignmentFromPose(
+        { x: p.x, y: p.y, z: p.z },
+        { x: q.x, y: q.y, z: q.z, w: q.w },
+      );
+    }
     const status = !pose ? 'lost' : pose.emulatedPosition ? 'emulated' : 'tracked';
     if (status !== this.report.positional_tracking) {
       this.report.positional_tracking = status;
       this.changed({ ...this.report }, true);
     }
+    this.readConfirmButtons();
     if (this.role !== 'mobile_master' || time - this.lastPoseAt < 50) return;
     this.lastPoseAt = time;
     if (!pose || pose.emulatedPosition || this.session.visibilityState !== 'visible') {
@@ -131,6 +159,22 @@ export class XRDiagnostic {
   }
 
   getReport(): XRReport { return { ...this.report }; }
+
+  private readConfirmButtons(): void {
+    let pressed = false;
+    for (const source of this.session?.inputSources ?? []) {
+      const buttons = source.gamepad?.buttons;
+      // Quest grip is button 1. A on the right controller and X on the left are button 4.
+      if (buttons?.[1]?.pressed || buttons?.[4]?.pressed) pressed = true;
+    }
+    if (pressed && !this.confirmHeld) this.confirm();
+    this.confirmHeld = pressed;
+  }
+
+  /** Headset pose mapped to the floor center, or null before a tracked frame. */
+  confirmedAlignment(): CalibrationInput | null {
+    return this.latest;
+  }
 }
 
 export function xrError(error: unknown): string {
