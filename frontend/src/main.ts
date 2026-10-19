@@ -3,10 +3,12 @@ import { RoomPhotos } from './capture';
 import { element } from './dom';
 import { GazeCursor } from './gaze-cursor';
 import { RoomPreparation } from './preparation';
-import { PhoneLook, phoneViewpoint } from './phone-view';
+import { PhoneLook, START_EYE, headingOf, phoneViewpoint } from './phone-view';
 import type { Role, SessionState } from './protocol';
 import { SessionClient } from './session';
 import { DiagnosticScene } from './scene';
+import { STEP_LENGTHS, StepWalker } from './step-walk';
+import { floorplan, type Sensitivity } from './steps';
 import { XRDiagnostic, xrError } from './xr';
 
 const phoneButton = element<HTMLButtonElement>('connect-phone');
@@ -27,6 +29,22 @@ let view: DiagnosticScene | null = null;
 let xr: XRDiagnostic | null = null;
 let roomViewOpen = false;
 const look = new PhoneLook();
+const walkButton = element<HTMLButtonElement>('walk-toggle');
+const walker = new StepWalker(START_EYE, () => {
+  const facing = look.orientation();
+  return facing ? headingOf(facing) : 0;
+}, {
+  step: (position, steps) => {
+    element('view-status').textContent = `Walking · ${steps} ${steps === 1 ? 'step' : 'steps'}`;
+    publishWalk(position);
+  },
+});
+/** Tells Python where walking has put the phone, so the headset shows it there. */
+function publishWalk(position: { x: number; y: number; z: number } | null): void {
+  client.sendPose(position ?
+    { tracking_status: 'tracked', reference_space: 'room', position } :
+    { tracking_status: 'inactive', reference_space: null, position: null });
+}
 const gazeButton = element<HTMLButtonElement>('gaze-toggle');
 const gazeModeButton = element<HTMLButtonElement>('gaze-mode');
 const gaze = new GazeCursor({
@@ -56,6 +74,11 @@ function controls(): void {
   element('vr-controls').hidden = role !== 'vr_solver';
   element('phone-controls').hidden = role !== 'mobile_master';
   lookButton.textContent = look.active ? 'Stop turning' : 'Turn with phone';
+  walkButton.textContent = walker.active ? 'Stop walking' : 'Walk with steps';
+  walkButton.disabled = !connected;
+  for (const id of ['walk-reset', 'walk-length', 'walk-sensitivity']) element(id).hidden = !walker.active;
+  element('walk-length').textContent = `Step ${walker.stepLength.toFixed(1)} m`;
+  element('walk-sensitivity').textContent = `Sensitivity: ${walker.sensitivity}`;
   gazeButton.textContent = gaze.getPhase() === 'off' ? 'Gaze cursor' : 'Stop gaze cursor';
   gazeButton.disabled = !connected;
   const pointing = gaze.getPhase() === 'tracking';
@@ -71,13 +94,17 @@ function setRoomView(open: boolean): void {
   document.documentElement.classList.toggle('room-view-open', open);
   if (!open) {
     gaze.stop();
+    if (walker.active) {
+      walker.stop();
+      if (connected) publishWalk(null);
+    }
     view?.follow(null);
   }
 }
 
 function alignmentLabel(next: SessionState): string {
   if (!role) return 'Not aligned';
-  if (role === 'mobile_master') return 'Not placed · the room view stands at a fixed spot';
+  if (role === 'mobile_master') return 'Not placed · walking only counts steps';
   const mine = next.alignment[role];
   if (mine.status !== 'aligned') return 'Not aligned';
   const origin = mine.origin;
@@ -98,6 +125,7 @@ function applyState(next: SessionState): void {
   state = next;
   view?.apply(next);
   if (role) view?.applyView(next.alignment[role]);
+  walker.setFloorplan(floorplan(next.room.available ? next.room.entities : []));
   const roomStatus = element('room-status');
   roomStatus.dataset.available = 'false';
   roomStatus.textContent = roomLabel(next, false);
@@ -177,7 +205,7 @@ try {
   const sceneView = view;
   sceneView.renderer.setAnimationLoop((_time, frame) => {
     xr?.frame(frame);
-    if (roomViewOpen) sceneView.follow(phoneViewpoint(look));
+    if (roomViewOpen) sceneView.follow(phoneViewpoint(look, walker.position()));
     sceneView.renderer.render(sceneView.scene, sceneView.camera);
   });
   void xr.inspect().catch(error => showError(xrError(error)));
@@ -248,6 +276,38 @@ gazeButton.addEventListener('click', () => {
 });
 gazeModeButton.addEventListener('click', () => {
   gaze.setMode(gaze.getMode() === 'eyes' ? 'head' : 'eyes');
+  controls();
+});
+walkButton.addEventListener('click', () => {
+  if (walker.active) {
+    walker.stop();
+    publishWalk(null);
+    element('view-status').textContent = 'Walking off';
+    controls();
+    return;
+  }
+  element('error').hidden = true;
+  // Both permission requests start inside the button press; iPhone refuses them after it.
+  const turning = look.active ? Promise.resolve() : look.start();
+  void Promise.all([walker.start(), turning]).then(() => {
+    element('view-status').textContent = 'Walking · 0 steps';
+    publishWalk(walker.target());
+  }).catch(error => {
+    walker.stop();
+    showRoomViewError(error, 'Motion access could not start.');
+  }).finally(controls);
+});
+element('walk-reset').addEventListener('click', () => {
+  publishWalk(walker.reset());
+  element('view-status').textContent = 'Back at the start';
+});
+element('walk-length').addEventListener('click', () => {
+  walker.stepLength = STEP_LENGTHS[(STEP_LENGTHS.indexOf(walker.stepLength as typeof STEP_LENGTHS[number]) + 1) % STEP_LENGTHS.length];
+  controls();
+});
+element('walk-sensitivity').addEventListener('click', () => {
+  const order: Sensitivity[] = ['normal', 'high', 'low'];
+  walker.setSensitivity(order[(order.indexOf(walker.sensitivity) + 1) % order.length]);
   controls();
 });
 element('gaze-calibrate').addEventListener('click', () => gaze.calibrate());

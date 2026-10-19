@@ -1,6 +1,6 @@
 /**
  * The phone's full-screen room view: where it looks from and which way it faces. Turning the phone
- * turns the view through the phone's orientation sensor; the view's position stays fixed.
+ * turns the view through the phone's orientation sensor; walking steps move it (see step-walk.ts).
  */
 import * as THREE from 'three';
 import type { Position, Rotation } from './protocol';
@@ -12,8 +12,8 @@ export interface RoomPose {
   orientation: Rotation;
 }
 
-/** The view stands back from the desk at phone height, so the room fits. */
-const START_EYE: Position = { x: 0, y: 1.5, z: 1.6 };
+/** The view starts back from the desk at phone height, so the room fits. */
+export const START_EYE: Position = { x: 0, y: 1.5, z: 1.6 };
 // Facing the desk and tilted 20° down toward it, as a phone is held when looking at it.
 const FACING_DESK: Rotation = { x: Math.sin(-20 * Math.PI / 360), y: 0, z: 0, w: Math.cos(-20 * Math.PI / 360) };
 
@@ -97,9 +97,9 @@ export class PhoneLook {
   }
 }
 
-/** The pose the room view shows: the fixed eye, turned by the phone's sensor when it is on. */
-export function phoneViewpoint(look: PhoneLook): RoomPose {
+/** The pose the room view shows: the eye at `position`, turned by the phone's sensor when it is on. */
+export function phoneViewpoint(look: PhoneLook, position: Position = START_EYE): RoomPose {
   const turned = look.orientation();
   const orientation = turned ? { x: turned.x, y: turned.y, z: turned.z, w: turned.w } : FACING_DESK;
-  return { position: START_EYE, orientation };
+  return { position, orientation };
 }

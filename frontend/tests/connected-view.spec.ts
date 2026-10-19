@@ -75,6 +75,47 @@ test('a refused motion permission is explained', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Turn with phone', exact: true })).toBeVisible();
 });
 
+test('walking steps move the phone, and the headset sees where it went', async ({ browser }) => {
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const vr = await browser.newPage();
+  // The person allows motion access when the phone asks.
+  await phone.addInitScript(() => {
+    for (const event of [DeviceOrientationEvent, DeviceMotionEvent]) Object.assign(event, { requestPermission: async () => 'granted' });
+  });
+  await vr.goto('/');
+  await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
+  await phone.goto('/');
+  await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await phone.getByRole('button', { name: 'Walk with steps', exact: true }).click();
+  await expect(phone.getByTestId('view-status')).toHaveText('Walking · 0 steps');
+  await expect(vr.getByTestId('marker-position')).toHaveText('0.00, 1.50, 1.60 m');
+  // Three seconds of a phone bouncing with each step, read 60 times a second.
+  await phone.evaluate(() => new Promise<void>(resolve => {
+    let index = 0;
+    const timer = setInterval(() => {
+      const up = 9.81 + 2.5 * Math.sin(2 * Math.PI * 1.8 * index / 60);
+      window.dispatchEvent(new DeviceMotionEvent('devicemotion', {
+        accelerationIncludingGravity: { x: 0, y: up, z: 0 }, rotationRate: { alpha: 0, beta: 0, gamma: 0 }, interval: 16,
+      }));
+      if (++index >= 180) {
+        clearInterval(timer);
+        resolve();
+      }
+    }, 1000 / 60);
+  }));
+  await expect(phone.getByTestId('view-status')).toHaveText(/Walking · \d+ steps/);
+  const steps = Number((await phone.getByTestId('view-status').textContent())!.match(/\d+/)![0]);
+  expect(steps).toBeGreaterThanOrEqual(3);
+  // Without turning readings, steps go toward the desk, each 0.6 m, until the desk stops the third at z = -0.2.
+  await expect(vr.getByTestId('marker-position')).toHaveText(`0.00, 1.50, ${(1.6 - 0.6 * Math.min(steps, 3)).toFixed(2)} m`);
+  await phone.getByRole('button', { name: 'Back to start', exact: true }).click();
+  await expect(vr.getByTestId('marker-position')).toHaveText('0.00, 1.50, 1.60 m');
+  await phone.getByRole('button', { name: 'Stop walking', exact: true }).click();
+  await expect(vr.getByTestId('tracking')).toHaveText('Inactive · no positional input');
+  await phone.close();
+  await vr.close();
+});
+
 test('a refused camera permission for the gaze cursor is explained', async ({ page }) => {
   await page.addInitScript(() => Object.defineProperty(navigator, 'mediaDevices', { value: {
     getUserMedia: async () => { throw new DOMException('Denied for test', 'NotAllowedError'); },
