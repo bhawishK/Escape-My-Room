@@ -23,7 +23,7 @@ def pose(sequence=1, **overrides):
         "type": "pose",
         "sequence": sequence,
         "tracking_status": "tracked",
-        "reference_space": "local",
+        "reference_space": "room",
         "position": {"x": 0.25, "y": -0.1, "z": -0.5},
     } | overrides
 
@@ -76,6 +76,9 @@ def test_old_pose_does_not_replace_current_position(service_url):
     "override",
     [
         {"tracking_status": "simulated"},
+        {"tracking_status": "emulated", "position": None},
+        {"reference_space": "local"},
+        {"reference_space": "local-floor"},
         {"position": {"x": "0.5", "y": 0.0, "z": 0.0}},
         {"position": {"x": float("inf"), "y": 0.0, "z": 0.0}},
         {"position": {"x": 101.0, "y": 0.0, "z": 0.0}},

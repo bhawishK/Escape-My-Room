@@ -19,7 +19,7 @@ POSE = {
     "type": "pose",
     "sequence": 1,
     "tracking_status": "tracked",
-    "reference_space": "local",
+    "reference_space": "room",
     "position": {"x": 0.1, "y": 0.2, "z": -0.3},
 }
 INSTRUCTIONS = "The mug on the table hides the key."

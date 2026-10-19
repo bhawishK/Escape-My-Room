@@ -63,6 +63,6 @@ One transform per connected role, from that device's WebXR reference space into 
 
 `origin` is the room position of that device's XR origin. `yaw` is radians about Y. Yaw `0` keeps the view direction, XR `-Z`, pointing along room `-Z` toward the desk. The status is `not_aligned` until a confirmation, then `aligned`. Repeating confirmation replaces that device's transform only. Pitch and roll are not calibrated here.
 
-## What waits
+## The phone
 
-iPhone Chrome still has no positional tracking. The phone can show the alignment status, and the check that walking the phone follows the room axes waits for Issue 19. The Quest can perform this calibration. Losing tracking and resetting a broken alignment is Issue 10.
+Issue 19 places the phone without this calibration. The phone measures itself against the room's printed marker and sends positions already in room coordinates, so Python applies no alignment to them. The phone page no longer offers **Confirm alignment**; the protocol still accepts a phone calibration, but nothing uses it. See [phone tracking](phone-tracking.md). The calibration above remains the headset's. Losing tracking and resetting a broken alignment is Issue 10.

@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import WebSocket
 
 from backend.alignment import Alignment
-from backend.prepared_room import FRAME, QUATERNION_ORDER, UNITS, SceneEntity
+from backend.prepared_room import FRAME, QUATERNION_ORDER, UNITS, SceneEntity, TrackingMarker
 from backend.protocol import MarkerState, PoseMessage, Position, Role
 
 
@@ -18,6 +18,7 @@ class PrototypeRoom:
     marker: MarkerState = field(default_factory=MarkerState)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     entities: list[SceneEntity] = field(default_factory=lambda: list[SceneEntity]())
+    markers: list[TrackingMarker] = field(default_factory=lambda: list[TrackingMarker]())
     room_version: int | None = None
     load_error: str | None = None
     loaded_versions: dict[Role, int | None] = field(
@@ -46,6 +47,7 @@ class PrototypeRoom:
                 "quaternion_order": QUATERNION_ORDER if available else None,
                 "error": self.load_error,
                 "entities": [entity.model_dump() for entity in self.entities],
+                "markers": [marker.model_dump() for marker in self.markers],
                 "loaded_by": dict(self.loaded_versions),
             },
         }

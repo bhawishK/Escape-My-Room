@@ -17,9 +17,21 @@ const servers: TestServer[] = [
 
 // One fresh capture store per run. Workers inherit the variable, so they agree with the servers.
 process.env.ESCAPE_ROOM_TEST_DATA ??= mkdtempSync(join(tmpdir(), 'escape-my-room-captures-'));
+// A synthetic camera video, written by the global setup before any browser starts.
+process.env.ESCAPE_ROOM_FAKE_CAMERA ??= mkdtempSync(join(tmpdir(), 'escape-my-room-camera-'));
+const fakeCamera = (video: string) => ({
+  launchOptions: {
+    args: [
+      '--use-fake-ui-for-media-stream',
+      '--use-fake-device-for-media-stream',
+      `--use-file-for-fake-video-capture=${join(process.env.ESCAPE_ROOM_FAKE_CAMERA!, video)}`,
+    ],
+  },
+});
 
 export default defineConfig({
   testDir: './tests',
+  globalSetup: './tests/fake-camera.setup.ts',
   workers: 1,
   use: {
     baseURL: 'http://127.0.0.1:8771',
@@ -27,6 +39,11 @@ export default defineConfig({
     headless: true,
     screenshot: 'only-on-failure',
   },
+  projects: [
+    { name: 'default', testIgnore: /camera-.*\.spec\.ts/ },
+    // The camera sees the stand-in room's desk tag from a known pose, then nothing, in a loop.
+    { name: 'marker-camera', testMatch: /camera-tracking\.spec\.ts/, use: fakeCamera('desk-marker.y4m') },
+  ],
   webServer: servers.map(({ port, room, settings }) => ({
     command: `"${python}" -m uvicorn backend.app:app --app-dir "${root}" --host 127.0.0.1 --port ${port}`,
     url: `http://127.0.0.1:${port}/api/health`,

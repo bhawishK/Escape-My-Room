@@ -2,7 +2,8 @@
 
 Two manifest forms are accepted. The original stand-in room names one .gltf for every entity and
 has exactly one movable entity. Schema 2 gives each entity its own .glb, a rotation, and any number
-of movable entities. Both become the same shared entity records.
+of movable entities. Both become the same shared entity records. Either form may list the printed
+tracking markers the phone camera locates itself against.
 
 Frame for both: meters, right-handed, +Y up, +Z toward the viewer. An entity's position and
 rotation place the center of its bottom face in the room. Rotations are unit quaternions in
@@ -76,9 +77,39 @@ class SceneEntity(WireModel):
     rotation: Rotation
 
 
+class TrackingMarker(WireModel):
+    """A printed AprilTag (36h11) fixed in the room, which the phone camera measures itself against.
+
+    The position is the center of the tag's black square. In the tag's own frame +X points to the
+    right of the printed tag, +Y to its top, and +Z out of the printed face; the rotation turns that
+    frame into the room. Size is the edge of the black square.
+    """
+
+    id: int = Field(ge=0, le=586)
+    label: str = Field(min_length=1, max_length=64)
+    size: float = Field(gt=0, le=1)
+    position: Position
+    rotation: Rotation
+
+
+class _MarkedManifest(WireModel):
+    """The tracking markers either manifest form may list."""
+
+    markers: list[TrackingMarker] = Field(
+        default_factory=lambda: list[TrackingMarker](), max_length=32
+    )
+
+    @model_validator(mode="after")
+    def check_markers(self) -> Self:
+        if len({marker.id for marker in self.markers}) != len(self.markers):
+            raise ValueError("Tracking marker IDs must be unique")
+        return self
+
+
 class LoadedRoom(BaseModel):
     room_version: int
     entities: list[SceneEntity]
+    markers: list[TrackingMarker]
 
 
 class _Entity(Protocol):
@@ -110,7 +141,7 @@ class RoomEntity(WireModel):
     position: Position
 
 
-class PreparedRoom(WireModel):
+class PreparedRoom(_MarkedManifest):
     """The original single-glTF stand-in room."""
 
     room_version: int = Field(ge=1)
@@ -142,7 +173,7 @@ class AssetEntity(WireModel):
     rotation: Rotation
 
 
-class PreparedScene(WireModel):
+class PreparedScene(_MarkedManifest):
     """Schema 2: one GLB per entity and any number of movable entities."""
 
     schema_version: Literal[2]
@@ -223,6 +254,7 @@ def _load_legacy(directory: Path, room: PreparedRoom) -> LoadedRoom:
             )
             for entity in room.entities
         ],
+        markers=room.markers,
     )
 
 
@@ -258,6 +290,7 @@ def _load_scene(directory: Path, scene: PreparedScene) -> LoadedRoom:
             )
             for entity in scene.entities
         ],
+        markers=scene.markers,
     )
 
 
