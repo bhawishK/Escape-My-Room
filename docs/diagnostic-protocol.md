@@ -55,9 +55,9 @@ Only the phone role can publish:
 }
 ```
 
-Sequences strictly increase within each socket, starting at 1. Coordinates must be finite numbers within ±100 meters. Unknown fields are rejected. A tracked pose requires position and `local` or `local-floor`; this client requests `local`. `inactive`, `lost`, and `emulated` statuses require a null position. Simulated status is no longer accepted.
+Sequences strictly increase within each socket, starting at 1. Coordinates must be finite numbers within ±100 meters. Unknown fields are rejected. A tracked pose requires position and `local` or `local-floor`. The phone uses whichever of those two the device grants, preferring `local-floor`. Quest requests `local`. `inactive`, `lost`, and `emulated` statuses require a null position. Simulated status is no longer accepted.
 
-The retained WebXR path samples `XRFrame.getViewerPose(localReferenceSpace).transform.position` at most 20 times per second when position is not emulated and visibility is usable. It drops frames instead of buffering offline poses. An unsupported iPhone page sends no positional input; the agreed iPhone tracking mechanism remains deferred.
+The retained WebXR path samples `XRFrame.getViewerPose(localReferenceSpace).transform.position` at most 20 times per second when position is not emulated and visibility is usable. It drops frames instead of buffering offline poses. An unsupported iPhone page sends no positional input. The tracking decision is in [phone-tracking.md](phone-tracking.md).
 
 Malformed JSON, binary frames, schema violations, solver publications, and repeated sequences produce `{ "type": "error", "code": "...", "message": "..." }` without changing the marker. Codes are `invalid_message`, `role_forbidden`, and `stale_sequence`. Text messages are limited to 16 KiB; the documented server invocation enforces the same transport limit, which may close oversized frames. These are correctness checks, not sensor attestation.
 

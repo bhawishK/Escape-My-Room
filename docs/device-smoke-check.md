@@ -71,6 +71,6 @@ Follow-up iPhone Chrome report at `2026-10-12T12:01:53.005Z`:
 
 These checks are acceptance work for [Issue #19](https://github.com/bhawishK/Escape-My-Room/issues/19), separate from Issue #1's connection checks.
 
-The iPhone movement-tracking mechanism remains a separate decision. On a phone/browser with positional WebXR support, the retained AR path can be tested: enter AR, verify non-emulated `tracked` position, translate along each axis, and compare Python-accepted coordinates with the marker in Quest. Check start/end, lost tracking, and recovery. No marker movement is expected from the currently deferred iPhone tracking path.
+The iPhone tracking decision is in [phone-tracking.md](phone-tracking.md). A position counts only when immersive AR reports a non-emulated `local` or `local-floor` pose. iPhone Chrome has no WebXR API, so no marker movement is expected there. On a phone browser with positional WebXR, enter AR, verify `tracked`, translate along each axis, and compare the Python-accepted coordinates with the marker in Quest. Check start, end, lost tracking, and recovery.
 
 Desktop message fixtures, connected status, and a rendered page cannot establish phone-to-VR physical translation acceptance.

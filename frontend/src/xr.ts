@@ -56,16 +56,21 @@ export class XRDiagnostic {
     if (!isSecureContext) throw new Error('Open the trusted HTTPS URL to start XR. LAN HTTP cannot enable tracking.');
     if (!navigator.xr) throw new Error('WebXR is unavailable here. The iPhone mobile view works; physical phone tracking is pending.');
     this.role = role;
-    // Quest composites this panel from its state at session start, so it must already be visible.
-    this.overlay.hidden = false;
+    const ar = mode === 'immersive-ar';
+    // Quest composites this panel from its state at session start.
+    // On Android, passing it into the AR request makes Chrome refuse the camera permission
+    // ("Close any bubbles or overlays from other apps"), so the phone session has no menu.
+    if (!ar) this.overlay.hidden = false;
     // Called immediately from the user's button gesture; don't await capability probing first.
     let session: XRSession;
     try {
-      session = await navigator.xr.requestSession(mode, {
-        requiredFeatures: ['local'],
-        optionalFeatures: ['local-floor', 'dom-overlay'],
-        domOverlay: { root: this.overlay },
-      });
+      // This phone rejects immersive AR when local or local-floor is required.
+      // Ask for both, then use whichever one it grants after the session exists.
+      const options: XRSessionInit = ar
+        ? { optionalFeatures: ['local-floor', 'local'] }
+        : { requiredFeatures: ['local'], optionalFeatures: ['local-floor', 'dom-overlay'] };
+      if (!ar) options.domOverlay = { root: this.overlay };
+      session = await navigator.xr.requestSession(mode, options);
     } catch (error) {
       this.overlay.hidden = true;
       throw error;
@@ -85,9 +90,13 @@ export class XRDiagnostic {
     };
     session.addEventListener('end', ended, { once: true });
     try {
-      // A stable local reference exposes translation; viewer space does not.
-      this.reference = await session.requestReferenceSpace('local');
-      this.referenceType = 'local';
+      // A stable reference exposes translation; viewer space does not.
+      // Phone AR prefers local-floor and falls back to local. Quest keeps local.
+      const referenceType = mode === 'immersive-ar'
+        ? await grantedReferenceSpace(session, ['local-floor', 'local'])
+        : await grantedReferenceSpace(session, ['local']);
+      this.reference = referenceType.space;
+      this.referenceType = referenceType.type;
       this.reference.addEventListener('reset', () => this.publishUnavailable('lost'));
       this.report.mode = mode;
       this.report.reference_space = this.referenceType;
@@ -177,13 +186,27 @@ export class XRDiagnostic {
   }
 }
 
+async function grantedReferenceSpace(
+  session: XRSession,
+  types: readonly ReferenceSpace[],
+): Promise<{ space: XRReferenceSpace; type: ReferenceSpace }> {
+  for (const type of types) {
+    try {
+      return { space: await session.requestReferenceSpace(type), type };
+    } catch {
+      // Try the next space this phone may have granted.
+    }
+  }
+  throw new Error(`XR started but granted neither ${types.join(' nor ')}.`);
+}
+
 export function xrError(error: unknown): string {
   if (error instanceof DOMException) {
     if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
       return 'XR permission was denied. Allow XR/camera access in browser settings, use trusted HTTPS, and try again.';
     }
     if (error.name === 'NotSupportedError') {
-      return 'This device cannot start the requested XR mode/local reference space. Use the mobile view or a supported XR device.';
+      return 'This device cannot start the requested XR mode. Use the mobile view or a supported XR device.';
     }
   }
   return error instanceof Error ? error.message : 'XR could not start. Check device support and browser permissions.';
