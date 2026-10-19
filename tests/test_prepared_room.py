@@ -351,3 +351,53 @@ def test_generated_room_rotation_is_normalized(tmp_path):
     )
     rotation = load_prepared_room(directory).entities[3].rotation
     assert rotation.x**2 + rotation.y**2 + rotation.z**2 + rotation.w**2 == pytest.approx(1.0)
+
+
+DESK_MARKER = {
+    "id": 0,
+    "label": "Desk front",
+    "size": 0.15,
+    "position": {"x": 0.0, "y": 0.6, "z": -0.9},
+    "rotation": IDENTITY,
+}
+
+
+def test_stand_in_room_places_its_tracking_marker_on_the_desk_front(service_url):
+    body = httpx.get(f"{service_url}/api/room", timeout=2).json()
+    assert body["markers"] == [DESK_MARKER]
+    with open_socket(service_url, "vr_solver") as headset:
+        assert json.loads(headset.recv(timeout=2))["state"]["room"]["markers"] == [DESK_MARKER]
+
+
+def test_room_without_markers_publishes_none(multi_asset_service_url):
+    assert httpx.get(f"{multi_asset_service_url}/api/room", timeout=2).json()["markers"] == []
+
+
+def test_generated_room_can_place_markers(tmp_path):
+    directory = copy_room(MULTI, tmp_path / "room")
+    turned = {"x": 0.0, "y": 0.7071068, "z": 0.0, "w": 0.7071068}
+    marker = DESK_MARKER | {"id": 7, "label": "Table side", "size": 0.1, "rotation": turned}
+    edit_manifest(directory, lambda manifest: manifest.update(markers=[marker]))
+    [loaded] = load_prepared_room(directory).markers
+    assert (loaded.id, loaded.size, loaded.label) == (7, 0.1, "Table side")
+    assert loaded.rotation.y == pytest.approx(0.7071068)
+
+
+@pytest.mark.parametrize(
+    "markers",
+    [
+        [DESK_MARKER, DESK_MARKER | {"label": "Again"}],
+        [DESK_MARKER | {"id": 587}],
+        [DESK_MARKER | {"id": -1}],
+        [DESK_MARKER | {"size": 0.0}],
+        [DESK_MARKER | {"size": 1.5}],
+        [DESK_MARKER | {"rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 2.0}}],
+        [DESK_MARKER | {"label": ""}],
+    ],
+)
+def test_invalid_markers_make_the_room_unavailable(tmp_path, markers):
+    for source in (ASSETS, MULTI):
+        directory = copy_room(source, tmp_path / source.name)
+        edit_manifest(directory, lambda manifest: manifest.update(markers=markers))
+        with pytest.raises(PreparedRoomError, match="manifest is invalid"):
+            load_prepared_room(directory)

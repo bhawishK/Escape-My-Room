@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import type { RoomPose } from './marker-geometry';
 import type { AlignmentState, SessionState } from './protocol';
 import { applyPlacement, placeEntities } from './room';
 
 const emptyRoom = (): SessionState['room'] => ({
   available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
-  entities: [], loaded_by: { mobile_master: null, vr_solver: null },
+  entities: [], markers: [], loaded_by: { mobile_master: null, vr_solver: null },
 });
 
 export class DiagnosticScene {
@@ -19,6 +20,8 @@ export class DiagnosticScene {
   private readonly roomAnchor = new THREE.Group();
   private roomGroup: THREE.Group | null = null;
   private presenting = false;
+  /** This phone's own measured pose, which its view follows while it tracks. */
+  private following: RoomPose | null = null;
   private alignment: AlignmentState = { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } };
   private entityRoots = new Map<string, THREE.Object3D>();
   private loadedVersion: number | null = null;
@@ -43,19 +46,16 @@ export class DiagnosticScene {
     this.scene.add(light);
     this.grid = new THREE.GridHelper(10, 20, 0x537a91, 0x23394f);
     this.scene.add(this.grid);
-    const diagnostic = new THREE.Group();
-    // Marker offset only; the prepared room uses manifest meters at the scene origin.
-    diagnostic.position.set(0, 1.2, -3);
-    diagnostic.add(new THREE.AxesHelper(0.5));
+    this.roomAnchor.name = 'room-anchor';
+    this.scene.add(this.roomAnchor);
+    // The phone's accepted position, in room meters like the furniture.
     this.marker = new THREE.Mesh(
       new THREE.SphereGeometry(0.08, 24, 16),
       new THREE.MeshStandardMaterial({ color: 0x66e6cf, emissive: 0x154b43 }),
     );
+    this.marker.name = 'phone-marker';
     this.marker.visible = false;
-    diagnostic.add(this.marker);
-    this.scene.add(diagnostic);
-    this.roomAnchor.name = 'room-anchor';
-    this.scene.add(this.roomAnchor);
+    this.roomAnchor.add(this.marker);
     this.statusCanvas.width = 512;
     this.statusCanvas.height = 160;
     this.statusTexture = new THREE.CanvasTexture(this.statusCanvas);
@@ -82,8 +82,22 @@ export class DiagnosticScene {
 
   apply(state: SessionState): void {
     const position = state.marker.position;
-    this.marker.visible = position !== null;
+    // A tracking phone looks out from its own position, so it does not draw itself.
+    this.marker.visible = position !== null && this.following === null;
     if (position) this.marker.position.set(position.x, position.y, position.z);
+  }
+
+  /** Moves this device's view to its measured room pose, or back to the default view with null. */
+  follow(pose: RoomPose | null): void {
+    this.following = pose;
+    if (pose) {
+      this.marker.visible = false;
+      this.camera.position.set(pose.position.x, pose.position.y, pose.position.z);
+      this.camera.quaternion.set(pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w);
+      this.container.dataset.view = 'tracked';
+    } else {
+      this.applyView(this.alignment);
+    }
   }
 
   async syncRoom(state: SessionState): Promise<{ version: number; acknowledge: boolean } | null> {
@@ -132,10 +146,6 @@ export class DiagnosticScene {
     this.grid.visible = true;
   }
 
-  setAR(enabled: boolean): void {
-    this.scene.background = enabled ? null : new THREE.Color('#0c1828');
-  }
-
   setPresenting(active: boolean): void {
     this.presenting = active;
     this.applyView(this.alignment);
@@ -155,14 +165,15 @@ export class DiagnosticScene {
       this.roomAnchor.rotation.y = 0;
       this.roomAnchor.position.set(0, 0, 0);
     }
-    if (!this.presenting && aligned) {
+    // A tracked pose already places this device's view in the room.
+    if (!this.presenting && !this.following && aligned) {
       this.camera.position.set(0, 1.6, 0);
       this.camera.lookAt(0, 1.6, -1.2);
-    } else if (!this.presenting) {
+    } else if (!this.presenting && !this.following) {
       this.camera.position.set(0, 1.6, 2.4);
       this.camera.lookAt(0, 0.6, -1.2);
     }
-    this.container.dataset.view = aligned ? 'calibrated' : 'overview';
+    this.container.dataset.view = this.following ? 'tracked' : aligned ? 'calibrated' : 'overview';
     this.paintStatus(aligned ? 'Aligned' : 'Press A');
     this.statusLabel.visible = this.presenting;
   }

@@ -24,14 +24,26 @@
           <p id="vr-status" data-testid="vr-status" class="device-status" role="status">Connect to see VR device status</p>
           <p id="room-status" data-testid="room-status" class="device-status" role="status">Room not loaded</p>
           <p id="alignment-status" data-testid="alignment-status" class="device-status" role="status">Not aligned</p>
-          <button id="confirm-alignment" disabled>Confirm alignment</button>
-          <p class="hint">Stand at the floor center and face the desk, then confirm. In the headset, press the A button when you see the words Press A. Without tracking, the page button records the origin.</p>
-          <div class="button-row">
-            <button id="start-xr" disabled>Enter XR</button>
-            <button id="end-xr" disabled class="secondary">End XR</button>
+          <div id="vr-controls" hidden>
+            <button id="confirm-alignment" disabled>Confirm alignment</button>
+            <p class="hint">Stand at the floor center and face the desk, then confirm. In the headset, press the A button when you see the words Press A. Without tracking, the page button records the origin.</p>
+            <div class="button-row">
+              <button id="start-xr" disabled>Enter VR</button>
+              <button id="end-xr" disabled class="secondary">End VR</button>
+            </div>
+            <p id="xr-support" class="notice" role="status">Checking VR support…</p>
           </div>
-          <p id="xr-support" class="notice" role="status">Checking XR support…</p>
-          <p class="hint">iPhone 16 can use the mobile view. Physical phone tracking on iPhone Chrome is pending. Meta Quest 3 uses the immersive VR view.</p>
+          <div id="phone-controls" hidden>
+            <p class="hint">Point the back camera at the printed marker on the desk front. The marker places the phone in the room, so the phone needs no alignment step. Calibrate the camera once first, holding the phone the way you will track.</p>
+            <div class="button-row">
+              <button id="start-tracking" disabled>Start tracking</button>
+              <button id="stop-tracking" disabled class="secondary">Stop tracking</button>
+            </div>
+            <button id="calibrate-camera" class="secondary" disabled>Calibrate camera</button>
+            <p id="tracking-status" data-testid="tracking-status" class="notice" role="status">Tracking off</p>
+            <video id="camera-preview" class="camera-preview" muted playsinline hidden aria-label="Back camera preview"></video>
+          </div>
+          <p class="hint">iPhone 16 Chrome tracks the phone with its back camera and the printed marker. Meta Quest 3 uses the immersive VR view.</p>
           <button id="disconnect" class="secondary" disabled>Disconnect</button>
           <p id="error" class="error-message" role="alert" hidden></p>
         </section>
@@ -42,7 +54,7 @@
           <details><summary>Device smoke-test diagnostics</summary>
             <p id="tracking" data-testid="tracking">Inactive</p>
             <p id="marker-position" data-testid="marker-position">No accepted position</p>
-            <p>Positions are meters. Confirm alignment places this device at the floor center, facing the desk. The furniture positions stay fixed.</p>
+            <p>Positions are room meters, measured by the phone against the room's printed markers. On the headset, Confirm alignment places it at the floor center, facing the desk. The furniture positions stay fixed.</p>
             <p>This report records browser observations. It does not certify a completed hardware test.</p>
             <pre id="device-report"></pre>
             <button id="download-report" class="secondary">Download diagnostic report</button>

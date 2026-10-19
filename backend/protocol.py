@@ -1,12 +1,13 @@
-"""The shared prototype's WebSocket contract; positions are XR meters."""
+"""The shared prototype's WebSocket contract; phone positions are room-frame meters."""
 
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Role = Literal["mobile_master", "vr_solver"]
-TrackingStatus = Literal["inactive", "tracked", "lost", "emulated"]
-ReferenceSpace = Literal["local", "local-floor"]
+TrackingStatus = Literal["inactive", "tracked", "lost"]
+# The phone measures its position against room markers, so it reports room coordinates directly.
+ReferenceSpace = Literal["room"]
 
 
 class WireModel(BaseModel):

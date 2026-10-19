@@ -20,16 +20,24 @@ test('phone sees VR connect and disconnect without session IDs or simulator cont
   await vr.close();
 });
 
-test('phone page stays usable when positional WebXR is unavailable', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.addInitScript(() => Object.defineProperty(navigator, 'xr', { value: undefined }));
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
-  await expect(page.getByTestId('connection')).toHaveText('Connected · Phone');
-  await expect(page.getByTestId('marker-position')).toHaveText('No accepted position');
-  await page.getByRole('button', { name: 'Enter AR', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('WebXR is unavailable');
-  await expect(page.getByRole('button', { name: 'Disconnect', exact: true })).toBeEnabled();
+test('the phone offers camera tracking and the headset offers VR', async ({ browser }) => {
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const vr = await browser.newPage();
+  // iPhone browsers expose no WebXR; the phone page must not depend on it.
+  await phone.addInitScript(() => Object.defineProperty(navigator, 'xr', { value: undefined }));
+  await phone.goto('/');
+  await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await expect(phone.getByTestId('connection')).toHaveText('Connected · Phone');
+  await expect(phone.getByRole('button', { name: 'Start tracking', exact: true })).toBeEnabled();
+  await expect(phone.getByRole('button', { name: 'Calibrate camera', exact: true })).toBeEnabled();
+  await expect(phone.getByRole('button', { name: 'Enter VR', exact: true })).toBeHidden();
+  await expect(phone.getByTestId('marker-position')).toHaveText('No accepted position');
+  await vr.goto('/');
+  await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
+  await expect(vr.getByRole('button', { name: 'Enter VR', exact: true })).toBeVisible();
+  await expect(vr.getByRole('button', { name: 'Start tracking', exact: true })).toBeHidden();
+  await phone.close();
+  await vr.close();
 });
 
 test('Quest entry requests VR and reports permission denial without disconnecting', async ({ page }) => {

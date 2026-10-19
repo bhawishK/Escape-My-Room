@@ -2,6 +2,7 @@ import './style.css';
 import { RoomPhotos } from './capture';
 import { element } from './dom';
 import { RoomPreparation } from './preparation';
+import { PhoneTracker } from './phone-tracking';
 import type { Role, SessionState } from './protocol';
 import { SessionClient } from './session';
 import { DiagnosticScene } from './scene';
@@ -13,6 +14,9 @@ const disconnectButton = element<HTMLButtonElement>('disconnect');
 const alignButton = element<HTMLButtonElement>('confirm-alignment');
 const startButton = element<HTMLButtonElement>('start-xr');
 const endButton = element<HTMLButtonElement>('end-xr');
+const trackButton = element<HTMLButtonElement>('start-tracking');
+const stopTrackingButton = element<HTMLButtonElement>('stop-tracking');
+const calibrateButton = element<HTMLButtonElement>('calibrate-camera');
 const overlay = element('xr-overlay');
 let role: Role | null = null;
 let connected = false;
@@ -21,6 +25,7 @@ let xrActive = false;
 let state: SessionState | null = null;
 let view: DiagnosticScene | null = null;
 let xr: XRDiagnostic | null = null;
+let tracker: PhoneTracker | null = null;
 
 function showError(message: string): void {
   element('error').textContent = message;
@@ -34,11 +39,19 @@ function controls(): void {
   alignButton.disabled = !connected;
   startButton.disabled = !connected || busy || xrActive || xr === null;
   endButton.disabled = !xrActive;
-  startButton.textContent = role === 'vr_solver' ? 'Enter VR' : role === 'mobile_master' ? 'Enter AR' : 'Enter XR';
+  element('vr-controls').hidden = role !== 'vr_solver';
+  element('phone-controls').hidden = role !== 'mobile_master';
+  const cameraIdle = tracker?.getMode() === 'off';
+  trackButton.disabled = !connected || !cameraIdle;
+  stopTrackingButton.disabled = cameraIdle !== false;
+  calibrateButton.disabled = !connected || !cameraIdle;
 }
 
 function alignmentLabel(next: SessionState): string {
   if (!role) return 'Not aligned';
+  if (role === 'mobile_master') {
+    return next.marker.tracking_status === 'tracked' ? 'Placed by the room markers' : 'Not placed · track a room marker';
+  }
   const mine = next.alignment[role];
   if (mine.status !== 'aligned') return 'Not aligned';
   const origin = mine.origin;
@@ -59,6 +72,7 @@ function applyState(next: SessionState): void {
   state = next;
   view?.apply(next);
   if (role) view?.applyView(next.alignment[role]);
+  tracker?.setMarkers(next.room.available ? next.room.markers : []);
   const roomStatus = element('room-status');
   roomStatus.dataset.available = 'false';
   roomStatus.textContent = roomLabel(next, false);
@@ -75,8 +89,8 @@ function applyState(next: SessionState): void {
   });
   const p = next.marker.position;
   element('marker-position').textContent = p ? `${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)} m` : 'No accepted position';
-  const labels = { inactive: 'Inactive · no positional input', tracked: 'Tracked · WebXR',
-    lost: 'Lost · marker unavailable', emulated: 'Emulated · not positional tracking' };
+  const labels = { inactive: 'Inactive · no positional input', tracked: 'Tracked · room markers',
+    lost: 'Lost · marker unavailable' };
   element('tracking').textContent = labels[next.marker.tracking_status];
   element('alignment-status').textContent = alignmentLabel(next);
   element('vr-status').textContent = next.vr_connected ? 'VR device connected' : 'Waiting for VR device';
@@ -110,11 +124,12 @@ const client = new SessionClient({
           },
           room: {
             available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
-            entities: [], loaded_by: { mobile_master: null, vr_solver: null },
+            entities: [], markers: [], loaded_by: { mobile_master: null, vr_solver: null },
           },
         });
       }
       void xr?.end().catch(error => showError(xrError(error)));
+      if (tracker?.getMode() !== 'off') tracker?.stop('Tracking stopped because the phone disconnected.');
     }
     controls();
   },
@@ -123,25 +138,36 @@ const client = new SessionClient({
 
 try {
   view = new DiagnosticScene(element('scene'));
-  xr = new XRDiagnostic(view, overlay, pose => client.sendPose(pose), (report, active) => {
+  xr = new XRDiagnostic(view, overlay, (report, active) => {
     xrActive = active;
     overlay.hidden = !active || report.dom_overlay === 'unavailable';
     element('device-report').textContent = JSON.stringify(report, null, 2);
     element('xr-support').textContent = !report.secure_context ?
-      'XR needs trusted HTTPS. Desktop diagnostics can run on localhost.' : !report.api_available ?
-      'WebXR unavailable. Mobile view works; physical phone tracking is pending on iPhone Chrome.' :
-      `AR ${report.immersive_ar ? 'available' : 'unavailable'} · VR ${report.immersive_vr ? 'available' : 'unavailable'}. Enter XR to test tracking and input.`;
+      'VR needs trusted HTTPS. Desktop diagnostics can run on localhost.' : !report.api_available ?
+      'WebXR unavailable. Use the Quest browser for VR.' :
+      `VR ${report.immersive_vr ? 'available' : 'unavailable'}. Enter VR to test tracking and input.`;
     controls();
   }, () => confirmAlignment());
   const sceneView = view;
-  sceneView.renderer.setAnimationLoop((time, frame) => {
-    xr?.frame(time, frame);
+  sceneView.renderer.setAnimationLoop((_time, frame) => {
+    xr?.frame(frame);
     sceneView.renderer.render(sceneView.scene, sceneView.camera);
   });
   void xr.inspect().catch(error => showError(xrError(error)));
 } catch {
   showError('The 3D view could not start. Enable WebGL/hardware acceleration and reload.');
 }
+tracker = new PhoneTracker(element<HTMLVideoElement>('camera-preview'), {
+  publish: pose => client.sendPose(pose),
+  view: pose => view?.follow(pose),
+  status: status => {
+    const line = element('tracking-status');
+    line.textContent = status.message;
+    line.dataset.mode = status.mode;
+    line.dataset.tracked = String(status.tracked);
+    controls();
+  },
+});
 
 async function connect(roleToJoin: Role): Promise<void> {
   busy = true;
@@ -166,7 +192,7 @@ startButton.addEventListener('click', () => {
   busy = true;
   element('error').hidden = true;
   controls();
-  void xr.start(role).catch(error => showError(xrError(error))).finally(() => {
+  void xr.start().catch(error => showError(xrError(error))).finally(() => {
     busy = false;
     controls();
   });
@@ -174,7 +200,20 @@ startButton.addEventListener('click', () => {
 const endXR = () => { void xr?.end().catch(error => showError(xrError(error))); };
 endButton.addEventListener('click', endXR);
 element('overlay-end-xr').addEventListener('click', endXR);
-disconnectButton.addEventListener('click', () => { client.leave(); endXR(); });
+disconnectButton.addEventListener('click', () => {
+  if (tracker?.getMode() !== 'off') tracker?.stop();
+  client.leave();
+  endXR();
+});
+const runCamera = (start: (camera: PhoneTracker) => Promise<void>) => {
+  if (!tracker) return;
+  element('error').hidden = true;
+  void start(tracker).catch(error => showError(error instanceof Error ? error.message : 'The camera could not start.'))
+    .finally(controls);
+};
+trackButton.addEventListener('click', () => runCamera(camera => camera.startTracking()));
+calibrateButton.addEventListener('click', () => runCamera(camera => camera.startCalibration()));
+stopTrackingButton.addEventListener('click', () => tracker?.stop());
 const confirmAlignment = () => {
   if (!connected) return;
   client.sendCalibration(xr?.confirmedAlignment() ?? { yaw: 0, origin: { x: 0, y: 0, z: 0 } });
@@ -196,6 +235,7 @@ overlay.addEventListener('beforexrselect', event => event.preventDefault());
 element('download-report').addEventListener('click', () => {
   const report = {
     recorded_at: new Date().toISOString(), role, xr: xr?.getReport() ?? null,
+    tracking: tracker?.report() ?? null, user_agent: navigator.userAgent,
     dom_overlay_hold_events: holdEvents, marker: state?.marker ?? null,
     evidence: 'Browser observations only; complete the manual device smoke-test record separately.',
   };

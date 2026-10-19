@@ -2,7 +2,8 @@
 
 Two manifest forms are accepted. The original stand-in room names one .gltf for every entity and
 has exactly one movable entity. Schema 2 gives each entity its own .glb, a rotation, and any number
-of movable entities. Both become the same shared entity records.
+of movable entities. Both become the same shared entity records. Either form may list the printed
+tracking markers the phone camera locates itself against.
 
 Frame for both: meters, right-handed, +Y up, +Z toward the viewer. An entity's position and
 rotation place the center of its bottom face in the room. Rotations are unit quaternions in
@@ -76,9 +77,30 @@ class SceneEntity(WireModel):
     rotation: Rotation
 
 
+class TrackingMarker(WireModel):
+    """A printed AprilTag (36h11) fixed in the room, which the phone camera measures itself against.
+
+    The position is the center of the tag's black square. In the tag's own frame +X points to the
+    right of the printed tag, +Y to its top, and +Z out of the printed face; the rotation turns that
+    frame into the room. Size is the edge of the black square.
+    """
+
+    id: int = Field(ge=0, le=586)
+    label: str = Field(min_length=1, max_length=64)
+    size: float = Field(gt=0, le=1)
+    position: Position
+    rotation: Rotation
+
+
+def _check_markers(markers: Sequence[TrackingMarker]) -> None:
+    if len({marker.id for marker in markers}) != len(markers):
+        raise ValueError("Tracking marker IDs must be unique")
+
+
 class LoadedRoom(BaseModel):
     room_version: int
     entities: list[SceneEntity]
+    markers: list[TrackingMarker]
 
 
 class _Entity(Protocol):
@@ -117,10 +139,14 @@ class PreparedRoom(WireModel):
     units: str = Field(pattern=r"^meters$")
     asset: str = Field(pattern=r"^[A-Za-z0-9._-]+\.gltf$")
     entities: list[RoomEntity] = Field(min_length=1)
+    markers: list[TrackingMarker] = Field(
+        default_factory=lambda: list[TrackingMarker](), max_length=32
+    )
 
     @model_validator(mode="after")
     def check_entities(self) -> Self:
         _check_interaction_flags(self.entities)
+        _check_markers(self.markers)
         if len({entity.node for entity in self.entities}) != len(self.entities):
             raise ValueError("Entity nodes must be unique")
         movable = [entity for entity in self.entities if entity.kind == "movable"]
@@ -152,10 +178,14 @@ class PreparedScene(WireModel):
     pivot: Literal["bottom_center"]
     quaternion_order: Literal["xyzw"]
     entities: list[AssetEntity] = Field(min_length=1, max_length=64)
+    markers: list[TrackingMarker] = Field(
+        default_factory=lambda: list[TrackingMarker](), max_length=32
+    )
 
     @model_validator(mode="after")
     def check_entities(self) -> Self:
         _check_interaction_flags(self.entities)
+        _check_markers(self.markers)
         if len({(entity.asset, entity.node) for entity in self.entities}) != len(self.entities):
             raise ValueError("Entity asset nodes must be unique")
         return self
@@ -223,6 +253,7 @@ def _load_legacy(directory: Path, room: PreparedRoom) -> LoadedRoom:
             )
             for entity in room.entities
         ],
+        markers=room.markers,
     )
 
 
@@ -258,6 +289,7 @@ def _load_scene(directory: Path, scene: PreparedScene) -> LoadedRoom:
             )
             for entity in scene.entities
         ],
+        markers=scene.markers,
     )
 
 

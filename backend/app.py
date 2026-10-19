@@ -40,6 +40,7 @@ from backend.protocol import (
     WireModel,
 )
 from backend.sessions import PrototypeRoom
+from backend.tracking import CalibrationStore
 
 
 class OverviewChoice(WireModel):
@@ -51,6 +52,7 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     repository = Path(__file__).resolve().parents[1]
     data = data_dir or Path(os.environ.get("ESCAPE_ROOM_DATA_DIR") or repository / "data")
     captures = CaptureStore(data / "captures", CaptureLimits.from_environment())
+    calibrations = CalibrationStore(data / "tracking" / "cameras.json")
     preparations = PreparationService(
         data / "jobs", captures, worker_from_environment(repository)
     )
@@ -65,6 +67,7 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     room = PrototypeRoom(load_error=load_error)
     if prepared is not None:
         room.entities = [entity.model_copy(deep=True) for entity in prepared.entities]
+        room.markers = prepared.markers
         room.room_version = prepared.room_version
 
     @app.get("/api/health")
@@ -119,6 +122,14 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     def capture_image(capture_id: str, image_id: str, kind: ImageKind) -> FileResponse:
         path, media_type = captures.photo_file(capture_id, image_id, kind)
         return FileResponse(path, media_type=media_type)
+
+    @app.get("/api/tracking/cameras")
+    def list_calibrations() -> dict[str, list[dict[str, Any]]]:
+        return {"calibrations": [item.model_dump() for item in calibrations.all()]}
+
+    @app.put("/api/tracking/cameras")
+    async def save_calibration(request: Request) -> dict[str, Any]:
+        return calibrations.save(await request.body()).model_dump()
 
     @app.get("/api/preparations")
     def list_preparations() -> dict[str, list[dict[str, Any]]]:
