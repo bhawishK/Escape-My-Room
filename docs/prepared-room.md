@@ -29,21 +29,11 @@ Width is along X, height along Y, depth along Z. The desk and cabinet sit toward
 
 Selection behavior is issue 5. The selectable flag is recorded now so the manifest can distinguish the box from the furniture.
 
-## Tracking marker
-
-Issue 19 adds one printed AprilTag, which the phone camera uses to place itself in the room. It is listed under `markers` in the manifest, not as an entity.
-
-| ID | Label | Black square | Center | Rotation |
-| --- | --- | --- | --- | --- |
-| `0` | Desk front | 0.15 m | `(0, 0.60, -0.90)` | identity: upright, facing +Z toward the viewer |
-
-The desk's front face is at z = -0.90, so the tag lies on it. Print [its sheet](markers/tag36h11-00.svg) and tape it to the matching place on your real desk; see [phone tracking](phone-tracking.md). Either manifest form may list markers; the multi-asset fixture lists none.
-
 ## Asset files
 
 `assets/prepared-room/build_room.py` writes three files from the table above:
 
-- `manifest.json` holds room version `1`, the entity IDs, kinds, flags, sizes, and positions, and the tracking marker. This file is the identity contract.
+- `manifest.json` holds room version `1`, the entity IDs, kinds, flags, sizes, and positions. This file is the identity contract.
 - `room.gltf` holds four separate meshes. Each mesh origin is the center of that object's bottom face. A node name is only a pointer; it is not the entity ID.
 - `room.bin` holds the vertex data for those meshes.
 

@@ -2,8 +2,7 @@ import './style.css';
 import { RoomPhotos } from './capture';
 import { element } from './dom';
 import { RoomPreparation } from './preparation';
-import { PhoneTracker } from './phone-tracking';
-import { PhoneLook, PhoneViewpoint } from './phone-view';
+import { PhoneLook, phoneViewpoint } from './phone-view';
 import type { Role, SessionState } from './protocol';
 import { SessionClient } from './session';
 import { DiagnosticScene } from './scene';
@@ -15,8 +14,6 @@ const disconnectButton = element<HTMLButtonElement>('disconnect');
 const alignButton = element<HTMLButtonElement>('confirm-alignment');
 const startButton = element<HTMLButtonElement>('start-xr');
 const endButton = element<HTMLButtonElement>('end-xr');
-const trackButton = element<HTMLButtonElement>('start-tracking');
-const stopTrackingButton = element<HTMLButtonElement>('stop-tracking');
 const lookButton = element<HTMLButtonElement>('look-around');
 const roomViewHud = element('room-view-hud');
 const overlay = element('xr-overlay');
@@ -27,10 +24,8 @@ let xrActive = false;
 let state: SessionState | null = null;
 let view: DiagnosticScene | null = null;
 let xr: XRDiagnostic | null = null;
-let tracker: PhoneTracker | null = null;
 let roomViewOpen = false;
 const look = new PhoneLook();
-const viewpoint = new PhoneViewpoint(look);
 
 function showError(message: string): void {
   element('error').textContent = message;
@@ -46,10 +41,6 @@ function controls(): void {
   endButton.disabled = !xrActive;
   element('vr-controls').hidden = role !== 'vr_solver';
   element('phone-controls').hidden = role !== 'mobile_master';
-  const cameraIdle = tracker?.getMode() === 'off';
-  trackButton.hidden = !cameraIdle;
-  trackButton.disabled = !connected;
-  stopTrackingButton.hidden = cameraIdle;
   lookButton.textContent = look.active ? 'Stop turning' : 'Turn with phone';
 }
 
@@ -64,9 +55,7 @@ function setRoomView(open: boolean): void {
 
 function alignmentLabel(next: SessionState): string {
   if (!role) return 'Not aligned';
-  if (role === 'mobile_master') {
-    return next.marker.tracking_status === 'tracked' ? 'Placed by the room markers' : 'Not placed · track a room marker';
-  }
+  if (role === 'mobile_master') return 'Not placed · the room view stands at a fixed spot';
   const mine = next.alignment[role];
   if (mine.status !== 'aligned') return 'Not aligned';
   const origin = mine.origin;
@@ -87,7 +76,6 @@ function applyState(next: SessionState): void {
   state = next;
   view?.apply(next);
   if (role) view?.applyView(next.alignment[role]);
-  tracker?.setMarkers(next.room.available ? next.room.markers : []);
   const roomStatus = element('room-status');
   roomStatus.dataset.available = 'false';
   roomStatus.textContent = roomLabel(next, false);
@@ -104,8 +92,8 @@ function applyState(next: SessionState): void {
   });
   const p = next.marker.position;
   element('marker-position').textContent = p ? `${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)} m` : 'No accepted position';
-  const labels = { inactive: 'Inactive · no positional input', tracked: 'Tracked · room markers',
-    lost: 'Lost · marker unavailable' };
+  const labels = { inactive: 'Inactive · no positional input', tracked: 'Tracked',
+    lost: 'Lost · position unavailable' };
   element('tracking').textContent = labels[next.marker.tracking_status];
   element('alignment-status').textContent = alignmentLabel(next);
   element('vr-status').textContent = next.vr_connected ? 'VR device connected' : 'Waiting for VR device';
@@ -139,12 +127,11 @@ const client = new SessionClient({
           },
           room: {
             available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
-            entities: [], markers: [], loaded_by: { mobile_master: null, vr_solver: null },
+            entities: [], loaded_by: { mobile_master: null, vr_solver: null },
           },
         });
       }
       void xr?.end().catch(error => showError(xrError(error)));
-      if (tracker?.getMode() !== 'off') tracker?.stop('Tracking stopped because the phone disconnected.');
       look.stop();
       setRoomView(false);
     }
@@ -168,24 +155,13 @@ try {
   const sceneView = view;
   sceneView.renderer.setAnimationLoop((_time, frame) => {
     xr?.frame(frame);
-    if (roomViewOpen) sceneView.follow(viewpoint.current());
+    if (roomViewOpen) sceneView.follow(phoneViewpoint(look));
     sceneView.renderer.render(sceneView.scene, sceneView.camera);
   });
   void xr.inspect().catch(error => showError(xrError(error)));
 } catch {
   showError('The 3D view could not start. Enable WebGL/hardware acceleration and reload.');
 }
-tracker = new PhoneTracker(element<HTMLVideoElement>('camera-feed'), {
-  publish: pose => client.sendPose(pose),
-  measured: pose => viewpoint.measured(pose),
-  status: status => {
-    const line = element('tracking-status');
-    line.textContent = status.message;
-    line.dataset.mode = status.mode;
-    line.dataset.tracked = String(status.tracked);
-    controls();
-  },
-});
 
 async function connect(roleToJoin: Role): Promise<void> {
   busy = true;
@@ -220,7 +196,6 @@ const endXR = () => { void xr?.end().catch(error => showError(xrError(error))); 
 endButton.addEventListener('click', endXR);
 element('overlay-end-xr').addEventListener('click', endXR);
 disconnectButton.addEventListener('click', () => {
-  if (tracker?.getMode() !== 'off') tracker?.stop();
   client.leave();
   endXR();
 });
@@ -228,20 +203,18 @@ disconnectButton.addEventListener('click', () => {
 function showRoomViewError(error: unknown, fallback: string): void {
   const message = error instanceof Error ? error.message : fallback;
   showError(message);
-  element('tracking-status').textContent = message;
+  element('view-status').textContent = message;
 }
-trackButton.addEventListener('click', () => {
-  element('error').hidden = true;
-  void tracker?.start().catch(error => showRoomViewError(error, 'The camera could not start.')).finally(controls);
-});
-stopTrackingButton.addEventListener('click', () => tracker?.stop());
 lookButton.addEventListener('click', () => {
   if (look.active) {
     look.stop();
+    element('view-status').textContent = 'Turning off';
     controls();
     return;
   }
-  void look.start().catch(error => showRoomViewError(error, 'Motion access could not start.')).finally(controls);
+  void look.start().then(() => {
+    element('view-status').textContent = 'Turning with the phone';
+  }).catch(error => showRoomViewError(error, 'Motion access could not start.')).finally(controls);
 });
 element('open-room-view').addEventListener('click', () => setRoomView(true));
 element('close-room-view').addEventListener('click', () => setRoomView(false));
@@ -266,7 +239,7 @@ overlay.addEventListener('beforexrselect', event => event.preventDefault());
 element('download-report').addEventListener('click', () => {
   const report = {
     recorded_at: new Date().toISOString(), role, xr: xr?.getReport() ?? null,
-    tracking: tracker?.report() ?? null, user_agent: navigator.userAgent,
+    user_agent: navigator.userAgent,
     dom_overlay_hold_events: holdEvents, marker: state?.marker ?? null,
     evidence: 'Browser observations only; complete the manual device smoke-test record separately.',
   };

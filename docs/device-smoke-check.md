@@ -51,11 +51,11 @@ Follow-up iPhone Chrome report at `2026-10-12T12:01:53.005Z`:
 | Date and tester | 2026-10-12, user-provided Chrome report at 12:01:53 UTC | 2026-10-12, user-reported join/grid and earlier VR entry |
 | Shared trusted HTTPS URL | Secure context confirmed; exact URL absent from report | Cloudflare route previously used |
 | New direct role connection / peer status | Mobile-master role and received shared marker snapshot recorded; live VR-status observation not in report | Join and grid visibility confirmed; full peer-status observations pending |
-| Immersive entry / exit / re-entry | Not used; the phone tracks with its camera | Earlier entry confirmed; current join/grid confirmed; exit/re-entry pending |
-| Reference space / positional tracking | Room frame from the printed tag (Issue #19); pending | Pending |
+| Immersive entry / exit / re-entry | Not used; the phone has no WebXR | Earlier entry confirmed; current join/grid confirmed; exit/re-entry pending |
+| Reference space / positional tracking | None; the view turns with the orientation sensor, and position is open (Issue #19) | Pending |
 | DOM overlay / held control events | Not exercised | Pending or unavailable |
-| Physically tracked marker delivery | Pending; see the phone tracking record | Pending |
-| Permission denial / recovery | No XR API or mode exercised; camera permission is checked in the phone tracking record | Pending |
+| Physically tracked marker delivery | Not available; see the phone tracking record | Pending |
+| Permission denial / recovery | No XR API or mode exercised; motion permission is covered in the phone tracking record | Pending |
 | Saved report | [Latest Chrome/mobile role JSON](device-reports/2026-10-12-iphone-chrome-connected.json); [earlier report](device-reports/2026-10-12-iphone.json) preserved | Pending |
 
 ## Test the current first slice
@@ -71,6 +71,6 @@ Follow-up iPhone Chrome report at `2026-10-12T12:01:53.005Z`:
 
 These checks are acceptance work for [Issue #19](https://github.com/bhawishK/Escape-My-Room/issues/19), separate from Issue #1's connection checks.
 
-The chosen mechanism is camera tracking against a printed AprilTag, because iPhone browsers expose no WebXR. Follow the [phone tracking device check](phone-tracking.md#device-check) and fill in its record. It covers each axis with a tape measure, turning in place, holding still, cadence, lost and recovery, stop and restart, page exit, disconnect, and permission refusal.
+iPhone browsers expose no WebXR. Turning the room view with the phone works on the iPhone; camera tracking against a printed AprilTag was tried and dropped, and no position mechanism is chosen yet. See [phone tracking](phone-tracking.md) for the options.
 
 Desktop message fixtures, synthetic frames, the fake camera, connected status, and a rendered page cannot establish phone-to-VR physical translation acceptance.

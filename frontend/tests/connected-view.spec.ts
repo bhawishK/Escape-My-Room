@@ -33,9 +33,8 @@ test('the phone opens the room full screen and the headset offers VR', async ({ 
   await expect(phone.locator('#scene')).toHaveAttribute('data-view', 'phone');
   expect(await phone.locator('#scene').boundingBox()).toEqual({ x: 0, y: 0, width: 390, height: 844 });
   await expect(phone.getByRole('button', { name: 'Turn with phone', exact: true })).toBeVisible();
-  await expect(phone.getByRole('button', { name: 'Start tracking', exact: true })).toBeEnabled();
   await expect(phone.getByRole('button', { name: 'Enter VR', exact: true })).toBeHidden();
-  await expect(phone.getByTestId('tracking-status')).toHaveText('Tracking off');
+  await expect(phone.getByTestId('view-status')).toHaveText('Turning off');
   // Close returns to the page; the room view opens again from the page.
   await phone.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(phone.locator('#scene')).not.toHaveClass(/room-view/);
@@ -58,9 +57,11 @@ test('turning with the phone follows its orientation sensor', async ({ page }) =
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
   await page.getByRole('button', { name: 'Turn with phone', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Stop turning', exact: true })).toBeVisible();
+  await expect(page.getByTestId('view-status')).toHaveText('Turning with the phone');
   await page.evaluate(() => window.dispatchEvent(new DeviceOrientationEvent('deviceorientation', { alpha: 0, beta: 90, gamma: 0 })));
   await page.getByRole('button', { name: 'Stop turning', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Turn with phone', exact: true })).toBeVisible();
+  await expect(page.getByTestId('view-status')).toHaveText('Turning off');
 });
 
 test('a refused motion permission is explained', async ({ page }) => {
@@ -69,7 +70,7 @@ test('a refused motion permission is explained', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
   await page.getByRole('button', { name: 'Turn with phone', exact: true }).click();
-  await expect(page.getByTestId('tracking-status')).toHaveText(
+  await expect(page.getByTestId('view-status')).toHaveText(
     'Motion permission was denied. Allow motion access for this site, then try again.');
   await expect(page.getByRole('button', { name: 'Turn with phone', exact: true })).toBeVisible();
 });

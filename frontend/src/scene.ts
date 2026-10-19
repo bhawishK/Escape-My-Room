@@ -1,12 +1,12 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import type { RoomPose } from './marker-geometry';
+import type { RoomPose } from './phone-view';
 import type { AlignmentState, SessionState } from './protocol';
 import { applyPlacement, placeEntities } from './room';
 
 const emptyRoom = (): SessionState['room'] => ({
   available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
-  entities: [], markers: [], loaded_by: { mobile_master: null, vr_solver: null },
+  entities: [], loaded_by: { mobile_master: null, vr_solver: null },
 });
 
 const OVERVIEW_FOV = 60;
@@ -85,12 +85,12 @@ export class DiagnosticScene {
 
   apply(state: SessionState): void {
     const position = state.marker.position;
-    // A tracking phone looks out from its own position, so it does not draw itself.
+    // A phone looking out from its own view does not draw itself.
     this.marker.visible = position !== null && this.following === null;
     if (position) this.marker.position.set(position.x, position.y, position.z);
   }
 
-  /** Moves this device's view to its measured room pose, or back to the default view with null. */
+  /** Moves this device's view to the phone's room pose, or back to the default view with null. */
   follow(pose: RoomPose | null): void {
     this.following = pose;
     // The phone's view spans about what its camera sees along the screen's long side.

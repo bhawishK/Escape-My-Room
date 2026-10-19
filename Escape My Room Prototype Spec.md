@@ -23,7 +23,7 @@ The proposal fits the contest's shared spatial interaction theme: a mobile parti
 - Primary contribution: the mobile-master and VR interaction with shared objects, including selection, manipulation, placement, control awareness, and the solver's response.
 - Supporting capabilities: recognizable room reconstruction, simple object behavior and authoring, primitive participant presence, and human voice communication.
 - Application context: a small escape-room scenario using personal objects. Extensive puzzles, timers, traps, narrative, and detailed avatars are optional expansion work.
-- Implementation approach: browser clients and Python services are the chosen stack, with WebXR on the Quest and camera marker tracking on the phone (changed 19 October 2026). Browser delivery supports access across devices; its use alone does not establish an interaction contribution.
+- Implementation approach: browser clients and Python services are the chosen stack, with WebXR on the Quest and an ordinary web page on the phone (changed 19 October 2026); how the phone measures its position is open. Browser delivery supports access across devices; its use alone does not establish an interaction contribution.
 
 All these parts can support the theme, but the first build should concentrate effort on a clear shared interaction. Reconstruction needs sufficient quality for recognition and usable spatial relationships; photorealism or a new AI reconstruction model is not a prerequisite for the initial experiment.
 
@@ -61,7 +61,7 @@ The contest still requires interaction innovation and asks entrants to identify 
 ### Confirmed behavior
 
 - The prototype has an asymmetric mobile master and remote VR solver. The master stays in the scanned physical room.
-- The implementation will use browser clients and Python. WebXR runs in the Quest client and the phone tracks itself with its camera against printed markers; Python provides shared session services and can host reconstruction processing when needed. The browser rendering library, transport, and reconstruction tools remain to be selected.
+- The implementation will use browser clients and Python. WebXR runs in the Quest client and the phone turns its view with its orientation sensor, with position tracking still to be chosen; Python provides shared session services and can host reconstruction processing when needed. The browser rendering library, transport, and reconstruction tools remain to be selected.
 - The master needs interaction with shared room content during the session, beyond initial scene preparation. The precise mobile-master and VR object interactions will be developed further.
 - The agreed starting candidate uses physical phone movement to manipulate a selected virtual object, with hold to engage and release to place. Selection, active manipulation, and released placement are distinct interaction states. This candidate is a basis for testing, not the finalized contest technique.
 - Movement mapping starts with an initial default and is refined through testing. No exact gain, reference frame, or numerical tuning values have been approved.
@@ -86,7 +86,7 @@ Object identity, transforms, ownership, and visibility must have consistent mean
 
 ### Chosen browser and Python approach
 
-Use browser clients connected through Python shared state. The implemented slices use TypeScript, Three.js, Vite, and FastAPI. Targets are iPhone 16 Chrome and Meta Quest 3. The Quest uses WebXR for immersive VR. iPhone browsers expose no WebXR, so on 19 October 2026 the user approved changing the phone's part of the stack: the phone is an ordinary web page that measures its room position with its back camera against printed AprilTags, using OpenCV.js in the browser. The [phone tracking decision](docs/phone-tracking.md) records the alternatives and limits.
+Use browser clients connected through Python shared state. The implemented slices use TypeScript, Three.js, Vite, and FastAPI. Targets are iPhone 16 Chrome and Meta Quest 3. The Quest uses WebXR for immersive VR. iPhone browsers expose no WebXR, so on 19 October 2026 the user approved changing the phone's part of the stack: the phone is an ordinary web page that turns its room view with its orientation sensor. Camera tracking against printed AprilTags was tried the same day and dropped as too fiddly. The [phone tracking decision](docs/phone-tracking.md) records the alternatives still open.
 
 For the prototype, open the same URL on both devices and choose **Connect phone** or **Connect VR headset**. Use one shared room with VR connected status. Session IDs, invite links, authentication, and simulator controls are removed by the user's scope adjustment on 12 October 2026. Quest enters immersive mode with a separate **Enter VR** gesture. Tracking, room alignment, and object interaction still require their respective implementation and device checks.
 
@@ -103,7 +103,7 @@ Treat room capture, reconstruction, and object preparation as a separate pipelin
 
 ### Decisions still required before implementation
 
-- Target phone and VR hardware, browser rendering library, Python framework, and available positional tracking within the chosen browser and Python stack. Resolved: the phone tracks with printed markers; see [phone tracking](docs/phone-tracking.md).
+- Target phone and VR hardware, browser rendering library, Python framework, and available positional tracking within the chosen browser and Python stack. Phone position tracking remains open: printed markers were tried and dropped; see [phone tracking](docs/phone-tracking.md).
 - Shared room alignment and calibration between physical and virtual views.
 - Object selection method and hold-control input.
 - Initial movement coordinate frame and gain.
