@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 test('phone sees VR connect and disconnect without session IDs or simulator controls', async ({ browser }) => {
   const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -128,6 +128,72 @@ test('a refused camera permission for the gaze cursor is explained', async ({ pa
   await expect(page.getByRole('button', { name: 'Gaze cursor', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Calibrate', exact: true })).toBeHidden();
   await expect(page.getByLabel('Front camera')).toBeHidden();
+});
+
+/** Cameras that play a blank picture, remembering which way each was asked to face. */
+function fakeCameras(): void {
+  // The canvas is kept, so its track only ends when the page stops it.
+  const opened: { facing: string; stream: MediaStream; canvas: HTMLCanvasElement }[] = [];
+  Object.assign(window, { openedCameras: opened });
+  Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { value: async (constraints: MediaStreamConstraints) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 480;
+    canvas.getContext('2d')!.fillRect(0, 0, 640, 480);
+    const stream = canvas.captureStream(10);
+    opened.push({ facing: JSON.stringify((constraints.video as MediaTrackConstraints).facingMode), stream, canvas });
+    return stream;
+  } });
+}
+/** Which cameras are still running: "front", "back", or both. */
+const liveCameras = (page: Page) => page.evaluate(() =>
+  (window as unknown as { openedCameras: { facing: string; stream: MediaStream }[] }).openedCameras
+    .filter(camera => camera.stream.getTracks().some(track => track.readyState === 'live'))
+    .map(camera => (camera.facing.includes('environment') ? 'back' : 'front')));
+
+test('a refused back camera for measuring the height is explained', async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(navigator, 'mediaDevices', { value: {
+    getUserMedia: async () => { throw new DOMException('Denied for test', 'NotAllowedError'); },
+  } }));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await page.getByRole('button', { name: 'Measure height', exact: true }).click();
+  await expect(page.getByTestId('view-status')).toHaveText(
+    'Camera permission was denied. Allow camera access for this site in the browser settings, then try again.');
+  await expect(page.getByRole('button', { name: 'Measure height', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Back camera')).toBeHidden();
+});
+
+test('a depth model that cannot download is explained, and the back camera is released', async ({ page, context }) => {
+  await context.route('**/metric3d-vit-small/**', route => route.abort());
+  await page.addInitScript(fakeCameras);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await page.getByRole('button', { name: 'Measure height', exact: true }).click();
+  await expect(page.getByTestId('view-status')).toContainText('The depth model could not load');
+  await expect(page.getByLabel('Back camera')).toBeHidden();
+  expect(await liveCameras(page)).toEqual([]);
+  await expect(page.getByRole('button', { name: 'Measure height', exact: true })).toBeVisible();
+});
+
+test('the gaze cursor and the height measurement never run their cameras together', async ({ page, context }) => {
+  // Both models stay downloading, so each feature keeps its camera open until it is stopped.
+  await context.route('**/metric3d-vit-small/**', () => undefined);
+  await context.route('**/face_landmarker.task', () => undefined);
+  await page.addInitScript(fakeCameras);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await page.getByRole('button', { name: 'Measure height', exact: true }).click();
+  await expect(page.getByLabel('Back camera')).toBeVisible();
+  expect(await liveCameras(page)).toEqual(['back']);
+  await page.getByRole('button', { name: 'Gaze cursor', exact: true }).click();
+  await expect(page.getByLabel('Front camera')).toBeVisible();
+  await expect(page.getByLabel('Back camera')).toBeHidden();
+  expect(await liveCameras(page)).toEqual(['front']);
+  await page.getByRole('button', { name: 'Measure height', exact: true }).click();
+  await expect(page.getByLabel('Back camera')).toBeVisible();
+  await expect(page.getByLabel('Front camera')).toBeHidden();
+  expect(await liveCameras(page)).toEqual(['back']);
 });
 
 test('Quest entry requests VR and reports permission denial without disconnecting', async ({ page }) => {

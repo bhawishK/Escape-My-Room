@@ -6,6 +6,7 @@
 import type { FaceLandmarker } from '@mediapipe/tasks-vision';
 import wasmLoaderPath from '@mediapipe/tasks-vision/vision_wasm_internal.js?url';
 import wasmBinaryPath from '@mediapipe/tasks-vision/vision_wasm_internal.wasm?url';
+import { cameraError } from './camera';
 import {
   CALIBRATION_POINTS, TEST_POINTS, faceFeatures, fitMapping, meanFeatures, predict,
   type CalibrationSample, type CursorMode, type FaceFeatures, type Mapping, type ScreenPoint,
@@ -53,19 +54,6 @@ export interface GazeElements {
   layer: HTMLElement;
   dot: HTMLElement;
   prompt: HTMLElement;
-}
-
-function cameraError(error: unknown): string {
-  if (error instanceof DOMException) {
-    if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
-      return 'Camera permission was denied. Allow camera access for this site in the browser settings, then try again.';
-    }
-    if (error.name === 'NotFoundError' || error.name === 'OverconstrainedError') return 'No front camera was found on this device.';
-    if (error.name === 'NotReadableError' || error.name === 'AbortError') {
-      return 'The camera is in use by another app. Close it and try again.';
-    }
-  }
-  return error instanceof Error ? error.message : 'The camera could not start.';
 }
 
 async function createLandmarker(): Promise<FaceLandmarker> {
@@ -142,7 +130,7 @@ export class GazeCursor {
       // Ask for the camera first, while the button press still counts as the user's gesture.
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false, video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
-      }).catch((error: unknown) => { throw new Error(cameraError(error)); });
+      }).catch((error: unknown) => { throw new Error(cameraError(error, 'front')); });
       if (token !== this.token) {
         for (const track of stream.getTracks()) track.stop();
         return;
