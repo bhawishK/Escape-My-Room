@@ -35,7 +35,7 @@
           </div>
           <div id="phone-controls" hidden>
             <button id="open-room-view">Open room view</button>
-            <p class="hint">The room fills the screen. <strong>Turn with phone</strong> looks around as you turn. <strong>Walk with steps</strong> moves the view a step at a time as you walk, roughly; it counts steps rather than measuring where you are. <strong>Gaze cursor</strong> points at objects with your eyes or head through the front camera, after a short calibration.</p>
+            <p class="hint">The room fills the screen. <strong>Turn with phone</strong> looks around as you turn. <strong>Walk with steps</strong> moves the view a step at a time as you walk, roughly; it counts steps rather than measuring where you are. <strong>Gaze cursor</strong> points at objects with your eyes or head through the front camera, after a short calibration. <strong>Floor height</strong> estimates how high the phone is from the back camera with an AI depth model; it downloads 76 MB once.</p>
           </div>
           <p class="hint">iPhone 16 Chrome shows the room full screen and turns it with the phone. Meta Quest 3 uses the immersive VR view.</p>
           <button id="disconnect" class="secondary" disabled>Disconnect</button>
@@ -99,6 +99,8 @@
         <button id="walk-length" class="secondary" hidden>Step 0.6 m</button>
         <button id="walk-sensitivity" class="secondary" hidden>Sensitivity: normal</button>
         <button id="gaze-toggle">Gaze cursor</button>
+        <button id="depth-toggle">Floor height</button>
+        <button id="depth-follow" class="secondary" hidden>Follow height: off</button>
         <button id="gaze-mode" class="secondary" hidden>Switch to head</button>
         <button id="gaze-calibrate" class="secondary" hidden>Calibrate</button>
         <button id="gaze-test" class="secondary" hidden>Test accuracy</button>
@@ -107,6 +109,8 @@
     </div>
     <!-- The gaze cursor's front camera, shown small so the person can keep their face in view. -->
     <video id="gaze-camera" muted playsinline aria-label="Front camera" hidden></video>
+    <!-- The floor height's back camera, shown small so the person can aim it at the floor. -->
+    <video id="depth-camera" muted playsinline aria-label="Back camera" hidden></video>
     <div id="gaze-cursor" data-testid="gaze-cursor" hidden></div>
     <div id="gaze-layer" hidden>
       <p id="gaze-prompt" data-testid="gaze-prompt" class="hud-status" role="status"></p>

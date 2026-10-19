@@ -1,6 +1,7 @@
 import './style.css';
 import { RoomPhotos } from './capture';
 import { element } from './dom';
+import { FloorDepth } from './floor-depth';
 import { GazeCursor } from './gaze-cursor';
 import { RoomPreparation } from './preparation';
 import { PhoneLook, START_EYE, headingOf, phoneViewpoint } from './phone-view';
@@ -45,6 +46,16 @@ function publishWalk(position: { x: number; y: number; z: number } | null): void
     { tracking_status: 'tracked', reference_space: 'room', position } :
     { tracking_status: 'inactive', reference_space: null, position: null });
 }
+const depthButton = element<HTMLButtonElement>('depth-toggle');
+/** The floor height to show the room from when following it, and the height shown now. */
+let followHeight = false;
+let measuredHeight: number | null = null;
+let viewHeight = START_EYE.y;
+const depth = new FloorDepth(element<HTMLVideoElement>('depth-camera'), () => look.orientation(), {
+  status: message => { element('view-status').textContent = message; },
+  phase: () => controls(),
+  height: meters => { measuredHeight = meters; },
+});
 const gazeButton = element<HTMLButtonElement>('gaze-toggle');
 const gazeModeButton = element<HTMLButtonElement>('gaze-mode');
 const gaze = new GazeCursor({
@@ -79,6 +90,10 @@ function controls(): void {
   for (const id of ['walk-reset', 'walk-length', 'walk-sensitivity']) element(id).hidden = !walker.active;
   element('walk-length').textContent = `Step ${walker.stepLength.toFixed(1)} m`;
   element('walk-sensitivity').textContent = `Sensitivity: ${walker.sensitivity}`;
+  depthButton.textContent = depth.getPhase() === 'off' ? 'Floor height' : 'Stop floor height';
+  depthButton.disabled = !connected;
+  element('depth-follow').hidden = depth.getPhase() !== 'measuring';
+  element('depth-follow').textContent = `Follow height: ${followHeight ? 'on' : 'off'}`;
   gazeButton.textContent = gaze.getPhase() === 'off' ? 'Gaze cursor' : 'Stop gaze cursor';
   gazeButton.disabled = !connected;
   const pointing = gaze.getPhase() === 'tracking';
@@ -94,6 +109,7 @@ function setRoomView(open: boolean): void {
   document.documentElement.classList.toggle('room-view-open', open);
   if (!open) {
     gaze.stop();
+    depth.stop();
     if (walker.active) {
       walker.stop();
       if (connected) publishWalk(null);
@@ -205,7 +221,12 @@ try {
   const sceneView = view;
   sceneView.renderer.setAnimationLoop((_time, frame) => {
     xr?.frame(frame);
-    if (roomViewOpen) sceneView.follow(phoneViewpoint(look, walker.position()));
+    if (roomViewOpen) {
+      // Readings come seconds apart, so the view eases toward each new height.
+      const target = followHeight && measuredHeight !== null ? measuredHeight : START_EYE.y;
+      viewHeight += 0.05 * (target - viewHeight);
+      sceneView.follow(phoneViewpoint(look, { ...walker.position(), y: viewHeight }));
+    }
     sceneView.renderer.render(sceneView.scene, sceneView.camera);
   });
   void xr.inspect().catch(error => showError(xrError(error)));
@@ -272,6 +293,8 @@ gazeButton.addEventListener('click', () => {
     return;
   }
   element('error').hidden = true;
+  // The phone runs one camera at a time.
+  if (depth.getPhase() !== 'off') depth.stop('Floor height stopped for the gaze cursor.');
   void gaze.start().catch(error => showRoomViewError(error, 'The gaze cursor could not start.')).finally(controls);
 });
 gazeModeButton.addEventListener('click', () => {
@@ -310,6 +333,24 @@ element('walk-sensitivity').addEventListener('click', () => {
   walker.setSensitivity(order[(order.indexOf(walker.sensitivity) + 1) % order.length]);
   controls();
 });
+depthButton.addEventListener('click', () => {
+  if (depth.getPhase() !== 'off') {
+    depth.stop();
+    return;
+  }
+  element('error').hidden = true;
+  if (gaze.getPhase() !== 'off') gaze.stop('Gaze cursor stopped for floor height.');
+  // Both permission requests start inside the button press; iPhone refuses them after it.
+  const turning = look.active ? Promise.resolve() : look.start();
+  void Promise.all([depth.start(), turning]).catch(error => {
+    depth.stop();
+    showRoomViewError(error, 'Floor height could not start.');
+  }).finally(controls);
+});
+element('depth-follow').addEventListener('click', () => {
+  followHeight = !followHeight;
+  controls();
+});
 element('gaze-calibrate').addEventListener('click', () => gaze.calibrate());
 element('gaze-test').addEventListener('click', () => gaze.test());
 element('gaze-cancel').addEventListener('click', () => gaze.cancel());
@@ -336,7 +377,7 @@ overlay.addEventListener('beforexrselect', event => event.preventDefault());
 element('download-report').addEventListener('click', () => {
   const report = {
     recorded_at: new Date().toISOString(), role, xr: xr?.getReport() ?? null,
-    gaze: gaze.report(), user_agent: navigator.userAgent,
+    gaze: gaze.report(), floor_height: depth.report(), user_agent: navigator.userAgent,
     dom_overlay_hold_events: holdEvents, marker: state?.marker ?? null,
     evidence: 'Browser observations only; complete the manual device smoke-test record separately.',
   };
