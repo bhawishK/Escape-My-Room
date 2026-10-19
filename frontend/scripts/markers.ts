@@ -1,13 +1,13 @@
 /**
- * Writes the printable sheets: one A4 page per tracking marker in the stand-in room's manifest,
- * and the A4 calibration board. Both come from the same OpenCV dictionaries and board definition
- * the tracker detects, so a printed sheet always matches what the phone looks for.
+ * Writes the printable sheets: one A4 page per tracking marker in the stand-in room's manifest. The
+ * tags come from the same OpenCV dictionary the tracker detects, so a printed sheet always matches
+ * what the phone looks for.
  */
 import cvModule from '@techstark/opencv-js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { TrackingMarker } from '../src/protocol';
-import { BOARD, createBoard, openCV, type Mat } from '../src/vision';
+import { openCV, type Mat } from '../src/vision';
 
 const MILLIMETERS_PER_METER = 1000;
 
@@ -79,23 +79,5 @@ export async function writeSheets(manifest: string, directory: string): Promise<
     tag.delete();
   }
   dictionary.delete();
-
-  // The board at ten pixels per millimeter, then traced into exact rectangles.
-  const { board, dictionary: boardDictionary } = createBoard(cv);
-  const width = BOARD.columns * BOARD.squareMeters * MILLIMETERS_PER_METER;
-  const height = BOARD.rows * BOARD.squareMeters * MILLIMETERS_PER_METER;
-  const image = new cv.Mat();
-  board.generateImage(new cv.Size(width * 10, height * 10), image, 0, 1);
-  const left = (297 - width) / 2;
-  const top = 34;
-  writeFileSync(join(directory, 'calibration-board.svg'), page(297, 210, [
-    text(148.5, 16, 6, 'Escape My Room · camera calibration board (ChArUco 7 × 5, 5×5 ArUco)'),
-    text(148.5, 25, 4.5, 'Print at 100 % and keep the sheet flat, for example taped to a book or board.'),
-    `<g fill="#000" shape-rendering="crispEdges">${blackRectangles(image, 0.1, left, top).join('')}</g>`,
-    text(148.5, top + height + 14, 4.5,
-      `Squares are ${BOARD.squareMeters * MILLIMETERS_PER_METER} mm; the size does not need to be exact for calibration.`),
-  ]));
-  written.push('calibration-board.svg');
-  for (const item of [image, board, boardDictionary]) item.delete();
   return written;
 }

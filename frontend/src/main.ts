@@ -3,6 +3,7 @@ import { RoomPhotos } from './capture';
 import { element } from './dom';
 import { RoomPreparation } from './preparation';
 import { PhoneTracker } from './phone-tracking';
+import { PhoneLook, PhoneViewpoint } from './phone-view';
 import type { Role, SessionState } from './protocol';
 import { SessionClient } from './session';
 import { DiagnosticScene } from './scene';
@@ -16,7 +17,8 @@ const startButton = element<HTMLButtonElement>('start-xr');
 const endButton = element<HTMLButtonElement>('end-xr');
 const trackButton = element<HTMLButtonElement>('start-tracking');
 const stopTrackingButton = element<HTMLButtonElement>('stop-tracking');
-const calibrateButton = element<HTMLButtonElement>('calibrate-camera');
+const lookButton = element<HTMLButtonElement>('look-around');
+const roomViewHud = element('room-view-hud');
 const overlay = element('xr-overlay');
 let role: Role | null = null;
 let connected = false;
@@ -26,6 +28,9 @@ let state: SessionState | null = null;
 let view: DiagnosticScene | null = null;
 let xr: XRDiagnostic | null = null;
 let tracker: PhoneTracker | null = null;
+let roomViewOpen = false;
+const look = new PhoneLook();
+const viewpoint = new PhoneViewpoint(look);
 
 function showError(message: string): void {
   element('error').textContent = message;
@@ -42,9 +47,19 @@ function controls(): void {
   element('vr-controls').hidden = role !== 'vr_solver';
   element('phone-controls').hidden = role !== 'mobile_master';
   const cameraIdle = tracker?.getMode() === 'off';
-  trackButton.disabled = !connected || !cameraIdle;
-  stopTrackingButton.disabled = cameraIdle !== false;
-  calibrateButton.disabled = !connected || !cameraIdle;
+  trackButton.hidden = !cameraIdle;
+  trackButton.disabled = !connected;
+  stopTrackingButton.hidden = cameraIdle;
+  lookButton.textContent = look.active ? 'Stop turning' : 'Turn with phone';
+}
+
+/** Shows the room full screen on the phone, looking from the phone's place in the room. */
+function setRoomView(open: boolean): void {
+  roomViewOpen = open;
+  roomViewHud.hidden = !open;
+  element('scene').classList.toggle('room-view', open);
+  document.documentElement.classList.toggle('room-view-open', open);
+  if (!open) view?.follow(null);
 }
 
 function alignmentLabel(next: SessionState): string {
@@ -130,6 +145,8 @@ const client = new SessionClient({
       }
       void xr?.end().catch(error => showError(xrError(error)));
       if (tracker?.getMode() !== 'off') tracker?.stop('Tracking stopped because the phone disconnected.');
+      look.stop();
+      setRoomView(false);
     }
     controls();
   },
@@ -151,15 +168,16 @@ try {
   const sceneView = view;
   sceneView.renderer.setAnimationLoop((_time, frame) => {
     xr?.frame(frame);
+    if (roomViewOpen) sceneView.follow(viewpoint.current());
     sceneView.renderer.render(sceneView.scene, sceneView.camera);
   });
   void xr.inspect().catch(error => showError(xrError(error)));
 } catch {
   showError('The 3D view could not start. Enable WebGL/hardware acceleration and reload.');
 }
-tracker = new PhoneTracker(element<HTMLVideoElement>('camera-preview'), {
+tracker = new PhoneTracker(element<HTMLVideoElement>('camera-feed'), {
   publish: pose => client.sendPose(pose),
-  view: pose => view?.follow(pose),
+  measured: pose => viewpoint.measured(pose),
   status: status => {
     const line = element('tracking-status');
     line.textContent = status.message;
@@ -176,6 +194,7 @@ async function connect(roleToJoin: Role): Promise<void> {
   controls();
   try {
     await client.join(roleToJoin);
+    if (roleToJoin === 'mobile_master') setRoomView(true);
   } catch (error) {
     role = null;
     showError(error instanceof Error ? error.message : 'Unable to connect. Try again.');
@@ -205,15 +224,27 @@ disconnectButton.addEventListener('click', () => {
   client.leave();
   endXR();
 });
-const runCamera = (start: (camera: PhoneTracker) => Promise<void>) => {
-  if (!tracker) return;
+/** Shows a problem on the room view's status line too, since the overlay covers the page's error box. */
+function showRoomViewError(error: unknown, fallback: string): void {
+  const message = error instanceof Error ? error.message : fallback;
+  showError(message);
+  element('tracking-status').textContent = message;
+}
+trackButton.addEventListener('click', () => {
   element('error').hidden = true;
-  void start(tracker).catch(error => showError(error instanceof Error ? error.message : 'The camera could not start.'))
-    .finally(controls);
-};
-trackButton.addEventListener('click', () => runCamera(camera => camera.startTracking()));
-calibrateButton.addEventListener('click', () => runCamera(camera => camera.startCalibration()));
+  void tracker?.start().catch(error => showRoomViewError(error, 'The camera could not start.')).finally(controls);
+});
 stopTrackingButton.addEventListener('click', () => tracker?.stop());
+lookButton.addEventListener('click', () => {
+  if (look.active) {
+    look.stop();
+    controls();
+    return;
+  }
+  void look.start().catch(error => showRoomViewError(error, 'Motion access could not start.')).finally(controls);
+});
+element('open-room-view').addEventListener('click', () => setRoomView(true));
+element('close-room-view').addEventListener('click', () => setRoomView(false));
 const confirmAlignment = () => {
   if (!connected) return;
   client.sendCalibration(xr?.confirmedAlignment() ?? { yaw: 0, origin: { x: 0, y: 0, z: 0 } });

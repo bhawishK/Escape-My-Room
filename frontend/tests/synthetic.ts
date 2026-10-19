@@ -1,9 +1,9 @@
 /**
- * Synthetic camera frames for tests: printed tags and the calibration board drawn in perspective
- * from a known camera pose and known intrinsics. These are fixtures, not device evidence.
+ * Synthetic camera frames for tests: printed tags drawn in perspective from a known camera pose
+ * and known intrinsics. These are fixtures, not device evidence.
  */
 import cvModule from '@techstark/opencv-js';
-import { BOARD, createBoard, openCV, type Frame, type Mat, type OpenCV } from '../src/vision';
+import { openCV, type Frame, type Mat, type OpenCV } from '../src/vision';
 import type { CameraIntrinsics, Position, TrackingMarker } from '../src/protocol';
 
 let loaded: Promise<{ cv: OpenCV }> | null = null;
@@ -105,38 +105,6 @@ export function renderMarkers(
   dictionary.delete();
   const frame = toFrame(cv, gray);
   gray.delete();
-  return frame;
-}
-
-/**
- * The calibration board held `distance` meters in front of the camera, turned by the Rodrigues
- * vector `tilt`. The board's own frame is the one its corner coordinates use.
- */
-export function renderBoard(cv: OpenCV, intrinsics: CameraIntrinsics, tilt: [number, number, number], distance: number): Frame {
-  const raw = cv as unknown as { Rodrigues(a: Mat, b: Mat): void };
-  const { board, dictionary } = createBoard(cv);
-  const margin = 60;
-  const pixelsPerMeter = 6000;
-  const image = new cv.Mat();
-  const width = Math.round(BOARD.columns * BOARD.squareMeters * pixelsPerMeter) + 2 * margin;
-  const height = Math.round(BOARD.rows * BOARD.squareMeters * pixelsPerMeter) + 2 * margin;
-  board.generateImage(new cv.Size(width, height), image, margin, 1);
-  const rvec = cv.matFromArray(3, 1, cv.CV_64F, tilt);
-  const rotation = new cv.Mat();
-  raw.Rodrigues(rvec, rotation);
-  const r = rotation.data64F;
-  const center = [BOARD.columns * BOARD.squareMeters / 2, BOARD.rows * BOARD.squareMeters / 2];
-  const targets = ([[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]] as const).map(([u, v]) => {
-    // Board coordinates relative to its center, turned, then pushed out to the distance.
-    const x = (u - margin) / pixelsPerMeter - center[0];
-    const y = (v - margin) / pixelsPerMeter - center[1];
-    const cam = [r[0] * x + r[1] * y, r[3] * x + r[4] * y, r[6] * x + r[7] * y + distance];
-    return [intrinsics.fx * cam[0] / cam[2] + intrinsics.cx, intrinsics.fy * cam[1] / cam[2] + intrinsics.cy] as [number, number];
-  });
-  const gray = blank(cv, intrinsics);
-  paste(cv, gray, image, targets);
-  const frame = toFrame(cv, gray);
-  for (const item of [image, rvec, rotation, gray, board, dictionary]) item.delete();
   return frame;
 }
 

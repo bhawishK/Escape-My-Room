@@ -9,10 +9,13 @@ const emptyRoom = (): SessionState['room'] => ({
   entities: [], markers: [], loaded_by: { mobile_master: null, vr_solver: null },
 });
 
+const OVERVIEW_FOV = 60;
+const PHONE_VIEW_FOV = 70;
+
 export class DiagnosticScene {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
-  readonly camera = new THREE.PerspectiveCamera(60, 1, 0.01, 100);
+  readonly camera = new THREE.PerspectiveCamera(OVERVIEW_FOV, 1, 0.01, 100);
   private readonly marker: THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>;
   private readonly grid: THREE.GridHelper;
   private readonly loader = new GLTFLoader();
@@ -20,7 +23,7 @@ export class DiagnosticScene {
   private readonly roomAnchor = new THREE.Group();
   private roomGroup: THREE.Group | null = null;
   private presenting = false;
-  /** This phone's own measured pose, which its view follows while it tracks. */
+  /** The pose this phone's full-screen room view looks from. */
   private following: RoomPose | null = null;
   private alignment: AlignmentState = { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } };
   private entityRoots = new Map<string, THREE.Object3D>();
@@ -90,11 +93,17 @@ export class DiagnosticScene {
   /** Moves this device's view to its measured room pose, or back to the default view with null. */
   follow(pose: RoomPose | null): void {
     this.following = pose;
+    // The phone's view spans about what its camera sees along the screen's long side.
+    const fov = pose ? PHONE_VIEW_FOV : OVERVIEW_FOV;
+    if (this.camera.fov !== fov) {
+      this.camera.fov = fov;
+      this.camera.updateProjectionMatrix();
+    }
     if (pose) {
       this.marker.visible = false;
       this.camera.position.set(pose.position.x, pose.position.y, pose.position.z);
       this.camera.quaternion.set(pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w);
-      this.container.dataset.view = 'tracked';
+      this.container.dataset.view = 'phone';
     } else {
       this.applyView(this.alignment);
     }
@@ -173,7 +182,7 @@ export class DiagnosticScene {
       this.camera.position.set(0, 1.6, 2.4);
       this.camera.lookAt(0, 0.6, -1.2);
     }
-    this.container.dataset.view = this.following ? 'tracked' : aligned ? 'calibrated' : 'overview';
+    this.container.dataset.view = this.following ? 'phone' : aligned ? 'calibrated' : 'overview';
     this.paintStatus(aligned ? 'Aligned' : 'Press A');
     this.statusLabel.visible = this.presenting;
   }

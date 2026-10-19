@@ -17,7 +17,7 @@ const servers: TestServer[] = [
 
 // One fresh capture store per run. Workers inherit the variable, so they agree with the servers.
 process.env.ESCAPE_ROOM_TEST_DATA ??= mkdtempSync(join(tmpdir(), 'escape-my-room-captures-'));
-// Synthetic camera videos, written by the global setup before any browser starts.
+// A synthetic camera video, written by the global setup before any browser starts.
 process.env.ESCAPE_ROOM_FAKE_CAMERA ??= mkdtempSync(join(tmpdir(), 'escape-my-room-camera-'));
 const fakeCamera = (video: string) => ({
   launchOptions: {
@@ -43,8 +43,6 @@ export default defineConfig({
     { name: 'default', testIgnore: /camera-.*\.spec\.ts/ },
     // The camera sees the stand-in room's desk tag from a known pose, then nothing, in a loop.
     { name: 'marker-camera', testMatch: /camera-tracking\.spec\.ts/, use: fakeCamera('desk-marker.y4m') },
-    // The camera sees the calibration board in a series of tilts.
-    { name: 'board-camera', testMatch: /camera-calibration\.spec\.ts/, use: fakeCamera('board.y4m') },
   ],
   webServer: servers.map(({ port, room, settings }) => ({
     command: `"${python}" -m uvicorn backend.app:app --app-dir "${root}" --host 127.0.0.1 --port ${port}`,

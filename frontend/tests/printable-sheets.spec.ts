@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeSheets } from '../scripts/markers';
-import { BoardCalibrator, MarkerLocator, type Frame } from '../src/vision';
+import { MarkerLocator, type Frame } from '../src/vision';
 import { loadOpenCV } from './synthetic';
 
 const DOCS = join(import.meta.dirname, '..', '..', 'docs', 'markers');
@@ -48,10 +48,4 @@ test('the printed desk tag reads as tag 0, upright, at its printed size', async 
   // Upright and centered means the camera sits 1 m straight out from the tag's face.
   const { x, y, z } = located.pose.position;
   expect(Math.hypot(x, y, z - 1)).toBeLessThan(0.005);
-});
-
-test('the printed calibration board shows all of its inner corners', async ({ page }) => {
-  const { cv } = await loadOpenCV();
-  const frame = await rasterize(page, 'calibration-board.svg', 3);
-  expect(new BoardCalibrator(cv).addView(frame)).toEqual({ corners: 24, kept: true });
 });

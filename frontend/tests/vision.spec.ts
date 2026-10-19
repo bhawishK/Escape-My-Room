@@ -1,8 +1,8 @@
 import { expect, test } from '@playwright/test';
 import { processingSize, resizeIntrinsics, type RoomPose } from '../src/marker-geometry';
 import type { CameraIntrinsics, Position, TrackingMarker } from '../src/protocol';
-import { BoardCalibrator, MarkerLocator, type OpenCV } from '../src/vision';
-import { loadOpenCV, lookAt, renderBoard, renderMarkers, type CameraView } from './synthetic';
+import { MarkerLocator, type OpenCV } from '../src/vision';
+import { loadOpenCV, lookAt, renderMarkers, type CameraView } from './synthetic';
 
 // Synthetic frames from known poses check the measurement math; they are not device evidence.
 const CAMERA: CameraIntrinsics = { width: 960, height: 540, fx: 760, fy: 760, cx: 479.5, cy: 269.5, distortion: [0, 0, 0, 0, 0] };
@@ -90,23 +90,4 @@ test('intrinsics follow a frame resized for processing', () => {
   const resized = resizeIntrinsics(video, size.width, size.height);
   expect(resized).toEqual({ ...CAMERA });
   expect(processingSize(720, 1280, 960)).toEqual({ width: 540, height: 960 });
-});
-
-test('board views recover the camera intrinsics', () => {
-  const truth: CameraIntrinsics = { ...CAMERA, fx: 742, fy: 745, cx: 486, cy: 262 };
-  const calibrator = new BoardCalibrator(cv);
-  const tilts: [number, number, number][] = [
-    [0, 0, 0], [0.35, 0, 0], [-0.35, 0, 0], [0, 0.35, 0], [0, -0.35, 0], [0.25, 0.25, 0.1],
-    [-0.25, 0.3, -0.1], [0.3, -0.25, 0.2], [-0.3, -0.3, 0], [0.15, 0.4, 0.3], [0.4, 0.1, -0.2], [-0.1, -0.4, 0.1],
-  ];
-  for (const [index, tilt] of tilts.entries()) {
-    expect(calibrator.addView(renderBoard(cv, truth, tilt, 0.32 + 0.02 * (index % 3))).kept).toBe(true);
-  }
-  const { intrinsics, rmsPx } = calibrator.solve();
-  expect(rmsPx).toBeLessThan(0.5);
-  expect(Math.abs(intrinsics.fx / truth.fx - 1)).toBeLessThan(0.01);
-  expect(Math.abs(intrinsics.fy / truth.fy - 1)).toBeLessThan(0.01);
-  expect(Math.abs(intrinsics.cx - truth.cx)).toBeLessThan(6);
-  expect(Math.abs(intrinsics.cy - truth.cy)).toBeLessThan(6);
-  expect(intrinsics.distortion).toHaveLength(5);
 });

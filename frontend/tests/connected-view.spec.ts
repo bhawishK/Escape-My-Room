@@ -20,7 +20,7 @@ test('phone sees VR connect and disconnect without session IDs or simulator cont
   await vr.close();
 });
 
-test('the phone offers camera tracking and the headset offers VR', async ({ browser }) => {
+test('the phone opens the room full screen and the headset offers VR', async ({ browser }) => {
   const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
   const vr = await browser.newPage();
   // iPhone browsers expose no WebXR; the phone page must not depend on it.
@@ -28,16 +28,50 @@ test('the phone offers camera tracking and the headset offers VR', async ({ brow
   await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
   await expect(phone.getByTestId('connection')).toHaveText('Connected · Phone');
+  // The room fills the screen, looking from the floor center toward the desk.
+  await expect(phone.locator('#scene')).toHaveClass(/room-view/);
+  await expect(phone.locator('#scene')).toHaveAttribute('data-view', 'phone');
+  expect(await phone.locator('#scene').boundingBox()).toEqual({ x: 0, y: 0, width: 390, height: 844 });
+  await expect(phone.getByRole('button', { name: 'Turn with phone', exact: true })).toBeVisible();
   await expect(phone.getByRole('button', { name: 'Start tracking', exact: true })).toBeEnabled();
-  await expect(phone.getByRole('button', { name: 'Calibrate camera', exact: true })).toBeEnabled();
   await expect(phone.getByRole('button', { name: 'Enter VR', exact: true })).toBeHidden();
-  await expect(phone.getByTestId('marker-position')).toHaveText('No accepted position');
+  await expect(phone.getByTestId('tracking-status')).toHaveText('Tracking off');
+  // Close returns to the page; the room view opens again from the page.
+  await phone.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(phone.locator('#scene')).not.toHaveClass(/room-view/);
+  await expect(phone.locator('#scene')).toHaveAttribute('data-view', 'overview');
+  await phone.getByRole('button', { name: 'Open room view', exact: true }).click();
+  await expect(phone.locator('#scene')).toHaveAttribute('data-view', 'phone');
   await vr.goto('/');
   await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
   await expect(vr.getByRole('button', { name: 'Enter VR', exact: true })).toBeVisible();
-  await expect(vr.getByRole('button', { name: 'Start tracking', exact: true })).toBeHidden();
+  await expect(vr.locator('#scene')).not.toHaveClass(/room-view/);
+  await expect(vr.getByRole('button', { name: 'Open room view', exact: true })).toBeHidden();
   await phone.close();
   await vr.close();
+});
+
+test('turning with the phone follows its orientation sensor', async ({ page }) => {
+  // The person allows motion access when the phone asks.
+  await page.addInitScript(() => Object.assign(DeviceOrientationEvent, { requestPermission: async () => 'granted' }));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await page.getByRole('button', { name: 'Turn with phone', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Stop turning', exact: true })).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new DeviceOrientationEvent('deviceorientation', { alpha: 0, beta: 90, gamma: 0 })));
+  await page.getByRole('button', { name: 'Stop turning', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Turn with phone', exact: true })).toBeVisible();
+});
+
+test('a refused motion permission is explained', async ({ page }) => {
+  // iPhone browsers ask for motion permission; this one says no.
+  await page.addInitScript(() => Object.assign(DeviceOrientationEvent, { requestPermission: async () => 'denied' }));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await page.getByRole('button', { name: 'Turn with phone', exact: true }).click();
+  await expect(page.getByTestId('tracking-status')).toHaveText(
+    'Motion permission was denied. Allow motion access for this site, then try again.');
+  await expect(page.getByRole('button', { name: 'Turn with phone', exact: true })).toBeVisible();
 });
 
 test('Quest entry requests VR and reports permission denial without disconnecting', async ({ page }) => {

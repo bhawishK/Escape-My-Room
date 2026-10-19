@@ -67,14 +67,6 @@ Malformed JSON, binary frames, schema violations, solver publications, and repea
 
 `room.markers` lists the printed AprilTags (36h11) the phone locates itself against. Each has `id` (0–586), `label`, `size` (the black square's edge in meters), `position` (the square's center) and `rotation`. In a tag's own frame +X is the printed tag's right, +Y its top, and +Z out of its face. The stand-in room has tag 0 on the desk's front face; the multi-asset fixture has none, so a phone cannot track in it. Duplicate IDs, IDs out of range, or a size outside (0, 1] m make the room unavailable.
 
-## Camera calibrations
-
-`GET /api/tracking/cameras` returns `{ "calibrations": [...] }`. `PUT /api/tracking/cameras` saves one and returns it with `recorded_at`; it replaces any earlier calibration at the same `width` × `height`. A calibration has `width`, `height`, `fx`, `fy`, `cx`, `cy` (pixels of that video size), `distortion` (`k1, k2, p1, p2, k3`), `rms_px`, `views` (5–200) and `user_agent`. The principal point must lie inside the image, and `rms_px` must be at most 2.0. Refusals return HTTP 400 with a message for the user. Calibrations are stored in `tracking/cameras.json` under the data directory and survive restarts.
-
-A client that has drawn the model sends `{ "type": "room_loaded", "room_version": 1 }`. A version other than the server's room version returns `room_version_mismatch` and that socket is closed, so it does not remain in the session. `loaded_by` records the version each connected role has acknowledged.
-
-`{ "type": "entity_transform", "id": "box", "position": { "x": 0.25, "y": 0.0, "z": 0.1 } }` changes only that entity. Static furniture returns `entity_not_movable` and does not change any position. An unknown ID returns `unknown_entity`. This proves the movable item is independently addressable. It is not phone manipulation; selection and phone movement remain later issues.
-
 ## Render accepted state
 
 Both clients render the Python-accepted marker and the prepared room. Each distinct `asset_url` is loaded once. Every entity gets its own placement root at the manifest position and rotation, and its node keeps its child transforms. Nothing is drawn until every asset has loaded. The floor, desk, and cabinet stay fixed. The box is a separate object. A failed asset load shows the asset name and removes any partial room. The phone's marker is drawn in room meters with the furniture, so the headset sees it where the phone is in the room. A tracking phone draws no marker for itself; its view follows its own measured pose instead. Manual coordinate controls have been removed.

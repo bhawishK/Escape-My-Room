@@ -138,6 +138,18 @@ export function resizeIntrinsics(
   };
 }
 
+/**
+ * The iPhone 16 main camera's video intrinsics, estimated rather than calibrated. Its 26 mm-equivalent
+ * lens spans about 67° across the sensor's long side, so the focal length is about 0.75 of the long
+ * side in pixels. An error here scales every distance from the tag by the same ratio.
+ */
+export const FOCAL_PER_LONG_SIDE = 0.75;
+
+export function assumedIntrinsics(width: number, height: number): CameraIntrinsics {
+  const focal = FOCAL_PER_LONG_SIDE * Math.max(width, height);
+  return { width, height, fx: focal, fy: focal, cx: (width - 1) / 2, cy: (height - 1) / 2, distortion: [0, 0, 0, 0, 0] };
+}
+
 /** The processing size for a video frame: its long side at most `longSide`, aspect kept. */
 export function processingSize(width: number, height: number, longSide: number): ImageSize {
   const scale = Math.min(1, longSide / Math.max(width, height));

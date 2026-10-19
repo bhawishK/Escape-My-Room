@@ -42,13 +42,6 @@ export interface CameraIntrinsics {
   distortion: number[];
 }
 
-export interface CameraCalibration extends CameraIntrinsics {
-  rms_px: number;
-  views: number;
-  user_agent: string;
-  recorded_at: string;
-}
-
 export interface RoomState {
   available: boolean;
   room_version: number | null;

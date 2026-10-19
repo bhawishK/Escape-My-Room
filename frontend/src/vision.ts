@@ -1,9 +1,9 @@
 /**
- * Camera measurement with OpenCV.js: locating the phone from the room's AprilTags, and calibrating
- * its camera from a printed ChArUco board. OpenCV is passed in, so the worker and Node tests share it.
+ * Camera measurement with OpenCV.js: locating the phone in the room from the room's AprilTags.
+ * OpenCV is passed in, so the worker and the Node tests share this code.
  */
 import {
-  markerCorners, roomFromMarkerPnP, roomPoseFromPnP, squareCorners, type ImageSize, type RoomPose,
+  markerCorners, roomFromMarkerPnP, roomPoseFromPnP, squareCorners, type RoomPose,
 } from './marker-geometry';
 import type { CameraIntrinsics, TrackingMarker } from './protocol';
 
@@ -17,47 +17,28 @@ export interface Mat {
   data64F: Float64Array;
   delete(): void;
 }
-export interface MatVector { size(): number; get(index: number): Mat; push_back(mat: Mat): void; delete(): void }
+export interface MatVector { size(): number; get(index: number): Mat; delete(): void }
 interface Deletable { delete(): void }
 interface Dictionary extends Deletable { generateImageMarker(id: number, side: number, out: Mat, borderBits: number): void }
 interface DetectorParameters extends Deletable { cornerRefinementMethod: number }
 interface ArucoDetector extends Deletable { detectMarkers(image: Mat, corners: MatVector, ids: Mat, rejected: MatVector): void }
-interface CharucoBoard extends Deletable {
-  generateImage(size: object, out: Mat, margin: number, borderBits: number): void;
-  getChessboardCorners(): { size(): number; get(index: number): { x: number; y: number } };
-}
-interface CharucoDetector extends Deletable {
-  detectBoard(image: Mat, corners: Mat, ids: Mat, markerCorners: MatVector, markerIds: Mat): void;
-}
 export interface OpenCV {
   Mat: { new(): Mat; new(rows: number, cols: number, type: number): Mat };
   MatVector: new () => MatVector;
   Size: new (width: number, height: number) => object;
-  TermCriteria: new (type: number, count: number, epsilon: number) => object;
   matFromArray(rows: number, cols: number, type: number, data: ArrayLike<number>): Mat;
   cvtColor(src: Mat, dst: Mat, code: number): void;
   solvePnP(object: Mat, image: Mat, camera: Mat, distortion: Mat, rvec: Mat, tvec: Mat, guess: boolean, flags: number): boolean;
   Rodrigues(src: Mat, dst: Mat): void;
   projectPoints(object: Mat, rvec: Mat, tvec: Mat, camera: Mat, distortion: Mat, out: Mat): void;
-  calibrateCameraExtended(
-    object: MatVector, image: MatVector, size: object, camera: Mat, distortion: Mat, rvecs: MatVector, tvecs: MatVector,
-    intrinsicDeviations: Mat, extrinsicDeviations: Mat, viewErrors: Mat, flags: number, criteria: object,
-  ): number;
   getPredefinedDictionary(id: number): Dictionary;
   aruco_DetectorParameters: new () => DetectorParameters;
   aruco_RefineParameters: new (minRepDistance: number, errorCorrectionRate: number, checkAllOrders: boolean) => Deletable;
   aruco_ArucoDetector: new (dictionary: Dictionary, parameters: DetectorParameters, refine: Deletable) => ArucoDetector;
-  aruco_CharucoBoard: new (size: object, square: number, marker: number, dictionary: Dictionary, ids: Mat) => CharucoBoard;
-  aruco_CharucoParameters: new () => Deletable;
-  aruco_CharucoDetector: new (
-    board: CharucoBoard, charuco: Deletable, parameters: DetectorParameters, refine: Deletable,
-  ) => CharucoDetector;
   CV_8UC1: number; CV_8UC4: number; CV_32FC2: number; CV_32FC3: number; CV_64F: number; CV_64FC2: number; CV_64FC3: number;
   COLOR_RGBA2GRAY: number; CORNER_REFINE_SUBPIX: number;
   SOLVEPNP_IPPE_SQUARE: number; SOLVEPNP_SQPNP: number;
-  DICT_APRILTAG_36h11: number; DICT_5X5_100: number;
-  CALIB_FIX_K3: number; CALIB_ZERO_TANGENT_DIST: number;
-  TermCriteria_COUNT: number; TermCriteria_EPS: number;
+  DICT_APRILTAG_36h11: number;
 }
 
 /**
@@ -91,13 +72,6 @@ function freeAfter<T>(work: (owned: Deletable[]) => T): T {
   }
 }
 
-/** Settings both detectors share: sub-pixel corners, and OpenCV's default refinement of 10 px, rate 3, all orders. */
-function detectorSettings(cv: OpenCV): { parameters: DetectorParameters; refine: Deletable } {
-  const parameters = new cv.aruco_DetectorParameters();
-  parameters.cornerRefinementMethod = cv.CORNER_REFINE_SUBPIX;
-  return { parameters, refine: new cv.aruco_RefineParameters(10, 3, true) };
-}
-
 /** An RGBA frame as a canvas delivers it. */
 export interface Frame { width: number; height: number; rgba: Uint8ClampedArray }
 
@@ -128,7 +102,10 @@ export class MarkerLocator {
 
   constructor(private readonly cv: OpenCV) {
     this.dictionary = cv.getPredefinedDictionary(cv.DICT_APRILTAG_36h11);
-    ({ parameters: this.parameters, refine: this.refine } = detectorSettings(cv));
+    this.parameters = new cv.aruco_DetectorParameters();
+    this.parameters.cornerRefinementMethod = cv.CORNER_REFINE_SUBPIX;
+    // OpenCV's default refinement: 10 px, error-correction rate 3, all corner orders checked.
+    this.refine = new cv.aruco_RefineParameters(10, 3, true);
     this.detector = new cv.aruco_ArucoDetector(this.dictionary, this.parameters, this.refine);
   }
 
@@ -210,126 +187,5 @@ export class MarkerLocator {
       }
       return { kind: 'tracked', pose, markerIds: usedIds, reprojectionPx };
     });
-  }
-}
-
-/**
- * The printed calibration board: 7 x 5 squares of 30 mm with 22 mm 5x5 ArUco markers. It uses a
- * different dictionary from the room's AprilTags, so neither is mistaken for the other.
- */
-export const BOARD = { columns: 7, rows: 5, squareMeters: 0.03, markerMeters: 0.022 } as const;
-/** A view with fewer inner board corners than this does not constrain the camera well. */
-export const MIN_BOARD_CORNERS = 12;
-
-export function createBoard(cv: OpenCV): { board: CharucoBoard; dictionary: Dictionary } {
-  const dictionary = cv.getPredefinedDictionary(cv.DICT_5X5_100);
-  const ids = new cv.Mat();
-  const board = new cv.aruco_CharucoBoard(
-    new cv.Size(BOARD.columns, BOARD.rows), BOARD.squareMeters, BOARD.markerMeters, dictionary, ids);
-  ids.delete();
-  return { board, dictionary };
-}
-
-/** Collects views of the printed board and solves the camera's intrinsics from them. */
-export class BoardCalibrator {
-  private readonly board: CharucoBoard;
-  private readonly detector: CharucoDetector;
-  private readonly parameters: DetectorParameters;
-  private readonly refine: Deletable;
-  private readonly charuco: Deletable;
-  private readonly boardCorners: { x: number; y: number }[] = [];
-  private readonly objectViews: number[][] = [];
-  private readonly imageViews: number[][] = [];
-  private size: ImageSize | null = null;
-
-  constructor(private readonly cv: OpenCV) {
-    const { board, dictionary } = createBoard(cv);
-    // The board keeps its own copy of the dictionary.
-    dictionary.delete();
-    this.board = board;
-    ({ parameters: this.parameters, refine: this.refine } = detectorSettings(cv));
-    this.charuco = new cv.aruco_CharucoParameters();
-    this.detector = new cv.aruco_CharucoDetector(this.board, this.charuco, this.parameters, this.refine);
-    const corners = this.board.getChessboardCorners();
-    for (let index = 0; index < corners.size(); index++) this.boardCorners.push(corners.get(index));
-  }
-
-  get views(): number { return this.imageViews.length; }
-
-  /** Detects the board; keeps the view when enough corners are found. Returns the corner count. */
-  addView(frame: Frame): { corners: number; kept: boolean } {
-    const cv = this.cv;
-    return freeAfter(owned => {
-      if (this.size && (this.size.width !== frame.width || this.size.height !== frame.height)) {
-        this.reset();
-      }
-      const gray = grayFrom(cv, frame, owned);
-      const corners = new cv.Mat();
-      const ids = new cv.Mat();
-      const markerCorners = new cv.MatVector();
-      const markerIds = new cv.Mat();
-      owned.push(corners, ids, markerCorners, markerIds);
-      this.detector.detectBoard(gray, corners, ids, markerCorners, markerIds);
-      const count = corners.rows;
-      if (count < MIN_BOARD_CORNERS) return { corners: count, kept: false };
-      const object: number[] = [];
-      for (const id of Array.from(ids.data32S)) {
-        const point = this.boardCorners[id];
-        object.push(point.x, point.y, 0);
-      }
-      this.objectViews.push(object);
-      this.imageViews.push(Array.from(corners.data32F));
-      this.size = { width: frame.width, height: frame.height };
-      return { corners: count, kept: true };
-    });
-  }
-
-  /** Intrinsics for frames of the kept views' size, and the RMS reprojection error in pixels. */
-  solve(): { intrinsics: CameraIntrinsics; rmsPx: number } {
-    const cv = this.cv;
-    const size = this.size;
-    if (!size || this.views === 0) throw new Error('No board views were kept.');
-    return freeAfter(owned => {
-      const objects = new cv.MatVector();
-      const images = new cv.MatVector();
-      owned.push(objects, images);
-      this.objectViews.forEach((object, index) => {
-        const objectMat = cv.matFromArray(object.length / 3, 1, cv.CV_32FC3, object);
-        const imageMat = cv.matFromArray(object.length / 3, 1, cv.CV_32FC2, this.imageViews[index]);
-        objects.push_back(objectMat);
-        images.push_back(imageMat);
-        objectMat.delete();
-        imageMat.delete();
-      });
-      const camera = new cv.Mat();
-      const distortion = new cv.Mat();
-      const rvecs = new cv.MatVector();
-      const tvecs = new cv.MatVector();
-      const intrinsicDeviations = new cv.Mat();
-      const extrinsicDeviations = new cv.Mat();
-      const viewErrors = new cv.Mat();
-      owned.push(camera, distortion, rvecs, tvecs, intrinsicDeviations, extrinsicDeviations, viewErrors);
-      // Phone video is largely corrected for lens distortion; k1 and k2 absorb what remains.
-      const flags = cv.CALIB_FIX_K3 | cv.CALIB_ZERO_TANGENT_DIST;
-      const criteria = new cv.TermCriteria(cv.TermCriteria_COUNT + cv.TermCriteria_EPS, 50, 1e-7);
-      const rmsPx = cv.calibrateCameraExtended(
-        objects, images, new cv.Size(size.width, size.height), camera, distortion, rvecs, tvecs,
-        intrinsicDeviations, extrinsicDeviations, viewErrors, flags, criteria);
-      const k = camera.data64F;
-      return {
-        intrinsics: {
-          width: size.width, height: size.height,
-          fx: k[0], fy: k[4], cx: k[2], cy: k[5],
-          distortion: Array.from(distortion.data64F).slice(0, 5),
-        },
-        rmsPx,
-      };
-    });
-  }
-
-  reset(): void {
-    this.objectViews.length = 0;
-    this.imageViews.length = 0;
-    this.size = null;
   }
 }
