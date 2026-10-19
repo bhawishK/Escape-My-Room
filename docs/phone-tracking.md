@@ -44,6 +44,8 @@ Automated, desktop only:
 
 On a real iPhone: turning works, as reported by the user on 19 October 2026. Landscape, permission refusal, and drift over time are not recorded.
 
+A separate spike tests pointing at objects with the eyes or head through the front camera; see [gaze cursor](gaze-cursor.md). The front camera sees the face, not the room, so it cannot measure the phone's position.
+
 ## Later work
 
 - **Issue 19:** choose and build a way to measure the phone's position.

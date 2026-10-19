@@ -28,4 +28,5 @@ The agreed first target is **iPhone 16 Chrome for the mobile page and Meta Quest
 - [Start the diagnostic](docs/diagnostic-startup.md) — installation, HTTPS/WSS, and checks.
 - [Connection and pose contract](docs/diagnostic-protocol.md) — shared device status, validation, and the phone's pose message.
 - [Phone view and tracking](docs/phone-tracking.md) — the room view, turning, the dropped printed-tag attempt, and the options for position.
+- [Gaze cursor spike](docs/gaze-cursor.md) — pointing at room objects with the eyes or head through the front camera, and how to measure its accuracy on the phone.
 - [Device smoke-check record](docs/device-smoke-check.md) — approved scope adjustment, evidence, and remaining manual checks.

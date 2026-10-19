@@ -1,6 +1,7 @@
 import './style.css';
 import { RoomPhotos } from './capture';
 import { element } from './dom';
+import { GazeCursor } from './gaze-cursor';
 import { RoomPreparation } from './preparation';
 import { PhoneLook, phoneViewpoint } from './phone-view';
 import type { Role, SessionState } from './protocol';
@@ -26,6 +27,19 @@ let view: DiagnosticScene | null = null;
 let xr: XRDiagnostic | null = null;
 let roomViewOpen = false;
 const look = new PhoneLook();
+const gazeButton = element<HTMLButtonElement>('gaze-toggle');
+const gazeModeButton = element<HTMLButtonElement>('gaze-mode');
+const gaze = new GazeCursor({
+  video: element<HTMLVideoElement>('gaze-camera'), cursor: element('gaze-cursor'), layer: element('gaze-layer'),
+  dot: element('gaze-dot'), prompt: element('gaze-prompt'),
+}, {
+  status: message => { element('view-status').textContent = message; },
+  phase: () => controls(),
+  hover: point => {
+    const id = view?.pointAt(point) ?? null;
+    return id && (state?.room.entities.find(entity => entity.id === id)?.label ?? id);
+  },
+});
 
 function showError(message: string): void {
   element('error').textContent = message;
@@ -42,6 +56,11 @@ function controls(): void {
   element('vr-controls').hidden = role !== 'vr_solver';
   element('phone-controls').hidden = role !== 'mobile_master';
   lookButton.textContent = look.active ? 'Stop turning' : 'Turn with phone';
+  gazeButton.textContent = gaze.getPhase() === 'off' ? 'Gaze cursor' : 'Stop gaze cursor';
+  gazeButton.disabled = !connected;
+  const pointing = gaze.getPhase() === 'tracking';
+  for (const id of ['gaze-mode', 'gaze-calibrate', 'gaze-test']) element(id).hidden = !pointing;
+  gazeModeButton.textContent = gaze.getMode() === 'eyes' ? 'Switch to head' : 'Switch to eyes';
 }
 
 /** Shows the room full screen on the phone, looking from the phone's place in the room. */
@@ -50,7 +69,10 @@ function setRoomView(open: boolean): void {
   roomViewHud.hidden = !open;
   element('scene').classList.toggle('room-view', open);
   document.documentElement.classList.toggle('room-view-open', open);
-  if (!open) view?.follow(null);
+  if (!open) {
+    gaze.stop();
+    view?.follow(null);
+  }
 }
 
 function alignmentLabel(next: SessionState): string {
@@ -216,6 +238,21 @@ lookButton.addEventListener('click', () => {
     element('view-status').textContent = 'Turning with the phone';
   }).catch(error => showRoomViewError(error, 'Motion access could not start.')).finally(controls);
 });
+gazeButton.addEventListener('click', () => {
+  if (gaze.getPhase() !== 'off') {
+    gaze.stop();
+    return;
+  }
+  element('error').hidden = true;
+  void gaze.start().catch(error => showRoomViewError(error, 'The gaze cursor could not start.')).finally(controls);
+});
+gazeModeButton.addEventListener('click', () => {
+  gaze.setMode(gaze.getMode() === 'eyes' ? 'head' : 'eyes');
+  controls();
+});
+element('gaze-calibrate').addEventListener('click', () => gaze.calibrate());
+element('gaze-test').addEventListener('click', () => gaze.test());
+element('gaze-cancel').addEventListener('click', () => gaze.cancel());
 element('open-room-view').addEventListener('click', () => setRoomView(true));
 element('close-room-view').addEventListener('click', () => setRoomView(false));
 const confirmAlignment = () => {
@@ -239,7 +276,7 @@ overlay.addEventListener('beforexrselect', event => event.preventDefault());
 element('download-report').addEventListener('click', () => {
   const report = {
     recorded_at: new Date().toISOString(), role, xr: xr?.getReport() ?? null,
-    user_agent: navigator.userAgent,
+    gaze: gaze.report(), user_agent: navigator.userAgent,
     dom_overlay_hold_events: holdEvents, marker: state?.marker ?? null,
     evidence: 'Browser observations only; complete the manual device smoke-test record separately.',
   };

@@ -35,7 +35,7 @@
           </div>
           <div id="phone-controls" hidden>
             <button id="open-room-view">Open room view</button>
-            <p class="hint">The room fills the screen. <strong>Turn with phone</strong> looks around as you turn. Walking does not move the view yet.</p>
+            <p class="hint">The room fills the screen. <strong>Turn with phone</strong> looks around as you turn. Walking does not move the view yet. <strong>Gaze cursor</strong> points at objects with your eyes or head through the front camera, after a short calibration.</p>
           </div>
           <p class="hint">iPhone 16 Chrome shows the room full screen and turns it with the phone. Meta Quest 3 uses the immersive VR view.</p>
           <button id="disconnect" class="secondary" disabled>Disconnect</button>
@@ -94,8 +94,20 @@
       <p id="view-status" data-testid="view-status" class="hud-status" role="status">Turning off</p>
       <div class="hud-buttons">
         <button id="look-around">Turn with phone</button>
+        <button id="gaze-toggle">Gaze cursor</button>
+        <button id="gaze-mode" class="secondary" hidden>Switch to head</button>
+        <button id="gaze-calibrate" class="secondary" hidden>Calibrate</button>
+        <button id="gaze-test" class="secondary" hidden>Test accuracy</button>
         <button id="close-room-view" class="secondary">Close</button>
       </div>
+    </div>
+    <!-- The gaze cursor's front camera, shown small so the person can keep their face in view. -->
+    <video id="gaze-camera" muted playsinline aria-label="Front camera" hidden></video>
+    <div id="gaze-cursor" data-testid="gaze-cursor" hidden></div>
+    <div id="gaze-layer" hidden>
+      <p id="gaze-prompt" data-testid="gaze-prompt" class="hud-status" role="status"></p>
+      <span id="gaze-dot"></span>
+      <button id="gaze-cancel" class="secondary">Cancel</button>
     </div>
     <div id="xr-overlay" hidden>
       <p id="xr-hud">Connection diagnostic</p>

@@ -75,6 +75,20 @@ test('a refused motion permission is explained', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Turn with phone', exact: true })).toBeVisible();
 });
 
+test('a refused camera permission for the gaze cursor is explained', async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(navigator, 'mediaDevices', { value: {
+    getUserMedia: async () => { throw new DOMException('Denied for test', 'NotAllowedError'); },
+  } }));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await page.getByRole('button', { name: 'Gaze cursor', exact: true }).click();
+  await expect(page.getByTestId('view-status')).toHaveText(
+    'Camera permission was denied. Allow camera access for this site in the browser settings, then try again.');
+  await expect(page.getByRole('button', { name: 'Gaze cursor', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Calibrate', exact: true })).toBeHidden();
+  await expect(page.getByLabel('Front camera')).toBeHidden();
+});
+
 test('Quest entry requests VR and reports permission denial without disconnecting', async ({ page }) => {
   await page.addInitScript(() => Object.defineProperty(navigator, 'xr', { value: {
     isSessionSupported: async () => true,

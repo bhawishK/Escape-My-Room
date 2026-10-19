@@ -34,6 +34,10 @@ export class DiagnosticScene {
   private readonly statusTexture: THREE.CanvasTexture;
   private readonly statusLabel: THREE.Sprite;
   private statusText = '';
+  private readonly raycaster = new THREE.Raycaster();
+  /** Outlines the object the phone's gaze cursor is over. */
+  private readonly highlight = new THREE.BoxHelper(new THREE.Object3D(), 0xffd399);
+  private highlighted: string | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -70,6 +74,8 @@ export class DiagnosticScene {
     this.statusLabel.position.set(0, 1.45, -0.8);
     this.statusLabel.visible = false;
     this.roomAnchor.add(this.statusLabel);
+    this.highlight.visible = false;
+    this.scene.add(this.highlight);
     container.append(this.renderer.domElement);
     container.dataset.view = 'overview';
     const resize = () => {
@@ -107,6 +113,28 @@ export class DiagnosticScene {
     } else {
       this.applyView(this.alignment);
     }
+  }
+
+  /**
+   * The room entity at a point on the view, 0–1 across and down, outlined until another is
+   * pointed at; null, and no outline, where there is none or for a null point.
+   */
+  pointAt(point: { x: number; y: number } | null): string | null {
+    let found: string | null = null;
+    if (point && this.roomGroup) {
+      this.raycaster.setFromCamera(new THREE.Vector2(point.x * 2 - 1, 1 - point.y * 2), this.camera);
+      const hit = this.raycaster.intersectObject(this.roomGroup, true)[0];
+      for (let object: THREE.Object3D | null = hit?.object ?? null; object && !found; object = object.parent) {
+        for (const [id, root] of this.entityRoots) if (root === object) found = id;
+      }
+    }
+    if (found !== this.highlighted) {
+      this.highlighted = found;
+      const root = found ? this.entityRoots.get(found) : undefined;
+      if (root) this.highlight.setFromObject(root);
+      this.highlight.visible = root !== undefined;
+    }
+    return found;
   }
 
   async syncRoom(state: SessionState): Promise<{ version: number; acknowledge: boolean } | null> {
@@ -152,6 +180,7 @@ export class DiagnosticScene {
     this.roomGroup?.removeFromParent();
     this.roomGroup = null;
     this.entityRoots = new Map();
+    this.pointAt(null);
     this.grid.visible = true;
   }
 
