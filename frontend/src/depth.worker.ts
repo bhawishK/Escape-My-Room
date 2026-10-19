@@ -2,8 +2,9 @@
  * Runs the Metric3D depth model off the page's thread and turns each frame into a floor height,
  * so the room view keeps its frame rate even when inference takes seconds.
  */
-import * as ort from 'onnxruntime-web/webgpu';
-import wasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.jsep.wasm?url';
+import type * as Ort from 'onnxruntime-web';
+import jsepWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.jsep.wasm?url';
+import wasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.wasm?url';
 import { floorHeight, frameDepth, fromFloat16, toFloat16, type FloorResult, type Placement, type Size, type Vec3 } from './floor-height';
 
 /** Metric3D v2 ViT-Small, converted to ONNX by onnx-community (CC0-1.0), pinned to one revision. */
@@ -13,6 +14,8 @@ const MODEL_CACHE = 'depth-model';
 
 /** Which engine to run the model on: the GPU when one works, or the CPU only. */
 export type DepthEngine = 'auto' | 'cpu';
+/** The engine ONNX Runtime actually ran on: the GPU through WebGPU, or the CPU through WebAssembly. */
+export type DepthProvider = 'webgpu' | 'wasm';
 
 export type DepthRequest = { kind: 'load'; engine: DepthEngine } | MeasureRequest;
 
@@ -31,7 +34,7 @@ export interface MeasureRequest {
 
 export type DepthReply =
   | { kind: 'progress'; loaded: number; total: number }
-  | { kind: 'ready'; provider: 'webgpu' | 'wasm'; cached: boolean }
+  | { kind: 'ready'; provider: DepthProvider; cached: boolean }
   /** `gpu` says whether the GPU was in use, so the page can retry on the CPU. */
   | { kind: 'load-failed'; message: string; gpu: boolean }
   | { kind: 'crashed'; message: string; gpu: boolean }
@@ -44,7 +47,7 @@ const scope = self as unknown as {
 };
 const reply = (message: DepthReply) => scope.postMessage(message);
 
-let provider: 'webgpu' | 'wasm' | null = null;
+let provider: DepthProvider | null = null;
 let loading = true;
 const describe = (error: unknown) => (error instanceof Error ? error.message : String(error ?? 'unknown error'));
 /** Any failure, including ones thrown from ONNX Runtime's own callbacks, reaches the page. */
@@ -89,8 +92,19 @@ async function modelBytes(): Promise<{ bytes: Uint8Array; cached: boolean }> {
   return { bytes, cached: false };
 }
 
-async function load(engine: DepthEngine): Promise<ort.InferenceSession> {
-  ort.env.wasm.wasmPaths = { wasm: wasmUrl };
+/** ONNX Runtime, loaded for the chosen engine. */
+let ort: typeof Ort;
+
+async function load(engine: DepthEngine): Promise<Ort.InferenceSession> {
+  // The WebGPU build touches WebGPU even when running on the CPU, and crashed that way in Edge,
+  // so the CPU engine loads the plain WebAssembly build, which has no WebGPU code at all.
+  if (engine === 'cpu') {
+    ort = await import('onnxruntime-web/wasm');
+    ort.env.wasm.wasmPaths = { wasm: wasmUrl };
+  } else {
+    ort = await import('onnxruntime-web/webgpu');
+    ort.env.wasm.wasmPaths = { wasm: jsepWasmUrl };
+  }
   // Threads need a cross-origin isolated page, which this prototype does not set up.
   ort.env.wasm.numThreads = 1;
   const { bytes, cached } = await modelBytes();
@@ -107,7 +121,7 @@ async function load(engine: DepthEngine): Promise<ort.InferenceSession> {
 }
 
 /** The canvas as the model's input: float16 pixel values 0 to 255, planes R, G, B. */
-function pixelTensor(rgba: Uint8ClampedArray, canvas: Size): ort.Tensor {
+function pixelTensor(rgba: Uint8ClampedArray, canvas: Size): Ort.Tensor {
   const plane = canvas.width * canvas.height;
   const values = new Float32Array(plane * 3);
   for (let index = 0; index < plane; index++) {
@@ -119,12 +133,12 @@ function pixelTensor(rgba: Uint8ClampedArray, canvas: Size): ort.Tensor {
 }
 
 /** Float16 output arrives as raw bits, or as numbers where the browser has Float16Array. */
-function floats(tensor: ort.Tensor): Float32Array {
+function floats(tensor: Ort.Tensor): Float32Array {
   const data = tensor.data;
   return data instanceof Uint16Array ? fromFloat16(data) : Float32Array.from(data as ArrayLike<number>);
 }
 
-let session: ort.InferenceSession | null = null;
+let session: Ort.InferenceSession | null = null;
 
 scope.onmessage = async event => {
   const request = event.data;

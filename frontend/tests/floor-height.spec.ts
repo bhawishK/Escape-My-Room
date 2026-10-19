@@ -75,6 +75,17 @@ test('with only a sliver of floor in view, it asks for more floor instead of gue
   expect(floorHeight(map, down)).toEqual({ kind: 'none', reason: 'Too little floor in view. Tilt the phone down.' });
 });
 
+test('gravity a few degrees off still measures the floor, from the floor plane itself', () => {
+  const pitch = 20 * Math.PI / 180;
+  const { map, down } = render(pitch, [{ normal: [0, Math.cos(pitch), Math.sin(pitch)], distance: 1.5 }]);
+  // The phone's sensor reports gravity rolled 4° to the side of the truth.
+  const roll = 4 * Math.PI / 180;
+  const reported: Vec3 = [Math.sin(roll) * down[1], Math.cos(roll) * down[1], down[2]];
+  const result = floorHeight(map, reported);
+  expect(result.kind).toBe('measured');
+  if (result.kind === 'measured') expect(result.height).toBeCloseTo(1.5, 2);
+});
+
 const expectDirection = (actual: readonly number[], expected: readonly number[]) =>
   actual.forEach((value, index) => expect(value).toBeCloseTo(expected[index], 6));
 

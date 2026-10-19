@@ -29,4 +29,5 @@ The agreed first target is **iPhone 16 Chrome for the mobile page and Meta Quest
 - [Connection and pose contract](docs/diagnostic-protocol.md) — shared device status, validation, and the phone's pose message.
 - [Phone view and tracking](docs/phone-tracking.md) — the room view, turning, the dropped printed-tag attempt, and the options for position.
 - [Gaze cursor spike](docs/gaze-cursor.md) — pointing at room objects with the eyes or head through the front camera, and how to measure its accuracy on the phone.
+- [Floor height test](docs/floor-height.md) — estimating the phone's height above the floor from the back camera with an AI depth model (#49), its results so far, and the device check.
 - [Device smoke-check record](docs/device-smoke-check.md) — approved scope adjustment, evidence, and remaining manual checks.

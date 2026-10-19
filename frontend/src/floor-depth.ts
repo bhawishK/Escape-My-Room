@@ -5,7 +5,8 @@
  */
 import { cameraError } from './camera';
 import { gravityInCamera, modelCanvas, placeFrame, type FloorResult } from './floor-height';
-import type { DepthReply, DepthRequest } from './depth.worker';
+import type { DepthEngine, DepthProvider, DepthReply, DepthRequest } from './depth.worker';
+import type { Rotation } from './protocol';
 
 /**
  * The iPhone 16 main camera's lens spans about 67° across the sensor's long side, so its focal
@@ -21,7 +22,9 @@ export type DepthPhase = 'off' | 'starting' | 'measuring';
 
 export interface DepthReport {
   phase: DepthPhase;
-  provider: 'webgpu' | 'wasm' | null;
+  provider: DepthProvider | null;
+  /** From starting to the model being ready: the download the first time, then loading from the cache. */
+  model_load_s: number | null;
   model_cached: boolean | null;
   estimates_m: number[];
   median_m: number | null;
@@ -46,9 +49,13 @@ export class FloorDepth {
   private stream: MediaStream | null = null;
   private worker: Worker | null = null;
   private ready: Promise<Worker> | null = null;
+  /** Once the GPU has failed to run the model, later workers use the CPU only. */
+  private engine: DepthEngine = 'auto';
   private readonly canvas = document.createElement('canvas');
   private estimates: number[] = [];
-  private provider: 'webgpu' | 'wasm' | null = null;
+  private provider: DepthProvider | null = null;
+  private loadStartedAt = 0;
+  private modelLoadMs: number | null = null;
   private cached: boolean | null = null;
   private lastReason: string | null = null;
   private inferenceMs = 0;
@@ -61,7 +68,7 @@ export class FloorDepth {
    */
   constructor(
     private readonly video: HTMLVideoElement,
-    private readonly orientation: () => { x: number; y: number; z: number; w: number } | null,
+    private readonly orientation: () => Rotation | null,
     private readonly events: DepthEvents,
   ) {
     document.addEventListener('visibilitychange', () => {
@@ -77,6 +84,7 @@ export class FloorDepth {
     const center = this.estimates.length ? median(this.estimates) : null;
     return {
       phase: this.phase, provider: this.provider, model_cached: this.cached,
+      model_load_s: this.modelLoadMs === null ? null : Math.round(this.modelLoadMs) / 1000,
       estimates_m: this.estimates.map(value => Math.round(value * 1000) / 1000),
       median_m: center, spread_m: center === null ? null : Math.sqrt(
         this.estimates.reduce((sum, value) => sum + (value - center) ** 2, 0) / this.estimates.length),
@@ -105,6 +113,7 @@ export class FloorDepth {
       this.video.srcObject = stream;
       this.video.hidden = false;
       this.events.status('Loading the depth model…');
+      this.loadStartedAt = performance.now();
       const [, worker] = await Promise.all([this.video.play(), this.ensureWorker(token)]);
       if (token !== this.token) return;
       this.estimates = [];
@@ -137,7 +146,16 @@ export class FloorDepth {
   }
 
   private ensureWorker(token: number): Promise<Worker> {
-    this.ready ??= new Promise<Worker>((resolve, reject) => {
+    this.ready ??= this.spawn(token).catch((error: unknown) => {
+      this.ready = null;
+      throw error;
+    });
+    return this.ready;
+  }
+
+  /** Starts a worker on the current engine; a GPU that cannot run the model falls back to the CPU. */
+  private spawn(token: number): Promise<Worker> {
+    return new Promise<Worker>((resolve, reject) => {
       const worker = new Worker(new URL('./depth.worker.ts', import.meta.url), { type: 'module' });
       worker.onmessage = (event: MessageEvent<DepthReply>) => {
         const message = event.data;
@@ -146,12 +164,19 @@ export class FloorDepth {
           this.events.status(`Downloading the depth model (${Math.round(message.loaded / 1e6)} MB)${share}…`);
         } else if (message.kind === 'ready') {
           this.provider = message.provider;
+          this.modelLoadMs = performance.now() - this.loadStartedAt;
           this.cached = message.cached;
           worker.onmessage = reply => this.receive(reply.data as DepthReply);
           this.worker = worker;
           resolve(worker);
         } else if (message.kind === 'load-failed') {
           worker.terminate();
+          if (message.gpu && this.engine === 'auto') {
+            this.engine = 'cpu';
+            if (token === this.token) this.events.status('The GPU could not run the depth model; switching to the CPU…');
+            resolve(this.spawn(token));
+            return;
+          }
           reject(new Error(`The depth model could not load: ${message.message}. Check the internet connection, then try again.`));
         }
       };
@@ -159,12 +184,8 @@ export class FloorDepth {
         worker.terminate();
         reject(new Error('The depth model could not load. Reload the page and try again.'));
       };
-      worker.postMessage({ kind: 'load', engine: 'auto' } satisfies DepthRequest);
-    }).catch((error: unknown) => {
-      this.ready = null;
-      throw error;
+      worker.postMessage({ kind: 'load', engine: this.engine } satisfies DepthRequest);
     });
-    return this.ready;
   }
 
   /** Sends the current camera frame to the model; the next one goes when this one's answer comes. */
@@ -201,6 +222,16 @@ export class FloorDepth {
       this.worker?.terminate();
       this.worker = null;
       this.ready = null;
+      const token = this.token;
+      if (reply.gpu && this.engine === 'auto' && this.phase === 'measuring') {
+        // The GPU failed part way: carry on with a fresh worker on the CPU.
+        this.engine = 'cpu';
+        this.events.status('The GPU stopped running the depth model; switching to the CPU…');
+        this.ensureWorker(token).then(worker => this.measure(worker, token)).catch((error: unknown) => {
+          if (token === this.token) this.stop(error instanceof Error ? error.message : 'Floor height stopped.');
+        });
+        return;
+      }
       this.stop(`The depth model stopped working: ${reply.message}`);
       return;
     }
@@ -212,7 +243,7 @@ export class FloorDepth {
   }
 
   private show(result: FloorResult): void {
-    const pace = `${(this.readingMs / 1000).toFixed(1)} s per reading`;
+    const pace = `${(this.readingMs / 1000).toFixed(1)} s per reading, ${(this.inferenceMs / 1000).toFixed(1)} s inference`;
     if (result.kind === 'none') {
       this.lastReason = result.reason;
       this.events.status(`${result.reason} · ${pace}`);

@@ -1,8 +1,10 @@
 /**
  * The phone's height above the floor from one depth map: pixels on upward-facing surfaces are
- * placed in 3D, and their distance below the camera along gravity is the camera's height above
- * them. Pure, so the tests run it on synthetic depth maps.
+ * placed in 3D, a plane is fitted through the lowest level surface, and the camera's distance from
+ * it is its height. Also the depth model's input and output formats. Pure, so the tests run it on
+ * synthetic depth maps.
  */
+import type { Rotation } from './protocol';
 
 /** A direction or point in the camera's image frame: x right, y down, z forward. */
 export type Vec3 = readonly [number, number, number];
@@ -30,13 +32,48 @@ const MAX_TILT = Math.cos(20 * Math.PI / 180);
 const BIN_M = 0.02;
 /** A level surface needs this share of the busiest one's points to count, so specks are ignored. */
 const MIN_SUPPORT = 0.15;
-/** Points this close to the chosen surface's level are averaged into its height. */
+/** Points this close to the lowest level, along the sensor's gravity, start the floor plane fit. */
+const FIRST_BAND_M = 0.15;
+/** Points this close to the fitted floor plane are the floor. */
 const SURFACE_BAND_M = 0.05;
+const PLANE_FITS = 3;
 /** Less floor than this share of the picture is too little to measure from. */
 const MIN_FLOOR_SHARE = 0.05;
 
-/** The camera's height above the floor; `down` is the unit direction of gravity in the image frame. */
+/** The component of `p` along the unit direction `n`. */
+const along = (p: Vec3, n: Vec3) => p[0] * n[0] + p[1] * n[1] + p[2] * n[2];
+
+/**
+ * The plane best fitting `points` (least squares): its unit normal, on gravity's side, and its
+ * distance from the camera along it.
+ */
+function fitPlane(points: Vec3[], down: Vec3): { normal: Vec3; distance: number } {
+  const c = [0, 0, 0];
+  for (const p of points) for (let k = 0; k < 3; k++) c[k] += p[k] / points.length;
+  let xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0;
+  for (const p of points) {
+    const x = p[0] - c[0], y = p[1] - c[1], z = p[2] - c[2];
+    xx += x * x; xy += x * y; xz += x * z; yy += y * y; yz += y * z; zz += z * z;
+  }
+  // The normal is the direction of least spread; solve with the axis whose determinant is largest.
+  const dx = yy * zz - yz * yz, dy = xx * zz - xz * xz, dz = xx * yy - xy * xy;
+  let n: Vec3 = dx >= dy && dx >= dz ? [dx, xz * yz - xy * zz, xy * yz - xz * yy] :
+    dy >= dz ? [xz * yz - xy * zz, dy, xy * xz - yz * xx] : [xy * yz - xz * yy, xy * xz - yz * xx, dz];
+  const length = Math.hypot(...n);
+  const center: Vec3 = [c[0], c[1], c[2]];
+  if (!(length > 0)) return { normal: down, distance: along(center, down) };
+  const sign = along(n, down) < 0 ? -1 : 1;
+  n = [sign * n[0] / length, sign * n[1] / length, sign * n[2] / length];
+  return { normal: n, distance: along(center, n) };
+}
+
+/**
+ * The camera's height above the floor: its distance from the plane of the lowest level surface in
+ * view. `down` is gravity in the image frame; it only needs to be roughly right, since the floor's
+ * own plane is fitted.
+ */
 export function floorHeight(map: DepthMap, down: Vec3): FloorResult {
+  const points: Vec3[] = [];
   const heights: number[] = [];
   let seen = 0;
   for (let v = 0; v < map.height; v++) {
@@ -46,11 +83,11 @@ export function floorHeight(map: DepthMap, down: Vec3): FloorResult {
       if (!(z > 0)) continue;
       seen++;
       const n = index * 3;
-      const upward = -(map.normals[n] * down[0] + map.normals[n + 1] * down[1] + map.normals[n + 2] * down[2]);
+      const upward = -along([map.normals[n], map.normals[n + 1], map.normals[n + 2]], down);
       if (upward < MAX_TILT) continue;
-      const x = (u - map.cx) / map.fx * z;
-      const y = (v - map.cy) / map.fy * z;
-      heights.push(x * down[0] + y * down[1] + z * down[2]);
+      const point: Vec3 = [(u - map.cx) / map.fx * z, (v - map.cy) / map.fy * z, z];
+      points.push(point);
+      heights.push(along(point, down));
     }
   }
   if (heights.length === 0) return { kind: 'none', reason: 'No floor in view. Tilt the phone down.' };
@@ -61,16 +98,23 @@ export function floorHeight(map: DepthMap, down: Vec3): FloorResult {
   let lowest = -Infinity;
   for (const [bin, count] of bins) if (count >= MIN_SUPPORT * busiest && bin > lowest) lowest = bin;
   const level = lowest * BIN_M;
-  const floor = heights.filter(h => Math.abs(h - level) <= SURFACE_BAND_M).sort((a, b) => a - b);
-  if (floor.length < MIN_FLOOR_SHARE * seen) return { kind: 'none', reason: 'Too little floor in view. Tilt the phone down.' };
-  return { kind: 'measured', height: floor[Math.floor(floor.length / 2)] };
+  let floor = points.filter((_, index) => Math.abs(heights[index] - level) <= FIRST_BAND_M);
+  for (let fit = 0; fit < PLANE_FITS && floor.length >= 3; fit++) {
+    const plane = fitPlane(floor, down);
+    floor = points.filter(p => Math.abs(along(p, plane.normal) - plane.distance) <= SURFACE_BAND_M);
+    if (fit === PLANE_FITS - 1 && floor.length >= MIN_FLOOR_SHARE * seen) {
+      const distances = floor.map(p => along(p, plane.normal)).sort((a, b) => a - b);
+      return { kind: 'measured', height: distances[Math.floor(distances.length / 2)] };
+    }
+  }
+  return { kind: 'none', reason: 'Too little floor in view. Tilt the phone down.' };
 }
 
 /**
  * Gravity's direction in the camera's image frame, from the camera's room orientation as a
  * Three.js camera holds it (looking along -Z with +Y up, in a frame whose +Y is up).
  */
-export function gravityInCamera(orientation: { x: number; y: number; z: number; w: number }): Vec3 {
+export function gravityInCamera(orientation: Rotation): Vec3 {
   // World up seen from the camera: (0, 1, 0) turned by the inverse rotation.
   const { x, y, z, w } = orientation;
   const up: Vec3 = [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)];
