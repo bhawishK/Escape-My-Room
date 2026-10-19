@@ -110,6 +110,36 @@ export function floorHeight(map: DepthMap, down: Vec3): FloorResult {
   return { kind: 'none', reason: 'Too little floor in view. Tilt the phone down.' };
 }
 
+export type Settled =
+  | { kind: 'settled'; height: number }
+  | { kind: 'more' }
+  | { kind: 'failed'; reason: string };
+
+/** Readings this close together, highest to lowest, agree. */
+const AGREEMENT_M = 0.1;
+const AGREEING_READINGS = 3;
+/** Readings, and frames tried, after which a measurement stops waiting. */
+const MAX_READINGS = 6;
+const MAX_ATTEMPTS = 8;
+
+/**
+ * Whether a height measurement is done: it settles on the median of the last three readings once
+ * they agree, so one outlier is waited out. `attempts` counts every frame tried, floor seen or not.
+ */
+export function settledHeight(readings: readonly number[], attempts: number): Settled {
+  const last = readings.slice(-AGREEING_READINGS);
+  if (last.length === AGREEING_READINGS && Math.max(...last) - Math.min(...last) <= AGREEMENT_M) {
+    return { kind: 'settled', height: [...last].sort((a, b) => a - b)[1] };
+  }
+  if (readings.length >= MAX_READINGS) {
+    return { kind: 'failed', reason: 'The readings kept disagreeing. Hold the phone still with the floor in view, then measure again.' };
+  }
+  if (attempts >= MAX_ATTEMPTS) {
+    return { kind: 'failed', reason: 'Too little floor was seen. Point the camera at open floor, then measure again.' };
+  }
+  return { kind: 'more' };
+}
+
 /**
  * Gravity's direction in the camera's image frame, from the camera's room orientation as a
  * Three.js camera holds it (looking along -Z with +Y up, in a frame whose +Y is up).

@@ -1,10 +1,11 @@
 /**
- * Estimates the phone's height above the floor from its back camera with an AI depth model, so the
- * estimate can be judged on the phone before the room view relies on it. Camera frames stay on
- * the phone; only the depth model is downloaded, once.
+ * Measures the phone's height above the floor from its back camera with an AI depth model, once
+ * per request: it reads until three readings agree, then releases the camera, so the model stops
+ * using the CPU and the room view's height holds still. Camera frames stay on the phone; only the
+ * depth model is downloaded, once, and it stays loaded for the next measurement.
  */
 import { cameraError } from './camera';
-import { gravityInCamera, modelCanvas, placeFrame, type FloorResult } from './floor-height';
+import { gravityInCamera, modelCanvas, placeFrame, settledHeight, type FloorResult } from './floor-height';
 import type { DepthEngine, DepthProvider, DepthReply, DepthRequest } from './depth.worker';
 import type { Rotation } from './protocol';
 
@@ -15,8 +16,6 @@ import type { Rotation } from './protocol';
 const FOCAL_PER_LONG_SIDE = 0.75;
 /** The padding around the frame is Metric3D's mean color, so the model reads it as neutral. */
 const PADDING = 'rgb(124, 116, 104)';
-/** Estimates kept for the reported median and spread. */
-const HISTORY = 10;
 
 export type DepthPhase = 'off' | 'starting' | 'measuring';
 
@@ -26,9 +25,9 @@ export interface DepthReport {
   /** From starting to the model being ready: the download the first time, then loading from the cache. */
   model_load_s: number | null;
   model_cached: boolean | null;
-  estimates_m: number[];
-  median_m: number | null;
-  spread_m: number | null;
+  /** The last measurement's readings, and the height it settled on. */
+  readings_m: number[];
+  height_m: number | null;
   last_reason: string | null;
   inference_ms: number;
   seconds_per_reading: number;
@@ -37,11 +36,9 @@ export interface DepthReport {
 interface DepthEvents {
   status: (message: string) => void;
   phase: (phase: DepthPhase) => void;
-  /** The median of the recent estimates, or null while there is none. */
-  height: (meters: number | null) => void;
+  /** A measurement settled on this height. */
+  height: (meters: number) => void;
 }
-
-const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 
 export class FloorDepth {
   private phase: DepthPhase = 'off';
@@ -52,7 +49,10 @@ export class FloorDepth {
   /** Once the GPU has failed to run the model, later workers use the CPU only. */
   private engine: DepthEngine = 'auto';
   private readonly canvas = document.createElement('canvas');
-  private estimates: number[] = [];
+  private readings: number[] = [];
+  /** Frames tried in this measurement, whether or not they found the floor. */
+  private attempts = 0;
+  private height: number | null = null;
   private provider: DepthProvider | null = null;
   private loadStartedAt = 0;
   private modelLoadMs: number | null = null;
@@ -73,7 +73,7 @@ export class FloorDepth {
   ) {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden' && this.phase !== 'off') {
-        this.stop('Floor height stopped while the page was hidden.');
+        this.stop('Height measurement stopped while the page was hidden.');
       }
     });
   }
@@ -81,19 +81,17 @@ export class FloorDepth {
   getPhase(): DepthPhase { return this.phase; }
 
   report(): DepthReport {
-    const center = this.estimates.length ? median(this.estimates) : null;
     return {
       phase: this.phase, provider: this.provider, model_cached: this.cached,
       model_load_s: this.modelLoadMs === null ? null : Math.round(this.modelLoadMs) / 1000,
-      estimates_m: this.estimates.map(value => Math.round(value * 1000) / 1000),
-      median_m: center, spread_m: center === null ? null : Math.sqrt(
-        this.estimates.reduce((sum, value) => sum + (value - center) ** 2, 0) / this.estimates.length),
+      readings_m: this.readings.map(value => Math.round(value * 1000) / 1000),
+      height_m: this.height,
       last_reason: this.lastReason, inference_ms: Math.round(this.inferenceMs),
       seconds_per_reading: Math.round(this.readingMs) / 1000,
     };
   }
 
-  /** Starts the back camera and the depth model. Call from a button press. */
+  /** Measures the height once: starts the back camera and the depth model. Call from a button press. */
   async start(): Promise<void> {
     this.stop();
     const token = this.token;
@@ -116,18 +114,19 @@ export class FloorDepth {
       this.loadStartedAt = performance.now();
       const [, worker] = await Promise.all([this.video.play(), this.ensureWorker(token)]);
       if (token !== this.token) return;
-      this.estimates = [];
+      this.readings = [];
+      this.attempts = 0;
       this.setPhase('measuring');
-      this.events.status(`Measuring · point the camera at the floor (${this.provider === 'webgpu' ? 'GPU' : 'CPU'})`);
+      this.events.status(`Measuring height (${this.provider === 'webgpu' ? 'GPU' : 'CPU'}) · hold still with the floor in view`);
       this.measure(worker, token);
     } catch (error) {
-      if (token === this.token) this.stop(error instanceof Error ? error.message : 'Floor height could not start.');
+      if (token === this.token) this.stop(error instanceof Error ? error.message : 'The height could not be measured.');
       throw error;
     }
   }
 
-  /** Releases the back camera. The model stays loaded for the next start. */
-  stop(message = 'Floor height off'): void {
+  /** Releases the back camera. The model stays loaded, and any measured height stays. */
+  stop(message = 'Height measurement cancelled'): void {
     this.token++;
     for (const track of this.stream?.getTracks() ?? []) track.stop();
     this.stream = null;
@@ -135,7 +134,6 @@ export class FloorDepth {
     this.video.hidden = true;
     if (this.phase !== 'off') {
       this.setPhase('off');
-      this.events.height(null);
       this.events.status(message);
     }
   }
@@ -228,7 +226,7 @@ export class FloorDepth {
         this.engine = 'cpu';
         this.events.status('The GPU stopped running the depth model; switching to the CPU…');
         this.ensureWorker(token).then(worker => this.measure(worker, token)).catch((error: unknown) => {
-          if (token === this.token) this.stop(error instanceof Error ? error.message : 'Floor height stopped.');
+          if (token === this.token) this.stop(error instanceof Error ? error.message : 'The height could not be measured.');
         });
         return;
       }
@@ -238,21 +236,27 @@ export class FloorDepth {
     if (reply.kind !== 'measured' || reply.token !== this.token || !this.worker) return;
     this.readingMs = performance.now() - this.sentAt;
     this.inferenceMs = reply.inferenceMs;
-    this.show(reply.result);
-    this.measure(this.worker, reply.token);
+    this.settle(reply.result, this.worker, reply.token);
   }
 
-  private show(result: FloorResult): void {
+  /** Adds a reading, and either settles on a height and stops, gives up, or reads another frame. */
+  private settle(result: FloorResult, worker: Worker, token: number): void {
+    this.attempts++;
+    this.lastReason = result.kind === 'none' ? result.reason : null;
+    if (result.kind === 'measured') this.readings = [...this.readings, result.height];
+    const outcome = settledHeight(this.readings, this.attempts);
     const pace = `${(this.readingMs / 1000).toFixed(1)} s per reading, ${(this.inferenceMs / 1000).toFixed(1)} s inference`;
-    if (result.kind === 'none') {
-      this.lastReason = result.reason;
-      this.events.status(`${result.reason} · ${pace}`);
-      return;
+    if (outcome.kind === 'settled') {
+      this.height = outcome.height;
+      this.events.height(outcome.height);
+      this.stop(`Height ${outcome.height.toFixed(2)} m from ${this.readings.length} readings · ${pace}`);
+    } else if (outcome.kind === 'failed') {
+      this.stop(outcome.reason);
+    } else {
+      const latest = result.kind === 'measured' ? `${result.height.toFixed(2)} m` : result.reason;
+      const count = `${this.readings.length} ${this.readings.length === 1 ? 'reading' : 'readings'}`;
+      this.events.status(`Measuring height · ${count} so far · last ${latest} · ${pace}`);
+      this.measure(worker, token);
     }
-    this.lastReason = null;
-    this.estimates = [...this.estimates, result.height].slice(-HISTORY);
-    const report = this.report();
-    this.events.height(report.median_m);
-    this.events.status(`Height ${report.median_m!.toFixed(2)} m ± ${report.spread_m!.toFixed(2)} · ${pace}`);
   }
 }

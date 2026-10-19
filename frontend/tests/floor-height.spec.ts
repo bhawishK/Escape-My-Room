@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test';
 import * as THREE from 'three';
 import {
-  floorHeight, frameDepth, fromFloat16, gravityInCamera, modelCanvas, placeFrame, toFloat16, type DepthMap,
+  floorHeight, frameDepth, fromFloat16, gravityInCamera, modelCanvas, placeFrame, settledHeight, toFloat16,
+  type DepthMap,
 } from '../src/floor-height';
 import { cameraFromDevice } from '../src/phone-view';
 
@@ -142,4 +143,22 @@ test('the model output is cropped to the camera frame, in meters, with normals p
   expect(map.depth[0]).toBeCloseTo(3, 9);
   expect(Array.from(map.depth.slice(1))).toEqual(new Array(15).fill(1.5));
   expect(Array.from(map.normals.slice(0, 3))).toEqual([0.25, -0.5, 0.75]);
+});
+
+test('a measurement settles on the median of three readings that agree within 10 cm', () => {
+  expect(settledHeight([1.42, 1.47, 1.44], 3)).toEqual({ kind: 'settled', height: 1.44 });
+  // An outlier is waited out: the last three readings are the ones that must agree.
+  expect(settledHeight([1.42, 1.8], 2)).toEqual({ kind: 'more' });
+  expect(settledHeight([1.42, 1.8, 1.45], 3)).toEqual({ kind: 'more' });
+  expect(settledHeight([1.42, 1.8, 1.45, 1.43, 1.46], 5)).toEqual({ kind: 'settled', height: 1.45 });
+});
+
+test('a measurement gives up when readings keep disagreeing or the floor is rarely found', () => {
+  expect(settledHeight([1.2, 1.5, 1.3, 1.6, 1.25, 1.55], 6)).toEqual({
+    kind: 'failed', reason: 'The readings kept disagreeing. Hold the phone still with the floor in view, then measure again.',
+  });
+  expect(settledHeight([1.4], 8)).toEqual({
+    kind: 'failed', reason: 'Too little floor was seen. Point the camera at open floor, then measure again.',
+  });
+  expect(settledHeight([1.4], 7)).toEqual({ kind: 'more' });
 });

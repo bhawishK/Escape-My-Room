@@ -151,16 +151,16 @@ const liveCameras = (page: Page) => page.evaluate(() =>
     .filter(camera => camera.stream.getTracks().some(track => track.readyState === 'live'))
     .map(camera => (camera.facing.includes('environment') ? 'back' : 'front')));
 
-test('a refused back camera for floor height is explained', async ({ page }) => {
+test('a refused back camera for measuring the height is explained', async ({ page }) => {
   await page.addInitScript(() => Object.defineProperty(navigator, 'mediaDevices', { value: {
     getUserMedia: async () => { throw new DOMException('Denied for test', 'NotAllowedError'); },
   } }));
   await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
-  await page.getByRole('button', { name: 'Floor height', exact: true }).click();
+  await page.getByRole('button', { name: 'Measure height', exact: true }).click();
   await expect(page.getByTestId('view-status')).toHaveText(
     'Camera permission was denied. Allow camera access for this site in the browser settings, then try again.');
-  await expect(page.getByRole('button', { name: 'Floor height', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Measure height', exact: true })).toBeVisible();
   await expect(page.getByLabel('Back camera')).toBeHidden();
 });
 
@@ -169,28 +169,28 @@ test('a depth model that cannot download is explained, and the back camera is re
   await page.addInitScript(fakeCameras);
   await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
-  await page.getByRole('button', { name: 'Floor height', exact: true }).click();
+  await page.getByRole('button', { name: 'Measure height', exact: true }).click();
   await expect(page.getByTestId('view-status')).toContainText('The depth model could not load');
   await expect(page.getByLabel('Back camera')).toBeHidden();
   expect(await liveCameras(page)).toEqual([]);
-  await expect(page.getByRole('button', { name: 'Floor height', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Measure height', exact: true })).toBeVisible();
 });
 
-test('the gaze cursor and floor height never run their cameras together', async ({ page, context }) => {
+test('the gaze cursor and the height measurement never run their cameras together', async ({ page, context }) => {
   // Both models stay downloading, so each feature keeps its camera open until it is stopped.
   await context.route('**/metric3d-vit-small/**', () => undefined);
   await context.route('**/face_landmarker.task', () => undefined);
   await page.addInitScript(fakeCameras);
   await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
-  await page.getByRole('button', { name: 'Floor height', exact: true }).click();
+  await page.getByRole('button', { name: 'Measure height', exact: true }).click();
   await expect(page.getByLabel('Back camera')).toBeVisible();
   expect(await liveCameras(page)).toEqual(['back']);
   await page.getByRole('button', { name: 'Gaze cursor', exact: true }).click();
   await expect(page.getByLabel('Front camera')).toBeVisible();
   await expect(page.getByLabel('Back camera')).toBeHidden();
   expect(await liveCameras(page)).toEqual(['front']);
-  await page.getByRole('button', { name: 'Floor height', exact: true }).click();
+  await page.getByRole('button', { name: 'Measure height', exact: true }).click();
   await expect(page.getByLabel('Back camera')).toBeVisible();
   await expect(page.getByLabel('Front camera')).toBeHidden();
   expect(await liveCameras(page)).toEqual(['back']);

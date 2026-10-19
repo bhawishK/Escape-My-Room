@@ -47,14 +47,16 @@ function publishWalk(position: { x: number; y: number; z: number } | null): void
     { tracking_status: 'inactive', reference_space: null, position: null });
 }
 const depthButton = element<HTMLButtonElement>('depth-toggle');
-/** The floor height to show the room from when following it, and the height shown now. */
-let followHeight = false;
+/** The measured height to show the room from, or null for the default, and the height shown now. */
 let measuredHeight: number | null = null;
 let viewHeight = START_EYE.y;
 const depth = new FloorDepth(element<HTMLVideoElement>('depth-camera'), () => look.orientation(), {
   status: message => { element('view-status').textContent = message; },
   phase: () => controls(),
-  height: meters => { measuredHeight = meters; },
+  height: meters => {
+    measuredHeight = meters;
+    controls();
+  },
 });
 const gazeButton = element<HTMLButtonElement>('gaze-toggle');
 const gazeModeButton = element<HTMLButtonElement>('gaze-mode');
@@ -90,10 +92,10 @@ function controls(): void {
   for (const id of ['walk-reset', 'walk-length', 'walk-sensitivity']) element(id).hidden = !walker.active;
   element('walk-length').textContent = `Step ${walker.stepLength.toFixed(1)} m`;
   element('walk-sensitivity').textContent = `Sensitivity: ${walker.sensitivity}`;
-  depthButton.textContent = depth.getPhase() === 'off' ? 'Floor height' : 'Stop floor height';
+  depthButton.textContent = depth.getPhase() !== 'off' ? 'Cancel measuring' :
+    measuredHeight === null ? 'Measure height' : 'Measure again';
   depthButton.disabled = !connected;
-  element('depth-follow').hidden = depth.getPhase() !== 'measuring';
-  element('depth-follow').textContent = `Follow height: ${followHeight ? 'on' : 'off'}`;
+  element('depth-default').hidden = measuredHeight === null || depth.getPhase() !== 'off';
   gazeButton.textContent = gaze.getPhase() === 'off' ? 'Gaze cursor' : 'Stop gaze cursor';
   gazeButton.disabled = !connected;
   const pointing = gaze.getPhase() === 'tracking';
@@ -222,8 +224,8 @@ try {
   sceneView.renderer.setAnimationLoop((_time, frame) => {
     xr?.frame(frame);
     if (roomViewOpen) {
-      // Readings come seconds apart, so the view eases toward each new height.
-      const target = followHeight && measuredHeight !== null ? measuredHeight : START_EYE.y;
+      // A new height eases in rather than jumping.
+      const target = measuredHeight ?? START_EYE.y;
       viewHeight += 0.05 * (target - viewHeight);
       sceneView.follow(phoneViewpoint(look, { ...walker.position(), y: viewHeight }));
     }
@@ -294,7 +296,7 @@ gazeButton.addEventListener('click', () => {
   }
   element('error').hidden = true;
   // The phone runs one camera at a time.
-  if (depth.getPhase() !== 'off') depth.stop('Floor height stopped for the gaze cursor.');
+  if (depth.getPhase() !== 'off') depth.stop('Height measurement stopped for the gaze cursor.');
   void gaze.start().catch(error => showRoomViewError(error, 'The gaze cursor could not start.')).finally(controls);
 });
 gazeModeButton.addEventListener('click', () => {
@@ -339,16 +341,17 @@ depthButton.addEventListener('click', () => {
     return;
   }
   element('error').hidden = true;
-  if (gaze.getPhase() !== 'off') gaze.stop('Gaze cursor stopped for floor height.');
+  if (gaze.getPhase() !== 'off') gaze.stop('Gaze cursor stopped to measure the height.');
   // Both permission requests start inside the button press; iPhone refuses them after it.
   const turning = look.active ? Promise.resolve() : look.start();
   void Promise.all([depth.start(), turning]).catch(error => {
     depth.stop();
-    showRoomViewError(error, 'Floor height could not start.');
+    showRoomViewError(error, 'The height could not be measured.');
   }).finally(controls);
 });
-element('depth-follow').addEventListener('click', () => {
-  followHeight = !followHeight;
+element('depth-default').addEventListener('click', () => {
+  measuredHeight = null;
+  element('view-status').textContent = `Default height · ${START_EYE.y.toFixed(2)} m`;
   controls();
 });
 element('gaze-calibrate').addEventListener('click', () => gaze.calibrate());
