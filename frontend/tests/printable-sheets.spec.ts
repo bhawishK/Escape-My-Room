@@ -28,7 +28,8 @@ async function rasterize(page: Page, name: string, pixelsPerMm: number): Promise
 test('the committed sheets are what the generator writes', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'escape-my-room-sheets-'));
   for (const name of await writeSheets(MANIFEST, directory)) {
-    expect(readFileSync(join(directory, name), 'utf-8'), `${name} is stale; run npm run markers`).toBe(readFileSync(join(DOCS, name), 'utf-8'));
+    const committed = readFileSync(join(DOCS, name), 'utf-8');
+    expect(readFileSync(join(directory, name), 'utf-8'), `${name} is stale; run npm run markers`).toBe(committed);
   }
 });
 
@@ -39,7 +40,9 @@ test('the printed desk tag reads as tag 0, upright, at its printed size', async 
   const f = 3000;
   const marker = { id: 0, label: 'Desk front', size: 0.15, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 } };
   const center = { x: 105 * 3 - 0.5, y: (50 + 75) * 3 - 0.5 };
-  const intrinsics = { width: frame.width, height: frame.height, fx: f, fy: f, cx: center.x, cy: center.y, distortion: [0, 0, 0, 0, 0] };
+  const intrinsics = {
+    width: frame.width, height: frame.height, fx: f, fy: f, cx: center.x, cy: center.y, distortion: [0, 0, 0, 0, 0],
+  };
   const located = new MarkerLocator(cv).locate(frame, intrinsics, [marker]);
   if (located.kind !== 'tracked') throw new Error(located.reason);
   // Upright and centered means the camera sits 1 m straight out from the tag's face.

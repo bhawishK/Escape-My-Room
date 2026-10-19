@@ -1,5 +1,9 @@
+/**
+ * The phone's camera tracking: the back camera, the OpenCV worker, the tracked and lost states
+ * Python is told about, and the one-time camera calibration.
+ */
 import { errorMessage } from './api';
-import { processingSize, resizeIntrinsics, type RoomPose } from './marker-geometry';
+import { processingSize, resizeIntrinsics, type ImageSize, type RoomPose } from './marker-geometry';
 import type { CameraCalibration, CameraIntrinsics, PoseInput, TrackingMarker } from './protocol';
 import type { WorkerReply, WorkerRequest } from './tracking.worker';
 import type { Frame } from './vision';
@@ -24,9 +28,9 @@ export interface TrackerStatus {
 }
 
 export interface TrackingReport {
-  video: { width: number; height: number } | null;
-  processing: { width: number; height: number } | null;
-  calibration: Pick<CameraCalibration, 'width' | 'height' | 'fx' | 'fy' | 'cx' | 'cy' | 'rms_px' | 'recorded_at'> | null;
+  video: ImageSize | null;
+  processing: ImageSize | null;
+  calibration: Omit<CameraCalibration, 'distortion' | 'views' | 'user_agent'> | null;
   frames_per_second: number;
   detect_ms: number;
   poses_published: number;
@@ -44,7 +48,8 @@ interface TrackerEvents {
 export function cameraError(error: unknown): string {
   if (error instanceof DOMException) {
     if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
-      return 'Camera permission was denied. Allow camera access for this site in the browser settings, then try again.';
+      return 'Camera permission was denied. '
+        + 'Allow camera access for this site in the browser settings, then try again.';
     }
     if (error.name === 'NotFoundError' || error.name === 'OverconstrainedError') {
       return 'No back camera was found on this device.';
@@ -108,7 +113,9 @@ export class PhoneTracker {
     }
     await this.open('tracking', async () => {
       const response = await fetch('/api/tracking/cameras');
-      if (!response.ok) throw new Error(await errorMessage(response, 'Camera calibrations could not be loaded'));
+      if (!response.ok) {
+        throw new Error(await errorMessage(response, 'Camera calibrations could not be loaded'));
+      }
       this.calibrations = (await response.json() as { calibrations: CameraCalibration[] }).calibrations;
     });
   }
@@ -226,14 +233,17 @@ export class PhoneTracker {
         this.unseen(now, `Calibrate the camera at ${width}×${height} first, holding the phone as you will track.`);
         return;
       }
-      this.send(frame => ({ kind: 'locate', token, frame, intrinsics: resizeIntrinsics(intrinsics, frame.width, frame.height), markers: this.markers }));
+      this.send(frame => ({
+        kind: 'locate', token, frame, markers: this.markers,
+        intrinsics: resizeIntrinsics(intrinsics, frame.width, frame.height),
+      }));
     } else if (this.mode === 'calibrating' && !this.solving && now - this.lastBoardAt >= BOARD_INTERVAL_MS) {
       this.lastBoardAt = now;
       this.send(frame => ({ kind: 'board', token, frame }));
     }
   }
 
-  private send(request: (frame: Frame) => WorkerRequest): void {
+  private send(build: (frame: Frame) => WorkerRequest): void {
     const size = processingSize(this.preview.videoWidth, this.preview.videoHeight, PROCESSING_LONG_SIDE);
     this.stats.processing = size;
     this.canvas.width = size.width;
@@ -243,7 +253,7 @@ export class PhoneTracker {
     context.drawImage(this.preview, 0, 0, size.width, size.height);
     const rgba = context.getImageData(0, 0, size.width, size.height).data;
     this.busy = true;
-    const message = request({ width: size.width, height: size.height, rgba });
+    const message = build({ width: size.width, height: size.height, rgba });
     this.post(message, [rgba.buffer]);
   }
 
@@ -303,7 +313,10 @@ export class PhoneTracker {
     this.events.publish({ tracking_status: 'tracked', reference_space: 'room', position: pose.position });
   }
 
-  /** A frame without a usable marker. The last position is never repeated; after a short grace, the phone reports lost. */
+  /**
+   * A frame without a usable marker. The last position is never sent again; after a short grace
+   * for single missed frames, the phone reports lost.
+   */
   private unseen(now: number, reason: string): void {
     this.stats.last_reason = reason;
     this.stats.markers_seen = [];
@@ -321,7 +334,8 @@ export class PhoneTracker {
     // The views were processed smaller than the video; express the result in video pixels.
     const video = resizeIntrinsics(intrinsics, width, height);
     const body = {
-      ...video, rms_px: rmsPx * width / intrinsics.width, views: CALIBRATION_VIEWS, user_agent: navigator.userAgent.slice(0, 512),
+      ...video, rms_px: rmsPx * width / intrinsics.width, views: CALIBRATION_VIEWS,
+      user_agent: navigator.userAgent.slice(0, 512),
     };
     try {
       const response = await fetch('/api/tracking/cameras', {

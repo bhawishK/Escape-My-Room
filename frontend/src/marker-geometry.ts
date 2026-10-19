@@ -1,4 +1,10 @@
+/**
+ * Pure geometry for marker tracking: tag corners in the room, the phone's room pose from a
+ * solvePnP result, and camera intrinsics for resized frames.
+ */
 import type { CameraIntrinsics, Position, Rotation, TrackingMarker } from './protocol';
+
+export interface ImageSize { width: number; height: number }
 
 /** Where the phone is in the room and which way its camera faces, as a Three.js camera would. */
 export interface RoomPose {
@@ -22,7 +28,7 @@ function rotate(q: Rotation, x: number, y: number, z: number): Position {
 /** The black square's corners in the tag's own frame, in the order OpenCV's detector reports them. */
 export function squareCorners(size: number): Position[] {
   const half = size / 2;
-  return [{ x: -half, y: half, z: 0 }, { x: half, y: half, z: 0 }, { x: half, y: -half, z: 0 }, { x: -half, y: -half, z: 0 }];
+  return [[-half, half], [half, half], [half, -half], [-half, -half]].map(([x, y]) => ({ x, y, z: 0 }));
 }
 
 /**
@@ -50,7 +56,7 @@ export function roomFromMarkerPnP(
   const r = Array.from(rotation);
   const t = Array.from(translation);
   // The tag's axes in room coordinates, as the columns of M; a room point X is Mᵀ (X - p) in the tag.
-  const axes = [rotate(marker.rotation, 1, 0, 0), rotate(marker.rotation, 0, 1, 0), rotate(marker.rotation, 0, 0, 1)];
+  const axes = [[1, 0, 0], [0, 1, 0], [0, 0, 1]].map(([x, y, z]) => rotate(marker.rotation, x, y, z));
   const m = [0, 1, 2].map(row => axes.map(axis => [axis.x, axis.y, axis.z][row]));
   // R' = R Mᵀ and t' = t - R' p.
   const combined: number[] = [];
@@ -62,7 +68,8 @@ export function roomFromMarkerPnP(
   const { x, y, z } = marker.position;
   return {
     rotation: combined,
-    translation: [0, 1, 2].map(row => t[row] - (combined[row * 3] * x + combined[row * 3 + 1] * y + combined[row * 3 + 2] * z)),
+    translation: [0, 1, 2].map(row => (
+      t[row] - (combined[row * 3] * x + combined[row * 3 + 1] * y + combined[row * 3 + 2] * z))),
   };
 }
 
@@ -71,7 +78,9 @@ export function roomFromMarkerPnP(
  * as R X + t. `rotation` is R in row-major order. OpenCV's camera looks along +Z with +Y down;
  * the returned orientation is turned to look along -Z with +Y up, as Three.js cameras do.
  */
-export function roomPoseFromPnP(rotation: ArrayLike<number>, translation: ArrayLike<number>): RoomPose {
+export function roomPoseFromPnP(
+  rotation: ArrayLike<number>, translation: ArrayLike<number>,
+): RoomPose {
   const r = Array.from(rotation);
   const [tx, ty, tz] = Array.from(translation);
   // The camera center is -Rᵀ t.
@@ -113,7 +122,9 @@ function quaternionFromMatrix(m: number[][]): Rotation {
  * The same camera's intrinsics for its frames resized to `width` x `height`. Pixel centers stay
  * aligned, so a principal point c becomes (c + 0.5) · scale - 0.5. Distortion is unit-free.
  */
-export function resizeIntrinsics(intrinsics: CameraIntrinsics, width: number, height: number): CameraIntrinsics {
+export function resizeIntrinsics(
+  intrinsics: CameraIntrinsics, width: number, height: number,
+): CameraIntrinsics {
   const sx = width / intrinsics.width;
   const sy = height / intrinsics.height;
   return {
@@ -128,7 +139,7 @@ export function resizeIntrinsics(intrinsics: CameraIntrinsics, width: number, he
 }
 
 /** The processing size for a video frame: its long side at most `longSide`, aspect kept. */
-export function processingSize(width: number, height: number, longSide: number): { width: number; height: number } {
+export function processingSize(width: number, height: number, longSide: number): ImageSize {
   const scale = Math.min(1, longSide / Math.max(width, height));
   return { width: Math.round(width * scale), height: Math.round(height * scale) };
 }

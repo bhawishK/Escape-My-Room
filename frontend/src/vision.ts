@@ -1,4 +1,10 @@
-import { markerCorners, roomFromMarkerPnP, roomPoseFromPnP, squareCorners, type RoomPose } from './marker-geometry';
+/**
+ * Camera measurement with OpenCV.js: locating the phone from the room's AprilTags, and calibrating
+ * its camera from a printed ChArUco board. OpenCV is passed in, so the worker and Node tests share it.
+ */
+import {
+  markerCorners, roomFromMarkerPnP, roomPoseFromPnP, squareCorners, type ImageSize, type RoomPose,
+} from './marker-geometry';
 import type { CameraIntrinsics, TrackingMarker } from './protocol';
 
 /* The part of OpenCV.js this module uses. The package's own declarations omit the ArUco classes. */
@@ -75,24 +81,41 @@ export type Located =
   | { kind: 'tracked'; pose: RoomPose; markerIds: number[]; reprojectionPx: number }
   | { kind: 'unseen'; reason: string };
 
+/** Runs `work`, then frees every OpenCV object it put in `owned`, however it ends. */
+function freeAfter<T>(work: (owned: Deletable[]) => T): T {
+  const owned: Deletable[] = [];
+  try {
+    return work(owned);
+  } finally {
+    for (const item of owned) item.delete();
+  }
+}
+
+/** Settings both detectors share: sub-pixel corners, and OpenCV's default refinement of 10 px, rate 3, all orders. */
+function detectorSettings(cv: OpenCV): { parameters: DetectorParameters; refine: Deletable } {
+  const parameters = new cv.aruco_DetectorParameters();
+  parameters.cornerRefinementMethod = cv.CORNER_REFINE_SUBPIX;
+  return { parameters, refine: new cv.aruco_RefineParameters(10, 3, true) };
+}
+
 /** An RGBA frame as a canvas delivers it. */
 export interface Frame { width: number; height: number; rgba: Uint8ClampedArray }
 
-function grayFrom(cv: OpenCV, frame: Frame, tracked: Deletable[]): Mat {
+function grayFrom(cv: OpenCV, frame: Frame, owned: Deletable[]): Mat {
   const rgba = new cv.Mat(frame.height, frame.width, cv.CV_8UC4);
-  tracked.push(rgba);
+  owned.push(rgba);
   rgba.data.set(frame.rgba);
   const gray = new cv.Mat();
-  tracked.push(gray);
+  owned.push(gray);
   cv.cvtColor(rgba, gray, cv.COLOR_RGBA2GRAY);
   return gray;
 }
 
-function cameraMats(cv: OpenCV, intrinsics: CameraIntrinsics, tracked: Deletable[]): [Mat, Mat] {
+function cameraMats(cv: OpenCV, intrinsics: CameraIntrinsics, owned: Deletable[]): [Mat, Mat] {
   const { fx, fy, cx, cy } = intrinsics;
   const camera = cv.matFromArray(3, 3, cv.CV_64F, [fx, 0, cx, 0, fy, cy, 0, 0, 1]);
   const distortion = cv.matFromArray(1, 5, cv.CV_64F, intrinsics.distortion);
-  tracked.push(camera, distortion);
+  owned.push(camera, distortion);
   return [camera, distortion];
 }
 
@@ -105,27 +128,24 @@ export class MarkerLocator {
 
   constructor(private readonly cv: OpenCV) {
     this.dictionary = cv.getPredefinedDictionary(cv.DICT_APRILTAG_36h11);
-    this.parameters = new cv.aruco_DetectorParameters();
-    this.parameters.cornerRefinementMethod = cv.CORNER_REFINE_SUBPIX;
-    this.refine = new cv.aruco_RefineParameters(10, 3, true);
+    ({ parameters: this.parameters, refine: this.refine } = detectorSettings(cv));
     this.detector = new cv.aruco_ArucoDetector(this.dictionary, this.parameters, this.refine);
   }
 
   /** `intrinsics` must describe frames of exactly this frame's size. */
   locate(frame: Frame, intrinsics: CameraIntrinsics, markers: readonly TrackingMarker[]): Located {
     const cv = this.cv;
-    const tracked: Deletable[] = [];
-    try {
-      const gray = grayFrom(cv, frame, tracked);
+    return freeAfter(owned => {
+      const gray = grayFrom(cv, frame, owned);
       const corners = new cv.MatVector();
       const ids = new cv.Mat();
       const rejected = new cv.MatVector();
-      tracked.push(corners, ids, rejected);
+      owned.push(corners, ids, rejected);
       this.detector.detectMarkers(gray, corners, ids, rejected);
       const known = new Map(markers.map(marker => [marker.id, marker]));
-      const room: number[] = [];
-      const image: number[] = [];
-      const used: number[] = [];
+      const roomCoordinates: number[] = [];
+      const imageCoordinates: number[] = [];
+      const usedIds: number[] = [];
       let tooSmall = false;
       for (let index = 0; index < ids.rows; index++) {
         const marker = known.get(ids.data32S[index]);
@@ -141,11 +161,11 @@ export class MarkerLocator {
           tooSmall = true;
           continue;
         }
-        for (const point of markerCorners(marker)) room.push(point.x, point.y, point.z);
-        image.push(...points);
-        used.push(marker.id);
+        for (const point of markerCorners(marker)) roomCoordinates.push(point.x, point.y, point.z);
+        imageCoordinates.push(...points);
+        usedIds.push(marker.id);
       }
-      if (used.length === 0) {
+      if (usedIds.length === 0) {
         const reason = tooSmall ? 'The marker is too far away. Move closer.' :
           ids.rows > 0 ? 'Only markers this room does not use are in view.' : 'No room marker in view.';
         return { kind: 'unseen', reason };
@@ -153,16 +173,17 @@ export class MarkerLocator {
       // A single square is solved in its own frame, where IPPE_SQUARE resolves it exactly; OpenCV.js's
       // general IPPE misplaces a square lying off the z = 0 plane. SQPnP takes several tags in room
       // coordinates. Doubles in, so the projected points come back as doubles too.
-      const single = used.length === 1 ? known.get(used[0]) : undefined;
-      const corners3d = single ? squareCorners(single.size).flatMap(point => [point.x, point.y, point.z]) : room;
-      const objectPoints = cv.matFromArray(used.length * 4, 1, cv.CV_64FC3, corners3d);
-      const imagePoints = cv.matFromArray(used.length * 4, 1, cv.CV_64FC2, image);
-      const [camera, distortion] = cameraMats(cv, intrinsics, tracked);
+      const single = usedIds.length === 1 ? known.get(usedIds[0]) : undefined;
+      const corners3d = single ?
+        squareCorners(single.size).flatMap(point => [point.x, point.y, point.z]) : roomCoordinates;
+      const objectPoints = cv.matFromArray(usedIds.length * 4, 1, cv.CV_64FC3, corners3d);
+      const imagePoints = cv.matFromArray(usedIds.length * 4, 1, cv.CV_64FC2, imageCoordinates);
+      const [camera, distortion] = cameraMats(cv, intrinsics, owned);
       const rvec = new cv.Mat();
       const tvec = new cv.Mat();
       const rotation = new cv.Mat();
       const projected = new cv.Mat();
-      tracked.push(objectPoints, imagePoints, rvec, tvec, rotation, projected);
+      owned.push(objectPoints, imagePoints, rvec, tvec, rotation, projected);
       const method = single ? cv.SOLVEPNP_IPPE_SQUARE : cv.SOLVEPNP_SQPNP;
       if (!cv.solvePnP(objectPoints, imagePoints, camera, distortion, rvec, tvec, false, method)) {
         return { kind: 'unseen', reason: 'The marker pose could not be solved.' };
@@ -170,10 +191,11 @@ export class MarkerLocator {
       cv.projectPoints(objectPoints, rvec, tvec, camera, distortion, projected);
       const reprojected = projected.data64F;
       let error = 0;
-      for (let index = 0; index < image.length; index += 2) {
-        error += Math.hypot(reprojected[index] - image[index], reprojected[index + 1] - image[index + 1]);
+      for (let index = 0; index < imageCoordinates.length; index += 2) {
+        error += Math.hypot(
+          reprojected[index] - imageCoordinates[index], reprojected[index + 1] - imageCoordinates[index + 1]);
       }
-      const reprojectionPx = error / (image.length / 2);
+      const reprojectionPx = error / (imageCoordinates.length / 2);
       if (!(reprojectionPx <= MAX_REPROJECTION_PX)) {
         return { kind: 'unseen', reason: 'The marker view did not fit its known shape.' };
       }
@@ -186,10 +208,8 @@ export class MarkerLocator {
       if (![x, y, z].every(value => Number.isFinite(value) && Math.abs(value) <= MAX_COORDINATE)) {
         return { kind: 'unseen', reason: 'The marker pose was out of range.' };
       }
-      return { kind: 'tracked', pose, markerIds: used, reprojectionPx };
-    } finally {
-      for (const item of tracked) item.delete();
-    }
+      return { kind: 'tracked', pose, markerIds: usedIds, reprojectionPx };
+    });
   }
 }
 
@@ -220,15 +240,14 @@ export class BoardCalibrator {
   private readonly boardCorners: { x: number; y: number }[] = [];
   private readonly objectViews: number[][] = [];
   private readonly imageViews: number[][] = [];
-  private size: { width: number; height: number } | null = null;
+  private size: ImageSize | null = null;
 
   constructor(private readonly cv: OpenCV) {
     const { board, dictionary } = createBoard(cv);
     // The board keeps its own copy of the dictionary.
     dictionary.delete();
     this.board = board;
-    this.parameters = new cv.aruco_DetectorParameters();
-    this.refine = new cv.aruco_RefineParameters(10, 3, true);
+    ({ parameters: this.parameters, refine: this.refine } = detectorSettings(cv));
     this.charuco = new cv.aruco_CharucoParameters();
     this.detector = new cv.aruco_CharucoDetector(this.board, this.charuco, this.parameters, this.refine);
     const corners = this.board.getChessboardCorners();
@@ -240,17 +259,16 @@ export class BoardCalibrator {
   /** Detects the board; keeps the view when enough corners are found. Returns the corner count. */
   addView(frame: Frame): { corners: number; kept: boolean } {
     const cv = this.cv;
-    const tracked: Deletable[] = [];
-    try {
+    return freeAfter(owned => {
       if (this.size && (this.size.width !== frame.width || this.size.height !== frame.height)) {
         this.reset();
       }
-      const gray = grayFrom(cv, frame, tracked);
+      const gray = grayFrom(cv, frame, owned);
       const corners = new cv.Mat();
       const ids = new cv.Mat();
       const markerCorners = new cv.MatVector();
       const markerIds = new cv.Mat();
-      tracked.push(corners, ids, markerCorners, markerIds);
+      owned.push(corners, ids, markerCorners, markerIds);
       this.detector.detectBoard(gray, corners, ids, markerCorners, markerIds);
       const count = corners.rows;
       if (count < MIN_BOARD_CORNERS) return { corners: count, kept: false };
@@ -263,20 +281,18 @@ export class BoardCalibrator {
       this.imageViews.push(Array.from(corners.data32F));
       this.size = { width: frame.width, height: frame.height };
       return { corners: count, kept: true };
-    } finally {
-      for (const item of tracked) item.delete();
-    }
+    });
   }
 
   /** Intrinsics for frames of the kept views' size, and the RMS reprojection error in pixels. */
   solve(): { intrinsics: CameraIntrinsics; rmsPx: number } {
     const cv = this.cv;
-    if (!this.size || this.views === 0) throw new Error('No board views were kept.');
-    const tracked: Deletable[] = [];
-    try {
+    const size = this.size;
+    if (!size || this.views === 0) throw new Error('No board views were kept.');
+    return freeAfter(owned => {
       const objects = new cv.MatVector();
       const images = new cv.MatVector();
-      tracked.push(objects, images);
+      owned.push(objects, images);
       this.objectViews.forEach((object, index) => {
         const objectMat = cv.matFromArray(object.length / 3, 1, cv.CV_32FC3, object);
         const imageMat = cv.matFromArray(object.length / 3, 1, cv.CV_32FC2, this.imageViews[index]);
@@ -292,25 +308,23 @@ export class BoardCalibrator {
       const intrinsicDeviations = new cv.Mat();
       const extrinsicDeviations = new cv.Mat();
       const viewErrors = new cv.Mat();
-      tracked.push(camera, distortion, rvecs, tvecs, intrinsicDeviations, extrinsicDeviations, viewErrors);
+      owned.push(camera, distortion, rvecs, tvecs, intrinsicDeviations, extrinsicDeviations, viewErrors);
       // Phone video is largely corrected for lens distortion; k1 and k2 absorb what remains.
       const flags = cv.CALIB_FIX_K3 | cv.CALIB_ZERO_TANGENT_DIST;
       const criteria = new cv.TermCriteria(cv.TermCriteria_COUNT + cv.TermCriteria_EPS, 50, 1e-7);
       const rmsPx = cv.calibrateCameraExtended(
-        objects, images, new cv.Size(this.size.width, this.size.height), camera, distortion, rvecs, tvecs,
+        objects, images, new cv.Size(size.width, size.height), camera, distortion, rvecs, tvecs,
         intrinsicDeviations, extrinsicDeviations, viewErrors, flags, criteria);
       const k = camera.data64F;
       return {
         intrinsics: {
-          width: this.size.width, height: this.size.height,
+          width: size.width, height: size.height,
           fx: k[0], fy: k[4], cx: k[2], cy: k[5],
           distortion: Array.from(distortion.data64F).slice(0, 5),
         },
         rmsPx,
       };
-    } finally {
-      for (const item of tracked) item.delete();
-    }
+    });
   }
 
   reset(): void {

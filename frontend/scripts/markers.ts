@@ -92,7 +92,8 @@ export async function writeSheets(manifest: string, directory: string): Promise<
     text(148.5, 16, 6, 'Escape My Room · camera calibration board (ChArUco 7 × 5, 5×5 ArUco)'),
     text(148.5, 25, 4.5, 'Print at 100 % and keep the sheet flat, for example taped to a book or board.'),
     `<g fill="#000" shape-rendering="crispEdges">${blackRectangles(image, 0.1, left, top).join('')}</g>`,
-    text(148.5, top + height + 14, 4.5, `Squares are ${BOARD.squareMeters * MILLIMETERS_PER_METER} mm; the size does not need to be exact for calibration.`),
+    text(148.5, top + height + 14, 4.5,
+      `Squares are ${BOARD.squareMeters * MILLIMETERS_PER_METER} mm; the size does not need to be exact for calibration.`),
   ]));
   written.push('calibration-board.svg');
   for (const item of [image, board, boardDictionary]) item.delete();

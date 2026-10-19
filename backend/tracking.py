@@ -9,7 +9,7 @@ delivers a different resolution and needs its own calibration.
 import threading
 from pathlib import Path
 
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field, ValidationError
 
 from backend.errors import Refusal
 from backend.protocol import WireModel
@@ -31,12 +31,6 @@ class CalibrationInput(WireModel):
     rms_px: float = Field(ge=0)
     views: int = Field(ge=5, le=200)
     user_agent: str = Field(max_length=512)
-
-    @model_validator(mode="after")
-    def check_principal_point(self) -> "CalibrationInput":
-        if not (0 <= self.cx <= self.width and 0 <= self.cy <= self.height):
-            raise ValueError("principal point")
-        return self
 
 
 class CameraCalibration(CalibrationInput):
@@ -63,11 +57,10 @@ class CalibrationStore:
         try:
             calibration = CalibrationInput.model_validate_json(body)
         except ValidationError as exc:
-            if any("principal point" in str(error["msg"]) for error in exc.errors()):
-                raise Refusal(
-                    "The principal point must lie inside the image. Calibrate again."
-                ) from exc
             raise Refusal("Send a camera calibration using the documented fields.") from exc
+        width, height = calibration.width, calibration.height
+        if not (0 <= calibration.cx <= width and 0 <= calibration.cy <= height):
+            raise Refusal("The principal point must lie inside the image. Calibrate again.")
         if calibration.rms_px > MAX_RMS_PX:
             raise Refusal(
                 f"Calibration error is {calibration.rms_px:.2f} px; it must be at most "

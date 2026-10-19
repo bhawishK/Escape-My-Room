@@ -92,9 +92,18 @@ class TrackingMarker(WireModel):
     rotation: Rotation
 
 
-def _check_markers(markers: Sequence[TrackingMarker]) -> None:
-    if len({marker.id for marker in markers}) != len(markers):
-        raise ValueError("Tracking marker IDs must be unique")
+class _MarkedManifest(WireModel):
+    """The tracking markers either manifest form may list."""
+
+    markers: list[TrackingMarker] = Field(
+        default_factory=lambda: list[TrackingMarker](), max_length=32
+    )
+
+    @model_validator(mode="after")
+    def check_markers(self) -> Self:
+        if len({marker.id for marker in self.markers}) != len(self.markers):
+            raise ValueError("Tracking marker IDs must be unique")
+        return self
 
 
 class LoadedRoom(BaseModel):
@@ -132,21 +141,17 @@ class RoomEntity(WireModel):
     position: Position
 
 
-class PreparedRoom(WireModel):
+class PreparedRoom(_MarkedManifest):
     """The original single-glTF stand-in room."""
 
     room_version: int = Field(ge=1)
     units: str = Field(pattern=r"^meters$")
     asset: str = Field(pattern=r"^[A-Za-z0-9._-]+\.gltf$")
     entities: list[RoomEntity] = Field(min_length=1)
-    markers: list[TrackingMarker] = Field(
-        default_factory=lambda: list[TrackingMarker](), max_length=32
-    )
 
     @model_validator(mode="after")
     def check_entities(self) -> Self:
         _check_interaction_flags(self.entities)
-        _check_markers(self.markers)
         if len({entity.node for entity in self.entities}) != len(self.entities):
             raise ValueError("Entity nodes must be unique")
         movable = [entity for entity in self.entities if entity.kind == "movable"]
@@ -168,7 +173,7 @@ class AssetEntity(WireModel):
     rotation: Rotation
 
 
-class PreparedScene(WireModel):
+class PreparedScene(_MarkedManifest):
     """Schema 2: one GLB per entity and any number of movable entities."""
 
     schema_version: Literal[2]
@@ -178,14 +183,10 @@ class PreparedScene(WireModel):
     pivot: Literal["bottom_center"]
     quaternion_order: Literal["xyzw"]
     entities: list[AssetEntity] = Field(min_length=1, max_length=64)
-    markers: list[TrackingMarker] = Field(
-        default_factory=lambda: list[TrackingMarker](), max_length=32
-    )
 
     @model_validator(mode="after")
     def check_entities(self) -> Self:
         _check_interaction_flags(self.entities)
-        _check_markers(self.markers)
         if len({(entity.asset, entity.node) for entity in self.entities}) != len(self.entities):
             raise ValueError("Entity asset nodes must be unique")
         return self

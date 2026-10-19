@@ -1,11 +1,12 @@
+/** OpenCV runs here, off the page's thread, so the 3D view keeps its frame rate. */
 import cvModule from '@techstark/opencv-js';
 import type { CameraIntrinsics, TrackingMarker } from './protocol';
 import { BoardCalibrator, MarkerLocator, openCV, type Frame, type Located } from './vision';
 
-/* OpenCV runs here, off the page's thread, so the 3D view keeps its frame rate. */
-
 export type WorkerRequest =
-  | { kind: 'locate'; token: number; frame: Frame; intrinsics: CameraIntrinsics; markers: TrackingMarker[] }
+  | {
+    kind: 'locate'; token: number; frame: Frame; intrinsics: CameraIntrinsics; markers: TrackingMarker[];
+  }
   | { kind: 'board'; token: number; frame: Frame }
   | { kind: 'solve'; token: number }
   | { kind: 'reset-board' };

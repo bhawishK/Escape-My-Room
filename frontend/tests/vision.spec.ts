@@ -12,7 +12,8 @@ const DESK: TrackingMarker = { id: 0, label: 'Desk front', size: 0.15, position:
 const HALF_TURN_Y = Math.SQRT1_2;
 // A tag on a wall to the room's left, facing +X.
 const WALL: TrackingMarker = {
-  id: 5, label: 'Left wall', size: 0.15, position: { x: -0.9, y: 0.9, z: -0.3 }, rotation: { x: 0, y: HALF_TURN_Y, z: 0, w: HALF_TURN_Y },
+  id: 5, label: 'Left wall', size: 0.15, position: { x: -0.9, y: 0.9, z: -0.3 },
+  rotation: { x: 0, y: HALF_TURN_Y, z: 0, w: HALF_TURN_Y },
 };
 const STANDING = { x: 0, y: 1.4, z: 0 };
 
@@ -43,7 +44,8 @@ test('the phone is placed where it stands, looking where it looks', () => {
   const pose = track(view, [DESK]);
   expectNear(pose.position, STANDING, 0.01);
   const direction = viewDirection(pose.orientation);
-  expect(direction.x * view.forward.x + direction.y * view.forward.y + direction.z * view.forward.z).toBeGreaterThan(Math.cos(Math.PI / 180));
+  const alignment = direction.x * view.forward.x + direction.y * view.forward.y + direction.z * view.forward.z;
+  expect(alignment).toBeGreaterThan(Math.cos(Math.PI / 180));
 });
 
 test('moving the phone along each room axis moves it that far along that axis', () => {

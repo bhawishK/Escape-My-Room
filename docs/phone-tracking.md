@@ -37,8 +37,8 @@ back camera (getUserMedia, 1280 × 720 requested)
 - **Room frame:** the [prepared room frame](prepared-room.md#coordinate-frame). Units are meters, the origin is the floor center, +X is right, +Y is up, and +Z points toward the viewer, away from the desk.
 - **Marker frame:** the center of the black square. +X points to the printed tag's right, +Y to its top, and +Z out of its printed face. The manifest's rotation turns this frame into the room. Size is the black square's edge.
 - **Stand-in room tag:** ID 0, 150 mm, upright on the desk's front face. Its center is at `(0, 0.60, -0.90)` with the identity rotation, so it faces +Z toward the viewer.
-- **Message:** a tracked pose has `reference_space: "room"`, and its position is already in room coordinates. Python stores no alignment for the phone. The Quest keeps the manual calibration from [room alignment](room-alignment.md).
-- **Phone view:** while tracking, the phone's own 3D view moves to its measured position and camera direction. Orientation is not sent yet; Issue 4 adds it to the message.
+- **Message:** a tracked pose has `reference_space: "room"`, and its position is already in room coordinates. Python applies no alignment to it, and the phone page no longer offers **Confirm alignment**, so the phone's alignment entry stays `not_aligned`. The Quest keeps the manual calibration from [room alignment](room-alignment.md).
+- **Phone view:** while tracking, the phone's own 3D view moves to its latest local measurement of position and camera direction, so the view does not lag by a network round trip. This departs from rendering only Python-accepted state on the phone: the headset's sphere and both pages' diagnostics show the accepted position, but the phone's camera view does not wait for it. Orientation is not sent yet; Issue 4 adds it to the message.
 
 Moving the phone 30 cm to the right raises the accepted X by 0.30. Moving it up raises Y. Moving it toward the desk lowers Z.
 
@@ -58,7 +58,7 @@ Calibrations are stored in `data/tracking/cameras.json`, one per video resolutio
 | --- | --- | --- |
 | Start, tag not yet seen | Looking for a room marker… | Unchanged until 0.3 s, then `lost` |
 | Tag measured | Tracking · marker 0 | `tracked`, at most 20 updates per second |
-| Tag not usable for 0.3 s | Lost · reason (for example "No room marker in view.") | `lost`; the last position is never repeated |
+| Tag not usable for 0.3 s | Lost · reason (for example "No room marker in view.") | `lost`; the last position is never sent again |
 | Tag usable again | Tracking · marker 0 | `tracked` |
 | Stop tracking | Tracking off; camera released | `inactive` |
 | Page hidden or left | Tracking stopped while the page was hidden… | `inactive`; camera released |
@@ -68,7 +68,7 @@ Calibrations are stored in `data/tracking/cameras.json`, one per video resolutio
 | No calibration for this resolution | Lost · Calibrate the camera at W×H first… | `lost` |
 | Room without markers | This room has no tracking markers… | Unchanged |
 
-Only one frame is processed at a time, so results never queue up. A result that arrives after a stop carries an old token and is discarded.
+The 0.3 s grace keeps single missed frames from flickering the state, so the last accepted position can stay visible for up to 0.3 s after the tag disappears. Only one frame is processed at a time, so results never queue up. A result that arrives after a stop carries an old token and is discarded.
 
 ## Cadence and limits
 
