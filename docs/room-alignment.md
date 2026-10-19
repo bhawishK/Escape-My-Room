@@ -65,4 +65,4 @@ One transform per connected role, from that device's WebXR reference space into 
 
 ## The phone
 
-Issue 19 places the phone without this calibration. The phone measures itself against the room's printed marker and sends positions already in room coordinates, so Python applies no alignment to them. The phone page no longer offers **Confirm alignment**; the protocol still accepts a phone calibration, but nothing uses it. See [phone tracking](phone-tracking.md). The calibration above remains the headset's. Losing tracking and resetting a broken alignment is Issue 10.
+The phone page does not offer **Confirm alignment**. Its room view stands at a fixed spot and turns with the phone, and a phone position would arrive already in room coordinates, so Python applies no alignment to it; the protocol still accepts a phone calibration, but nothing uses it. See [phone tracking](phone-tracking.md). The calibration above remains the headset's. Losing tracking and resetting a broken alignment is Issue 10.

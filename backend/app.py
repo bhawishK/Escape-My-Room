@@ -65,7 +65,6 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     room = PrototypeRoom(load_error=load_error)
     if prepared is not None:
         room.entities = [entity.model_copy(deep=True) for entity in prepared.entities]
-        room.markers = prepared.markers
         room.room_version = prepared.room_version
 
     @app.get("/api/health")

@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Role = Literal["mobile_master", "vr_solver"]
 TrackingStatus = Literal["inactive", "tracked", "lost"]
-# The phone measures its position against room markers, so it reports room coordinates directly.
+# The phone reports its position in room coordinates directly.
 ReferenceSpace = Literal["room"]
 
 

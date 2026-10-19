@@ -51,18 +51,6 @@ ENTITIES = [
     },
 ]
 
-# The printed AprilTag the phone camera locates itself against: tag 0, upright on the desk's
-# front face (z = -0.90), facing the viewer. Size is the black square's edge.
-MARKERS = [
-    {
-        "id": 0,
-        "label": "Desk front",
-        "size": 0.15,
-        "position": {"x": 0.0, "y": 0.6, "z": -0.9},
-        "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
-    },
-]
-
 
 def srgb_channel(hex_pair: str) -> float:
     value = int(hex_pair, 16) / 255
@@ -230,7 +218,6 @@ def main() -> None:
         "units": "meters",
         "asset": "room.gltf",
         "entities": ENTITIES,
-        "markers": MARKERS,
     }
     if [entity["id"] for entity in ENTITIES].count("box") != 1:
         raise RuntimeError("the room needs exactly one box")

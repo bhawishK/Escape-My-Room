@@ -1,12 +1,12 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import type { RoomPose } from './marker-geometry';
+import type { RoomPose } from './phone-view';
 import type { AlignmentState, SessionState } from './protocol';
 import { applyPlacement, placeEntities } from './room';
 
 const emptyRoom = (): SessionState['room'] => ({
   available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
-  entities: [], markers: [], loaded_by: { mobile_master: null, vr_solver: null },
+  entities: [], loaded_by: { mobile_master: null, vr_solver: null },
 });
 
 const OVERVIEW_FOV = 60;
@@ -34,6 +34,10 @@ export class DiagnosticScene {
   private readonly statusTexture: THREE.CanvasTexture;
   private readonly statusLabel: THREE.Sprite;
   private statusText = '';
+  private readonly raycaster = new THREE.Raycaster();
+  /** Outlines the object the phone's gaze cursor is over. */
+  private readonly highlight = new THREE.BoxHelper(new THREE.Object3D(), 0xffd399);
+  private highlighted: string | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -70,6 +74,8 @@ export class DiagnosticScene {
     this.statusLabel.position.set(0, 1.45, -0.8);
     this.statusLabel.visible = false;
     this.roomAnchor.add(this.statusLabel);
+    this.highlight.visible = false;
+    this.scene.add(this.highlight);
     container.append(this.renderer.domElement);
     container.dataset.view = 'overview';
     const resize = () => {
@@ -85,12 +91,12 @@ export class DiagnosticScene {
 
   apply(state: SessionState): void {
     const position = state.marker.position;
-    // A tracking phone looks out from its own position, so it does not draw itself.
+    // A phone looking out from its own view does not draw itself.
     this.marker.visible = position !== null && this.following === null;
     if (position) this.marker.position.set(position.x, position.y, position.z);
   }
 
-  /** Moves this device's view to its measured room pose, or back to the default view with null. */
+  /** Moves this device's view to the phone's room pose, or back to the default view with null. */
   follow(pose: RoomPose | null): void {
     this.following = pose;
     // The phone's view spans about what its camera sees along the screen's long side.
@@ -107,6 +113,28 @@ export class DiagnosticScene {
     } else {
       this.applyView(this.alignment);
     }
+  }
+
+  /**
+   * The room entity at a point on the view, 0–1 across and down, outlined until another is
+   * pointed at; null, and no outline, where there is none or for a null point.
+   */
+  pointAt(point: { x: number; y: number } | null): string | null {
+    let found: string | null = null;
+    if (point && this.roomGroup) {
+      this.raycaster.setFromCamera(new THREE.Vector2(point.x * 2 - 1, 1 - point.y * 2), this.camera);
+      const hit = this.raycaster.intersectObject(this.roomGroup, true)[0];
+      for (let object: THREE.Object3D | null = hit?.object ?? null; object && !found; object = object.parent) {
+        for (const [id, root] of this.entityRoots) if (root === object) found = id;
+      }
+    }
+    if (found !== this.highlighted) {
+      this.highlighted = found;
+      const root = found ? this.entityRoots.get(found) : undefined;
+      if (root) this.highlight.setFromObject(root);
+      this.highlight.visible = root !== undefined;
+    }
+    return found;
   }
 
   async syncRoom(state: SessionState): Promise<{ version: number; acknowledge: boolean } | null> {
@@ -152,6 +180,7 @@ export class DiagnosticScene {
     this.roomGroup?.removeFromParent();
     this.roomGroup = null;
     this.entityRoots = new Map();
+    this.pointAt(null);
     this.grid.visible = true;
   }
 

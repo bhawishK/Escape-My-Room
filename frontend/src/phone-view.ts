@@ -1,18 +1,21 @@
 /**
  * The phone's full-screen room view: where it looks from and which way it faces. Turning the phone
- * turns the view through the phone's orientation sensor; the printed tag, when tracked, supplies the
- * position and keeps the sensor's heading in line with the room.
+ * turns the view through the phone's orientation sensor; walking steps move it (see step-walk.ts).
  */
 import * as THREE from 'three';
-import type { RoomPose } from './marker-geometry';
 import type { Position, Rotation } from './protocol';
 
-/** Before any tag is measured, the view stands back from the desk at phone height, so the room fits. */
+/** Where a view is in the room and which way it faces, as a Three.js camera would. */
+export interface RoomPose {
+  position: Position;
+  /** Unit quaternion (x, y, z, w); the camera looks along its local -Z with +Y up. */
+  orientation: Rotation;
+}
+
+/** The view starts back from the desk at phone height, so the room fits. */
 export const START_EYE: Position = { x: 0, y: 1.5, z: 1.6 };
 // Facing the desk and tilted 20° down toward it, as a phone is held when looking at it.
 const FACING_DESK: Rotation = { x: Math.sin(-20 * Math.PI / 360), y: 0, z: 0, w: Math.cos(-20 * Math.PI / 360) };
-/** How far each tag measurement pulls the sensor's heading toward the tag's, smoothing tag jitter. */
-const HEADING_PULL = 0.2;
 
 const UP = new THREE.Vector3(0, 1, 0);
 const SCREEN_NORMAL = new THREE.Vector3(0, 0, 1);
@@ -37,10 +40,6 @@ export function headingOf(orientation: THREE.Quaternion | Rotation): number {
     new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w);
   const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
   return Math.atan2(-forward.x, -forward.z);
-}
-
-function wrap(angle: number): number {
-  return Math.atan2(Math.sin(angle), Math.cos(angle));
 }
 
 interface Reading { alpha: number; beta: number; gamma: number }
@@ -91,15 +90,6 @@ export class PhoneLook {
     return new THREE.Quaternion().setFromAxisAngle(UP, this.heading).multiply(raw);
   }
 
-  /** Pulls the heading toward a measured room orientation by `weight` (1 snaps to it). */
-  align(measured: Rotation, weight: number): void {
-    const raw = this.raw();
-    if (!raw) return;
-    const target = headingOf(measured) - headingOf(raw);
-    this.heading = this.anchored ? this.heading + weight * wrap(target - this.heading) : target;
-    this.anchored = true;
-  }
-
   private raw(): THREE.Quaternion | null {
     if (!this.reading) return null;
     const angle = screen.orientation?.angle ?? 0;
@@ -107,23 +97,9 @@ export class PhoneLook {
   }
 }
 
-/** Combines the tag's measured position with the turn sensor into the pose the room view shows. */
-export class PhoneViewpoint {
-  private position: Position = START_EYE;
-  private measuredOrientation: Rotation | null = null;
-
-  constructor(private readonly look: PhoneLook) {}
-
-  measured(pose: RoomPose): void {
-    this.position = pose.position;
-    this.measuredOrientation = pose.orientation;
-    this.look.align(pose.orientation, HEADING_PULL);
-  }
-
-  current(): RoomPose {
-    const turned = this.look.orientation();
-    const orientation = turned ? { x: turned.x, y: turned.y, z: turned.z, w: turned.w } :
-      this.measuredOrientation ?? FACING_DESK;
-    return { position: this.position, orientation };
-  }
+/** The pose the room view shows: the eye at `position`, turned by the phone's sensor when it is on. */
+export function phoneViewpoint(look: PhoneLook, position: Position = START_EYE): RoomPose {
+  const turned = look.orientation();
+  const orientation = turned ? { x: turned.x, y: turned.y, z: turned.z, w: turned.w } : FACING_DESK;
+  return { position, orientation };
 }

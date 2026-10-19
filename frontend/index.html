@@ -35,9 +35,9 @@
           </div>
           <div id="phone-controls" hidden>
             <button id="open-room-view">Open room view</button>
-            <p class="hint">The room fills the screen. <strong>Turn with phone</strong> looks around as you turn. <strong>Start tracking</strong> also follows you as you walk; tape the printed tag to the desk front first.</p>
+            <p class="hint">The room fills the screen. <strong>Turn with phone</strong> looks around as you turn. <strong>Walk with steps</strong> moves the view a step at a time as you walk, roughly; it counts steps rather than measuring where you are. <strong>Gaze cursor</strong> points at objects with your eyes or head through the front camera, after a short calibration.</p>
           </div>
-          <p class="hint">iPhone 16 Chrome shows the room full screen and follows the phone with its back camera and the printed tag. Meta Quest 3 uses the immersive VR view.</p>
+          <p class="hint">iPhone 16 Chrome shows the room full screen and turns it with the phone. Meta Quest 3 uses the immersive VR view.</p>
           <button id="disconnect" class="secondary" disabled>Disconnect</button>
           <p id="error" class="error-message" role="alert" hidden></p>
         </section>
@@ -48,7 +48,7 @@
           <details><summary>Device smoke-test diagnostics</summary>
             <p id="tracking" data-testid="tracking">Inactive</p>
             <p id="marker-position" data-testid="marker-position">No accepted position</p>
-            <p>Positions are room meters, measured by the phone against the room's printed markers. On the headset, Confirm alignment places it at the floor center, facing the desk. The furniture positions stay fixed.</p>
+            <p>Positions are room meters. The phone does not send a position yet. On the headset, Confirm alignment places it at the floor center, facing the desk. The furniture positions stay fixed.</p>
             <p>This report records browser observations. It does not certify a completed hardware test.</p>
             <pre id="device-report"></pre>
             <button id="download-report" class="secondary">Download diagnostic report</button>
@@ -91,16 +91,28 @@
       </section>
     </main>
     <div id="room-view-hud" hidden>
-      <p id="tracking-status" data-testid="tracking-status" class="hud-status" role="status">Tracking off</p>
+      <p id="view-status" data-testid="view-status" class="hud-status" role="status">Turning off</p>
       <div class="hud-buttons">
         <button id="look-around">Turn with phone</button>
-        <button id="start-tracking">Start tracking</button>
-        <button id="stop-tracking" hidden>Stop tracking</button>
+        <button id="walk-toggle">Walk with steps</button>
+        <button id="walk-reset" class="secondary" hidden>Back to start</button>
+        <button id="walk-length" class="secondary" hidden>Step 0.6 m</button>
+        <button id="walk-sensitivity" class="secondary" hidden>Sensitivity: normal</button>
+        <button id="gaze-toggle">Gaze cursor</button>
+        <button id="gaze-mode" class="secondary" hidden>Switch to head</button>
+        <button id="gaze-calibrate" class="secondary" hidden>Calibrate</button>
+        <button id="gaze-test" class="secondary" hidden>Test accuracy</button>
         <button id="close-room-view" class="secondary">Close</button>
       </div>
     </div>
-    <!-- The tracking camera's frames. It stays rendered, invisibly, because iOS stops decoding hidden video. -->
-    <video id="camera-feed" class="camera-feed" muted playsinline aria-hidden="true"></video>
+    <!-- The gaze cursor's front camera, shown small so the person can keep their face in view. -->
+    <video id="gaze-camera" muted playsinline aria-label="Front camera" hidden></video>
+    <div id="gaze-cursor" data-testid="gaze-cursor" hidden></div>
+    <div id="gaze-layer" hidden>
+      <p id="gaze-prompt" data-testid="gaze-prompt" class="hud-status" role="status"></p>
+      <span id="gaze-dot"></span>
+      <button id="gaze-cancel" class="secondary">Cancel</button>
+    </div>
     <div id="xr-overlay" hidden>
       <p id="xr-hud">Connection diagnostic</p>
       <p>Squeeze either grip button to confirm. Point the laser here and pull the trigger to press a button.</p>
