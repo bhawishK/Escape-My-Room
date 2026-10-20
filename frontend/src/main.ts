@@ -1,4 +1,5 @@
 import './style.css';
+import { roomHeading, roomPoint } from './alignment';
 import { RoomPhotos } from './capture';
 import { element } from './dom';
 import { FloorDepth } from './floor-depth';
@@ -7,7 +8,7 @@ import { RoomPreparation } from './preparation';
 import { floorPoint } from './aim';
 import { MotionStats } from './motion-stats';
 import { PhoneLook, START_EYE, headingOf, phoneViewpoint, pitchOf, type RoomPose } from './phone-view';
-import type { Role, SessionState } from './protocol';
+import { NO_PRESENCE, type PresenceInput, type Role, type SessionState } from './protocol';
 import { SessionClient } from './session';
 import { DiagnosticScene } from './scene';
 import { STEP_LENGTHS, StepWalker } from './step-walk';
@@ -87,6 +88,46 @@ function startMotion(): void {
     showRoomViewError(error, 'Motion access could not start.');
   }).finally(controls);
 }
+/** How often a device may publish where it is. Faster frames are dropped. */
+const PRESENCE_INTERVAL_MS = 50;
+let lastPresenceAt = -Infinity;
+let presenceSent = false;
+
+function publishPresence(): void {
+  if (!connected || !role) return;
+  const sample = currentPresence();
+  if (!sample) {
+    if (!presenceSent) return;
+    presenceSent = !client.sendPresence({ tracking_status: 'inactive', position: null, heading: null });
+    return;
+  }
+  const now = performance.now();
+  if (now - lastPresenceAt < PRESENCE_INTERVAL_MS) return;
+  if (!client.sendPresence(sample)) return;
+  lastPresenceAt = now;
+  presenceSent = true;
+}
+
+/** The room pose this device can publish, or null when it has no place to report. */
+function currentPresence(): PresenceInput | null {
+  if (role === 'mobile_master') {
+    if (!roomViewOpen) return null;
+    const facing = look.orientation();
+    return {
+      tracking_status: 'tracked',
+      position: { ...walker.position(), y: viewHeight },
+      heading: facing ? headingOf(facing) : 0,
+    };
+  }
+  const viewer = xr?.viewerPose() ?? null;
+  const alignment = state?.alignment.vr_solver;
+  if (!xrActive || !viewer || alignment?.status !== 'aligned') return null;
+  return {
+    tracking_status: 'tracked',
+    position: roomPoint(alignment, viewer.position),
+    heading: roomHeading(alignment, viewer.orientation),
+  };
+}
 const depthButton = element<HTMLButtonElement>('depth-toggle');
 /** The measured height to show the room from, or null for the default, and the height shown now. */
 let measuredHeight: number | null = null;
@@ -164,6 +205,18 @@ function setRoomView(open: boolean): void {
   }
 }
 
+function presenceLabel(who: Role, next: SessionState): string {
+  const name = who === 'mobile_master' ? 'Phone' : 'Headset';
+  const presence = next.participants?.[who] ?? NO_PRESENCE;
+  if (presence.tracking_status === 'inactive') return `${name} · not here`;
+  if (presence.tracking_status === 'lost') return `${name} · left`;
+  if (!presence.position || presence.heading === null) return `${name} · ${presence.tracking_status}`;
+  const place = `${presence.position.x.toFixed(2)}, ${presence.position.y.toFixed(2)}, ${presence.position.z.toFixed(2)} m`;
+  const facing = `heading ${presence.heading.toFixed(2)} rad`;
+  if (presence.tracking_status === 'stale') return `${name} · stale · ${place} · ${facing}`;
+  return `${name} · here · ${place} · ${facing}`;
+}
+
 function alignmentLabel(next: SessionState): string {
   if (!role) return 'Not aligned';
   if (role === 'mobile_master') return 'Not placed · walking only counts steps';
@@ -192,6 +245,7 @@ function applyState(next: SessionState): void {
   if (state && next.revision < state.revision) return;
   const before = ownHold();
   state = next;
+  view?.setLocalRole(role);
   motion.state();
   const held = next.manipulation;
   view?.showControl(held?.entity ?? null);
@@ -238,6 +292,8 @@ function applyState(next: SessionState): void {
   const labels = { inactive: 'Inactive · no positional input', tracked: 'Tracked',
     lost: 'Lost · position unavailable' };
   element('tracking').textContent = labels[next.marker.tracking_status];
+  element('presence-phone').textContent = presenceLabel('mobile_master', next);
+  element('presence-headset').textContent = presenceLabel('vr_solver', next);
   element('alignment-status').textContent = alignmentLabel(next);
   element('vr-status').textContent = next.vr_connected ? 'VR device connected' : 'Waiting for VR device';
   element('vr-status').dataset.connected = String(next.vr_connected);
@@ -251,7 +307,11 @@ const client = new SessionClient({
     element('connection').textContent = value ? `Connected · ${role === 'mobile_master' ? 'Phone' : 'VR headset'}` : 'Not connected';
     if (!value) {
       state = null;
+      presenceSent = false;
+      lastPresenceAt = -Infinity;
       element('marker-position').textContent = 'No accepted position';
+      element('presence-phone').textContent = 'Phone · not here';
+      element('presence-headset').textContent = 'Headset · not here';
       element('tracking').textContent = 'Disconnected · state unavailable';
       element('vr-status').textContent = 'Connect to see VR device status';
       element('vr-status').dataset.connected = 'false';
@@ -264,6 +324,7 @@ const client = new SessionClient({
         view.apply({
           revision: 0, mobile_connected: false, vr_connected: false,
           marker: { position: null, tracking_status: 'inactive', reference_space: null, heading: null, pitch: null },
+          participants: { mobile_master: NO_PRESENCE, vr_solver: NO_PRESENCE },
           alignment: {
             mobile_master: { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } },
             vr_solver: { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } },
@@ -398,6 +459,7 @@ try {
     xr?.frame(frame);
     sceneView.tick(lastFrame === null ? 0 : time - lastFrame);
     lastFrame = time;
+    publishPresence();
     if (roomViewOpen) {
       // A new height eases in rather than jumping.
       const target = measuredHeight ?? START_EYE.y;

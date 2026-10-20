@@ -36,6 +36,19 @@ export interface AlignmentState {
   origin: Position;
 }
 
+export type PresenceStatus = 'inactive' | 'tracked' | 'lost' | 'stale';
+
+/** One person in the room. Heading 0 faces the desk; positive turns left. */
+export interface PresenceState {
+  tracking_status: PresenceStatus;
+  position: Position | null;
+  heading: number | null;
+}
+
+export const NO_PRESENCE: PresenceState = {
+  tracking_status: 'inactive', position: null, heading: null,
+};
+
 export interface SessionState {
   revision: number;
   mobile_connected: boolean;
@@ -47,6 +60,7 @@ export interface SessionState {
     heading: number | null;
     pitch: number | null;
   };
+  participants: { mobile_master: PresenceState; vr_solver: PresenceState };
   alignment: { mobile_master: AlignmentState; vr_solver: AlignmentState };
   /** How Python is delivering: an induced delay for testing slow networks, 0 normally. */
   delivery: { simulated_delay_ms: number };
@@ -69,6 +83,12 @@ export interface PoseInput {
 export interface SelectionResult {
   id: string | null;
   rejected: { code: string; message: string } | null;
+}
+
+export interface PresenceInput {
+  tracking_status: 'inactive' | 'tracked' | 'lost';
+  position: Position | null;
+  heading: number | null;
 }
 
 export type ServerEvent =

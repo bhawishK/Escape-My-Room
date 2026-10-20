@@ -1,4 +1,5 @@
 import { alignmentFromPose, type CalibrationInput } from './alignment';
+import type { Position, Rotation } from './protocol';
 import type { DiagnosticScene } from './scene';
 
 export interface XRReport {
@@ -18,6 +19,7 @@ export class XRDiagnostic {
   private session: XRSession | null = null;
   private reference: XRReferenceSpace | null = null;
   private latest: CalibrationInput | null = null;
+  private viewer: { position: Position; orientation: Rotation } | null = null;
   private confirmHeld = false;
   private readonly report: XRReport = {
     secure_context: isSecureContext, api_available: Boolean(navigator.xr),
@@ -64,6 +66,7 @@ export class XRDiagnostic {
       this.session = null;
       this.reference = null;
       this.latest = null;
+      this.viewer = null;
       this.confirmHeld = false;
       this.view.setPresenting(false);
       this.report.mode = null;
@@ -105,10 +108,12 @@ export class XRDiagnostic {
     if (pose && !pose.emulatedPosition) {
       const p = pose.transform.position;
       const q = pose.transform.orientation;
-      this.latest = alignmentFromPose(
-        { x: p.x, y: p.y, z: p.z },
-        { x: q.x, y: q.y, z: q.z, w: q.w },
-      );
+      const position = { x: p.x, y: p.y, z: p.z };
+      const orientation = { x: q.x, y: q.y, z: q.z, w: q.w };
+      this.viewer = { position, orientation };
+      this.latest = alignmentFromPose(position, orientation);
+    } else {
+      this.viewer = null;
     }
     const status = !pose ? 'lost' : pose.emulatedPosition ? 'emulated' : 'tracked';
     if (status !== this.report.positional_tracking) {
@@ -138,6 +143,11 @@ export class XRDiagnostic {
   /** Headset pose mapped to the floor center, or null before a tracked frame. */
   confirmedAlignment(): CalibrationInput | null {
     return this.latest;
+  }
+
+  /** The latest non-emulated viewer pose in the local reference space, or null when it is gone. */
+  viewerPose(): { position: Position; orientation: Rotation } | null {
+    return this.viewer;
   }
 }
 

@@ -1,5 +1,6 @@
 """The shared prototype's WebSocket contract; phone positions are room-frame meters."""
 
+import math
 from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -32,6 +33,21 @@ class MarkerState(WireModel):
     position: Position | None = None
     heading: Heading | None = None
     pitch: Pitch | None = None
+
+
+PresenceStatus = Literal["inactive", "tracked", "lost", "stale"]
+
+
+class PresenceState(WireModel):
+    """Where one participant is in the room, and which way they face.
+
+    Heading is radians about Y. ``0`` faces the desk, along room -Z. Positive
+    turns left. ``stale`` keeps the last place after updates stop.
+    """
+
+    tracking_status: PresenceStatus = "inactive"
+    position: Position | None = None
+    heading: float | None = Field(default=None, ge=-math.pi, le=math.pi)
 
 
 class RoomLoadedMessage(WireModel):
@@ -90,4 +106,23 @@ class PoseMessage(WireModel):
                 raise ValueError("Tracked input requires a position and reference space")
         elif self.position is not None or self.heading is not None or self.pitch is not None:
             raise ValueError("Unavailable tracking must not supply a usable position")
+        return self
+
+
+class PresenceMessage(WireModel):
+    """One participant's place. This cannot move a room object."""
+
+    type: Literal["presence"]
+    sequence: int = Field(ge=1)
+    tracking_status: Literal["inactive", "tracked", "lost"]
+    position: Position | None
+    heading: float | None = Field(ge=-math.pi, le=math.pi)
+
+    @model_validator(mode="after")
+    def check_presence(self) -> Self:
+        if self.tracking_status == "tracked":
+            if self.position is None or self.heading is None:
+                raise ValueError("Tracked presence requires a position and heading")
+        elif self.position is not None or self.heading is not None:
+            raise ValueError("Unavailable presence must not supply a position or heading")
         return self
