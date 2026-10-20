@@ -11,19 +11,37 @@ from backend.alignment import Alignment
 from backend.prepared_room import FRAME, QUATERNION_ORDER, UNITS, SceneEntity
 from backend.protocol import MarkerState, PoseMessage, Position, Role
 
-# A carried object is held this far in front of the phone, its bottom this far below it.
-CARRY_DISTANCE = 0.8
-CARRY_BELOW = 0.6
+# A carried object sits where the screen's centre meets the floor, no nearer or further than this.
+CARRY_NEAREST = 0.3
+CARRY_FARTHEST = 4.0
+# Static entities this thin are floor, as the phone's walking treats them (frontend/src/steps.ts).
+FLOOR_THICKNESS = 0.05
+
+
+def floor_bounds(entities: list[SceneEntity]) -> tuple[float, float, float, float] | None:
+    """The floor's extent as (min x, max x, min z, max z), around each floor piece's corners."""
+    xs: list[float] = []
+    zs: list[float] = []
+    for entity in entities:
+        if entity.kind != "static" or entity.size.height > FLOOR_THICKNESS:
+            continue
+        q, half_w, half_d = entity.rotation, entity.size.width / 2, entity.size.depth / 2
+        for x, z in ((-half_w, -half_d), (half_w, -half_d), (half_w, half_d), (-half_w, half_d)):
+            # v' = v + 2w(u × v) + 2u × (u × v), with v = (x, 0, z).
+            tx, ty, tz = 2 * q.y * z, 2 * (q.z * x - q.x * z), -2 * q.y * x
+            xs.append(entity.position.x + x + q.w * tx + (q.y * tz - q.z * ty))
+            zs.append(entity.position.z + z + q.w * tz + (q.x * ty - q.y * tx))
+    return (min(xs), max(xs), min(zs), max(zs)) if xs else None
 
 
 @dataclass
 class Manipulation:
-    """One hold: the object is carried in front of the owner's phone until it is dropped."""
+    """One hold: the owner's phone aims the object across the floor until it is let go."""
 
     id: int
     entity: str
     owner: Role
-    # The height the object rested at when picked up; dropping returns it there.
+    # The floor height the object rested at when picked up; it slides across the floor there.
     rest_y: float
     # The pose sequence of the latest movement applied, or None before the first.
     sequence: int | None = None
@@ -133,7 +151,7 @@ class PrototypeRoom:
     def acquire(
         self, room_version: int, entity_id: str
     ) -> Literal["ok", "unavailable", "mismatch", "not_selected", "not_tracked", "already_held"]:
-        """Pick up the phone's selected object and bring it in front of the phone."""
+        """Pick up the phone's selected object, to where its screen centre meets the floor."""
         if self.load_error is not None or self.room_version is None:
             return "unavailable"
         if room_version != self.room_version:
@@ -156,7 +174,7 @@ class PrototypeRoom:
         return "ok"
 
     def release(self, manipulation_id: int) -> Literal["ok", "stale"]:
-        """End the current hold; the object drops straight down to where it rested."""
+        """End the current hold; the object stays on the floor where it was aimed."""
         if self.manipulation is None or self.manipulation.id != manipulation_id:
             return "stale"
         self.drop()
@@ -179,6 +197,7 @@ class PrototypeRoom:
             reference_space=pose.reference_space,
             position=pose.position,
             heading=pose.heading,
+            pitch=pose.pitch,
         )
         held = self.manipulation
         if held is not None and pose.position is None:
@@ -193,20 +212,35 @@ class PrototypeRoom:
         return next(entity for entity in self.entities if entity.id == entity_id)
 
     def carry(self) -> None:
-        """Place the held object in front of the phone, where the phone faces."""
+        """
+        Place the held object where the ray from the phone's screen centre meets the floor it
+        rests on. Turning swings it around the phone; tilting slides it nearer or further.
+        """
         held, phone = self.manipulation, self.marker.position
         if held is None or phone is None:
             return
         heading = self.marker.heading or 0.0
+        pitch = self.marker.pitch or 0.0
+        drop = phone.y - held.rest_y
+        # Level, upward or a phone below the floor never meets it, so the object goes furthest.
+        distance = drop / math.tan(-pitch) if pitch < 0 and drop > 0 else CARRY_FARTHEST
+        distance = max(CARRY_NEAREST, min(CARRY_FARTHEST, distance))
+
+        x = phone.x - math.sin(heading) * distance
+        z = phone.z - math.cos(heading) * distance
+        entity = self.entity(held.entity)
+        bounds = floor_bounds(self.entities)
+        if bounds is not None:
+            # Aimed past the floor's edge, the object stays whole on the floor.
+            margin = max(entity.size.width, entity.size.depth) / 2
+            min_x, max_x, min_z, max_z = bounds
+            x = max(min_x + margin, min(max_x - margin, x))
+            z = max(min_z + margin, min(max_z - margin, z))
 
         def bounded(value: float) -> float:
             return max(-100, min(100, value))
 
-        self.entity(held.entity).position = Position(
-            x=bounded(phone.x - math.sin(heading) * CARRY_DISTANCE),
-            y=bounded(phone.y - CARRY_BELOW),
-            z=bounded(phone.z - math.cos(heading) * CARRY_DISTANCE),
-        )
+        entity.position = Position(x=bounded(x), y=held.rest_y, z=bounded(z))
 
     def drop(self) -> None:
         """End the hold, letting the object fall straight down to the height it rested at."""

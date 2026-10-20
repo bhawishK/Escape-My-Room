@@ -4,12 +4,13 @@ import { element } from './dom';
 import { FloorDepth } from './floor-depth';
 import { GazeCursor } from './gaze-cursor';
 import { RoomPreparation } from './preparation';
-import { PhoneLook, START_EYE, headingOf, phoneViewpoint } from './phone-view';
+import { floorPoint } from './aim';
+import { PhoneLook, START_EYE, headingOf, phoneViewpoint, pitchOf, type RoomPose } from './phone-view';
 import type { Role, SessionState } from './protocol';
 import { SessionClient } from './session';
 import { DiagnosticScene } from './scene';
 import { STEP_LENGTHS, StepWalker } from './step-walk';
-import { floorplan } from './steps';
+import { floorplan, type Floorplan } from './steps';
 import { XRDiagnostic, xrError } from './xr';
 
 const phoneButton = element<HTMLButtonElement>('connect-phone');
@@ -39,23 +40,33 @@ const PICK_UP_MS = 300;
 /** While carrying, the phone tells Python where it is and faces this often, so the object follows. */
 const CARRY_POSE_MS = 100;
 let lastCarryPose = 0;
+/** The floor height a carried object slides across, from where it rested when picked up. */
+let carryFloor: number | null = null;
+/** The floor's extent, which a carried object stays on. */
+let carryBounds: Floorplan['floor'] = null;
 const look = new PhoneLook();
-/** Which way the phone faces: 0 toward the desk, positive turning left; null without a reading. */
-function heading(): number | null {
-  const facing = look.orientation();
-  return facing ? headingOf(facing) : null;
+/** Where the room view looks from: walking's place at the view's height, turned with the phone. */
+function viewPose(): RoomPose {
+  return phoneViewpoint(look, { ...walker.position(), y: viewHeight });
 }
-const walker = new StepWalker(START_EYE, () => heading() ?? 0, {
+const walker = new StepWalker(START_EYE, () => headingOf(viewPose().orientation), {
   step: (position, steps) => {
     if (selected === null) element('view-status').textContent = `Walking · ${steps} ${steps === 1 ? 'step' : 'steps'}`;
     publishWalk(position);
   },
 });
-/** Tells Python where walking has put the phone and which way it faces, so the headset shows it. */
+/**
+ * Tells Python where walking has put the phone, at the view's height, and where its screen centre
+ * aims, so the headset shows it and a carried object follows the aim.
+ */
 function publishWalk(position: { x: number; y: number; z: number } | null): void {
+  const facing = viewPose().orientation;
   client.sendPose(position ?
-    { tracking_status: 'tracked', reference_space: 'room', position, heading: heading() } :
-    { tracking_status: 'inactive', reference_space: null, position: null, heading: null });
+    {
+      tracking_status: 'tracked', reference_space: 'room', position: { ...position, y: viewHeight },
+      heading: headingOf(facing), pitch: pitchOf(facing),
+    } :
+    { tracking_status: 'inactive', reference_space: null, position: null, heading: null, pitch: null });
 }
 /**
  * Turning and walking run whenever the room view is open. Call from a tap: iPhone asks for motion
@@ -127,6 +138,7 @@ function controls(): void {
   gazeButton.disabled = !connected;
   const pointing = gaze.getPhase() === 'tracking';
   for (const id of ['gaze-mode', 'gaze-calibrate', 'gaze-test']) element(id).hidden = !pointing;
+  element('aim-reticle').hidden = !roomViewOpen || ownHold() === null;
   gazeModeButton.textContent = gaze.getMode() === 'eyes' ? 'Switch to head' : 'Switch to eyes';
 }
 
@@ -187,15 +199,19 @@ function applyState(next: SessionState): void {
     // The pick-up was accepted after the finger lifted, so drop it at once.
     endHold();
   } else if (mine && !before) {
-    element('view-status').textContent = `Carrying ${entityLabel(mine.entity)} · let go to drop it`;
+    element('view-status').textContent = `Carrying ${entityLabel(mine.entity)} · turn and tilt to place it, let go to drop it`;
   } else if (!mine && before) {
     releasing = null;
+    carryFloor = null;
+    view?.predict(null);
     element('view-status').textContent = `Dropped ${entityLabel(before.entity)}`;
   }
   controls();
   view?.apply(next);
   if (role) view?.applyView(next.alignment[role]);
-  walker.setFloorplan(floorplan(next.room.available ? next.room.entities : []));
+  const plan = floorplan(next.room.available ? next.room.entities : []);
+  walker.setFloorplan(plan);
+  carryBounds = plan.floor;
   const roomStatus = element('room-status');
   roomStatus.dataset.available = 'false';
   roomStatus.textContent = roomLabel(next, false);
@@ -240,7 +256,7 @@ const client = new SessionClient({
         view.clearRoom();
         view.apply({
           revision: 0, mobile_connected: false, vr_connected: false,
-          marker: { position: null, tracking_status: 'inactive', reference_space: null, heading: null },
+          marker: { position: null, tracking_status: 'inactive', reference_space: null, heading: null, pitch: null },
           alignment: {
             mobile_master: { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } },
             vr_solver: { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } },
@@ -282,6 +298,8 @@ function endHold(): void {
   const mine = ownHold();
   if (!mine || releasing === mine.id) return;
   releasing = mine.id;
+  // Python places it from the latest aim, so it drops exactly where the phone shows it.
+  publishWalk(walker.position());
   client.sendRelease(mine.id);
 }
 
@@ -315,6 +333,9 @@ function handleRoomTouches(sceneView: DiagnosticScene): void {
         const version = state?.room.room_version;
         if (!press || selected === null || version === null || version === undefined) return;
         holding = true;
+        const id = selected;
+        carryFloor = state?.room.entities.find(entity => entity.id === id)?.position.y ?? 0;
+        publishWalk(walker.position());
         client.sendAcquire(version, selected);
       }, PICK_UP_MS);
     }
@@ -358,16 +379,24 @@ try {
   handleRoomTouches(sceneView);
   sceneView.renderer.setAnimationLoop((time, frame) => {
     xr?.frame(frame);
-    if (roomViewOpen && ownHold() && time - lastCarryPose >= CARRY_POSE_MS) {
-      // A carried object follows the phone as it glides between steps and turns.
-      lastCarryPose = time;
-      publishWalk(walker.position());
-    }
     if (roomViewOpen) {
       // A new height eases in rather than jumping.
       const target = measuredHeight ?? START_EYE.y;
       viewHeight += 0.05 * (target - viewHeight);
-      sceneView.follow(phoneViewpoint(look, { ...walker.position(), y: viewHeight }));
+      const pose = viewPose();
+      sceneView.follow(pose);
+      const mine = ownHold();
+      if (mine && carryFloor !== null) {
+        // Drawn where the screen centre meets the floor now; Python confirms it a moment later.
+        const held = state?.room.entities.find(entity => entity.id === mine.entity);
+        const margin = held ? Math.max(held.size.width, held.size.depth) / 2 : 0;
+        sceneView.predict(mine.entity, floorPoint(
+          pose.position, headingOf(pose.orientation), pitchOf(pose.orientation), carryFloor, carryBounds, margin));
+      }
+      if (mine && time - lastCarryPose >= CARRY_POSE_MS) {
+        lastCarryPose = time;
+        publishWalk(walker.position());
+      }
     }
     sceneView.renderer.render(sceneView.scene, sceneView.camera);
   });

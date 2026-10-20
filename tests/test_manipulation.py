@@ -1,4 +1,4 @@
-"""The phone picks up its selected box, carries it in front, and drops it; WebSocket seam."""
+"""The phone picks up its selected box, aims it across the floor, and drops it; WebSocket seam."""
 
 import json
 import math
@@ -29,8 +29,12 @@ class Phone:
         ws.send(json.dumps({"type": "select", "room_version": 1, "id": "box"}))
         ws.recv(timeout=2)
 
-    def walk_to(self, x, z, heading=0.0):
-        """Stand at (x, z) at phone height, facing `heading`: 0 toward the desk, positive left."""
+    def walk_to(self, x, z, heading=0.0, pitch=-math.pi / 4):
+        """
+        Stand at (x, z) with the phone 1.5 m up, facing `heading` (0 toward the desk, positive
+        left) and tilted by `pitch` (0 level, negative down). At 45° down the screen's centre
+        meets the floor 1.5 m ahead.
+        """
         self.sequence += 1
         self.ws.send(
             json.dumps(
@@ -41,6 +45,7 @@ class Phone:
                     "reference_space": "room",
                     "position": {"x": x, "y": 1.5, "z": z},
                     "heading": heading,
+                    "pitch": pitch,
                 }
             )
         )
@@ -56,6 +61,7 @@ class Phone:
                 "reference_space": None,
                 "position": None,
                 "heading": None,
+                "pitch": None,
             }
         )["state"]
 
@@ -79,30 +85,40 @@ def box(state):
     ]
 
 
-def test_picking_up_the_box_brings_it_in_front_of_the_phone(service_url):
+def test_picking_up_puts_the_box_where_the_screen_centre_meets_the_floor(service_url):
     with open_socket(service_url, "mobile_master") as ws:
         phone = Phone(ws)
-        phone.walk_to(0.0, 1.6)
+        resting = box(phone.walk_to(0.0, 1.6))
         held = phone.pick_up()
         assert held["manipulation"]["entity"] == "box"
         assert held["manipulation"]["owner"] == "mobile_master"
-        # 0.8 m ahead toward the desk, its bottom 0.6 m below the phone.
-        assert box(held) == pytest.approx({"x": 0.0, "y": 0.9, "z": 0.8})
+        assert box(held) == pytest.approx({"x": 0.0, "y": resting["y"], "z": 0.1})
         phone.drop(held["manipulation"]["id"])
 
 
-def test_the_carried_box_stays_in_front_as_the_phone_walks_and_turns(service_url):
+def test_turning_swings_the_box_and_tilting_slides_it_nearer_or_further(service_url):
     with open_socket(service_url, "mobile_master") as ws:
         phone = Phone(ws)
-        phone.walk_to(0.0, 1.6)
+        resting = box(phone.walk_to(0.0, 1.6))
         held = phone.pick_up()
-        assert box(phone.walk_to(0.0, 1.0)) == pytest.approx({"x": 0.0, "y": 0.9, "z": 0.2})
-        turned_left = box(phone.walk_to(0.0, 1.0, heading=math.pi / 2))
-        assert turned_left == pytest.approx({"x": -0.8, "y": 0.9, "z": 1.0})
+        floor = resting["y"]
+        turned_left = box(phone.walk_to(0.0, 1.6, heading=math.pi / 2))
+        assert turned_left == pytest.approx({"x": -1.5, "y": floor, "z": 1.6})
+        # Tilted further down, the screen's centre meets the floor 0.5 m ahead.
+        nearer = box(phone.walk_to(0.0, 1.6, pitch=-math.atan(3)))
+        assert nearer == pytest.approx({"x": 0.0, "y": floor, "z": 1.1})
+        # Straight down is no closer than 0.3 m; level or up aims as far as the floor allows.
+        assert box(phone.walk_to(0.0, 1.6, pitch=-math.pi / 2))["z"] == pytest.approx(1.3)
+        assert box(phone.walk_to(0.0, 1.6, pitch=0.2))["z"] == pytest.approx(-1.9)
+        # Aimed past the floor's edge at x = -2, the 0.2 m box stays whole on the floor.
+        beyond = box(phone.walk_to(0.0, 1.6, heading=math.pi / 2, pitch=-math.pi / 6))
+        assert beyond == pytest.approx({"x": -1.9, "y": floor, "z": 1.6})
+        # Walking carries the aim with it.
+        assert box(phone.walk_to(0.0, 1.0))["z"] == pytest.approx(-0.5)
         phone.drop(held["manipulation"]["id"])
 
 
-def test_letting_go_drops_the_box_to_the_floor_where_it_is(service_url):
+def test_letting_go_leaves_the_box_where_it_was_aimed(service_url):
     with open_socket(service_url, "mobile_master") as ws:
         phone = Phone(ws)
         resting = box(phone.walk_to(0.0, 1.6))
@@ -111,7 +127,7 @@ def test_letting_go_drops_the_box_to_the_floor_where_it_is(service_url):
         phone.walk_to(0.5, 1.6)
         dropped = phone.drop(first)
         assert dropped["manipulation"] is None
-        assert box(dropped) == pytest.approx({"x": 0.5, "y": resting["y"], "z": 0.8})
+        assert box(dropped) == pytest.approx({"x": 0.5, "y": resting["y"], "z": 0.1})
         # Walking without holding leaves the box where it fell.
         assert box(phone.walk_to(0.0, 1.0)) == box(dropped)
         again = phone.pick_up()
@@ -205,7 +221,7 @@ def test_the_box_drops_when_the_phone_stops_walking(service_url):
         phone.walk_to(0.0, 1.0)
         stopped = phone.stop_walking()
         assert stopped["manipulation"] is None
-        assert box(stopped) == pytest.approx({"x": 0.0, "y": resting["y"], "z": 0.2})
+        assert box(stopped) == pytest.approx({"x": 0.0, "y": resting["y"], "z": -0.5})
 
 
 def test_the_box_drops_when_the_phone_disconnects(service_url):
@@ -220,7 +236,7 @@ def test_the_box_drops_when_the_phone_disconnects(service_url):
             headset, lambda event: event.get("state", {}).get("mobile_connected") is False
         )["state"]
         assert gone["manipulation"] is None
-        assert box(gone) == pytest.approx({"x": 0.0, "y": resting["y"], "z": 0.2})
+        assert box(gone) == pytest.approx({"x": 0.0, "y": resting["y"], "z": -0.5})
 
 
 def test_the_hold_reports_its_latest_movement(service_url):

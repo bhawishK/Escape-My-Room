@@ -22,6 +22,8 @@ class Position(WireModel):
 
 # Which way the phone faces across the floor, in radians: 0 toward the desk (-Z), positive left.
 Heading = Annotated[float, Field(ge=-3.141592653589793, le=3.141592653589793)]
+# How far the phone's screen centre looks above level, in radians: negative looks down.
+Pitch = Annotated[float, Field(ge=-1.5707963267948966, le=1.5707963267948966)]
 
 
 class MarkerState(WireModel):
@@ -29,6 +31,7 @@ class MarkerState(WireModel):
     reference_space: ReferenceSpace | None = None
     position: Position | None = None
     heading: Heading | None = None
+    pitch: Pitch | None = None
 
 
 class RoomLoadedMessage(WireModel):
@@ -78,12 +81,13 @@ class PoseMessage(WireModel):
     reference_space: ReferenceSpace | None
     position: Position | None
     heading: Heading | None = None
+    pitch: Pitch | None = None
 
     @model_validator(mode="after")
     def check_position(self) -> Self:
         if self.tracking_status == "tracked":
             if self.position is None or self.reference_space is None:
                 raise ValueError("Tracked input requires a position and reference space")
-        elif self.position is not None or self.heading is not None:
+        elif self.position is not None or self.heading is not None or self.pitch is not None:
             raise ValueError("Unavailable tracking must not supply a usable position")
         return self

@@ -45,6 +45,7 @@ export interface SessionState {
     reference_space: ReferenceSpace | null;
     position: Position | null;
     heading: number | null;
+    pitch: number | null;
   };
   alignment: { mobile_master: AlignmentState; vr_solver: AlignmentState };
   /** The hold in progress, if any: the held object follows its owner's phone. */
@@ -58,6 +59,8 @@ export interface PoseInput {
   position: Position | null;
   /** Which way the phone faces in radians: 0 toward the desk (-Z), positive turning left. */
   heading: number | null;
+  /** How far the screen centre looks above level in radians; negative looks down. */
+  pitch: number | null;
 }
 
 /** Python's private answer to the phone's selection request: the selection now, and any refusal. */
