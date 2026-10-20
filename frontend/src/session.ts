@@ -6,11 +6,20 @@ interface SessionEvents {
   connection: (connected: boolean) => void;
   selection: (result: SelectionResult) => void;
   error: (message: string) => void;
+  poseSent?: (sequence: number) => void;
+  poseReplaced?: () => void;
 }
+
+/** Unsent bytes above which the connection counts as congested, and how often to look again. */
+const CONGESTED_BYTES = 16384;
+const DRAIN_CHECK_MS = 30;
 
 export class SessionClient {
   private socket: WebSocket | null = null;
   private sequence = 0;
+  /** The newest pose not yet sent because the connection was congested. */
+  private waitingPose: PoseInput | null = null;
+  private drainTimer: number | null = null;
 
   constructor(private readonly events: SessionEvents) {}
 
@@ -22,6 +31,7 @@ export class SessionClient {
     const socket = new WebSocket(url);
     this.socket = socket;
     this.sequence = 0;
+    this.stopWaitingPose();
     try {
       await new Promise<void>((resolve, reject) => {
         let welcomed = false;
@@ -73,9 +83,35 @@ export class SessionClient {
     }
   }
 
+  /**
+   * Sends the phone's pose. While the connection is congested only the newest pose waits, and it
+   * goes as soon as the connection drains, so a long hold never builds a queue of old movement.
+   */
   sendPose(pose: PoseInput): void {
-    if (this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > 16384) return;
+    if (this.waitingPose) this.events.poseReplaced?.();
+    this.waitingPose = pose;
+    this.flushPose();
+  }
+
+  private stopWaitingPose(): void {
+    this.waitingPose = null;
+    if (this.drainTimer !== null) clearTimeout(this.drainTimer);
+    this.drainTimer = null;
+  }
+
+  private flushPose(force = false): void {
+    const pose = this.waitingPose;
+    if (!pose || this.socket?.readyState !== WebSocket.OPEN) return;
+    if (!force && this.socket.bufferedAmount > CONGESTED_BYTES) {
+      this.drainTimer ??= window.setTimeout(() => {
+        this.drainTimer = null;
+        this.flushPose();
+      }, DRAIN_CHECK_MS);
+      return;
+    }
+    this.waitingPose = null;
     this.socket.send(JSON.stringify({ type: 'pose', sequence: ++this.sequence, ...pose }));
+    this.events.poseSent?.(this.sequence);
   }
 
   sendCalibration(input: CalibrationInput): void {
@@ -98,6 +134,8 @@ export class SessionClient {
   /** Lets go of a hold; the object stays where it is. */
   sendRelease(manipulationId: number): void {
     if (this.socket?.readyState !== WebSocket.OPEN) return;
+    // The last aim goes first even on a congested connection, so the release commits it.
+    this.flushPose(true);
     this.socket.send(JSON.stringify({ type: 'release', manipulation_id: manipulationId }));
   }
 
@@ -109,6 +147,7 @@ export class SessionClient {
   leave(): void {
     this.socket?.close();
     this.socket = null;
+    this.stopWaitingPose();
     this.events.connection(false);
   }
 }
