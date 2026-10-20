@@ -42,6 +42,13 @@ export function headingOf(orientation: THREE.Quaternion | Rotation): number {
   return Math.atan2(-forward.x, -forward.z);
 }
 
+/** How far a camera orientation looks above level, in radians: negative when it looks down. */
+export function pitchOf(orientation: Rotation): number {
+  const q = new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w);
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
+  return Math.asin(Math.max(-1, Math.min(1, forward.y)));
+}
+
 interface Reading { alpha: number; beta: number; gamma: number }
 
 /** Turns the view as the phone turns, using the browser's `deviceorientation` events. */

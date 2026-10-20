@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type { RoomPose } from './phone-view';
-import type { AlignmentState, SessionState } from './protocol';
+import type { AlignmentState, Position, SessionState } from './protocol';
 import { applyPlacement, placeEntities } from './room';
 
 const emptyRoom = (): SessionState['room'] => ({
@@ -48,6 +48,10 @@ export class DiagnosticScene {
     }),
   );
   private selected: string | null = null;
+  /** Outlines the object someone is holding, on both devices. */
+  private readonly control = new THREE.BoxHelper(new THREE.Object3D(), 0xffa64d);
+  private controlled: string | null = null;
+  private predicted: { id: string; position: THREE.Vector3 } | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -89,6 +93,8 @@ export class DiagnosticScene {
     this.selection.visible = false;
     this.selectionShell.visible = false;
     this.scene.add(this.selection, this.selectionShell);
+    this.control.visible = false;
+    this.scene.add(this.control);
     container.append(this.renderer.domElement);
     container.dataset.view = 'overview';
     const resize = () => {
@@ -161,7 +167,27 @@ export class DiagnosticScene {
     this.outlineSelection();
   }
 
+  /**
+   * Draws an entity where this device expects Python to put it, ahead of Python's answer; null
+   * returns it to Python's placement at the next state.
+   */
+  predict(id: string | null, position: Position | null = null): void {
+    this.predicted = id && position ? { id, position: new THREE.Vector3(position.x, position.y, position.z) } : null;
+    if (!this.predicted) return;
+    this.entityRoots.get(this.predicted.id)?.position.copy(this.predicted.position);
+    this.outlineSelection();
+  }
+
+  /** Outlines the object being held, or none for null. */
+  showControl(id: string | null): void {
+    this.controlled = id;
+    this.outlineSelection();
+  }
+
   private outlineSelection(): void {
+    const held = this.controlled ? this.entityRoots.get(this.controlled) : undefined;
+    if (held) this.control.setFromObject(held);
+    this.control.visible = held !== undefined;
     const root = this.selected ? this.entityRoots.get(this.selected) : undefined;
     if (root) {
       this.selection.setFromObject(root);
@@ -207,6 +233,8 @@ export class DiagnosticScene {
       return { version, acknowledge: true };
     }
     applyPlacement(this.entityRoots, room.entities);
+    // Python's answer is a moment old; the phone's own aim stays in charge of what it draws.
+    if (this.predicted) this.entityRoots.get(this.predicted.id)?.position.copy(this.predicted.position);
     this.outlineSelection();
     return { version: room.room_version, acknowledge: false };
   }
@@ -219,7 +247,9 @@ export class DiagnosticScene {
     this.roomGroup = null;
     this.entityRoots = new Map();
     this.pointAt(null);
+    this.predicted = null;
     this.select(null);
+    this.showControl(null);
     this.grid.visible = true;
   }
 

@@ -1,6 +1,6 @@
 # Prototype connection and pose contract
 
-Python owns one shared room in one process. There are no session IDs, participant IDs, join grants, tokens, accounts, or simulator inputs. Object ownership and manipulation remain later slices.
+Python owns one shared room in one process. There are no session IDs, participant IDs, join grants, tokens, accounts, or simulator inputs. The headset grabbing objects, and competing requests for control, remain later slices.
 
 ## Connect a device
 
@@ -79,7 +79,67 @@ The phone selects the object it means to manipulate. Only the phone may send:
 
 Selection is private intent. It is not in the shared state, does not change the revision, is never sent to the headset, and does not move the object or give anyone control of it. A new phone connection, or the phone disconnecting, clears it.
 
-On the phone's room view a tap selects the object drawn under the finger: the view casts a ray from the camera through the tap, and the nearest surface hit names the entity, so furniture in front hides what is behind it. Tapping empty space sends nothing and reads **Nothing to select there**. Python decides eligibility, so tapping the desk is refused with its message. An accepted selection is outlined with a pink halo, the status line reads **Selected box**, and **Deselect** appears. Closing the room view deselects. Tested on desktop through the WebSocket seam (`tests/test_selection.py`); not yet tried on the iPhone.
+On the phone's room view a tap selects the object drawn under the finger: the view casts a ray from the camera through the tap, and the nearest surface hit names the entity, so furniture in front hides what is behind it. Only movable, selectable objects are sent; tapping anything else, including furniture, the floor and empty space, deselects. Python still checks every request. An accepted selection is outlined with a pink halo and the status line reads **Box selected · press and hold it to pick it up**. There are no select or deselect buttons. Closing the room view deselects. Tested on desktop through the WebSocket seam (`tests/test_selection.py`); not yet tried on the iPhone.
+
+## Pick up, aim and drop an object
+
+The phone picks up its selected object and places it by aiming, then lets go. The object goes where the ray from the centre of the phone's screen meets the floor. Turning the phone swings it around you, and tilting slides it nearer or further. This uses the phone's orientation sensor, which is reliable on the iPhone, rather than its position, which is only counted from steps ([phone tracking](phone-tracking.md)). Walking still moves you, and the aim with you, for longer distances.
+
+The user chose this on 20 October 2026, after trying first to carry the object by counting steps and then to hold it in front of them. Both felt loose. The aim is the 3-degree-of-freedom ray-casting technique that orientation-only VR controllers use. Real 6-degree-of-freedom tracking, through Android WebXR or a native ARKit app, remains the route to the one-to-one room view.
+
+Only the phone may send:
+
+```json
+{ "type": "acquire", "room_version": 1, "id": "box" }
+{ "type": "release", "manipulation_id": 3 }
+```
+
+Poses carry where the phone's screen centre aims:
+- `heading`, in radians: 0 faces the desk (-Z), and positive turns left.
+- `pitch`, in radians: 0 is level, and negative looks down.
+
+Both are `null` without a reading, which counts as facing the desk on the level, and must be `null` when the pose is not tracked. The pose's position is the view's: walking's place at the view's height, the measured one when there is one. The marker in the state carries all three.
+
+An accepted `acquire` places the object where the aim meets the floor it rested on, and every later tracked pose places it there again. The rules:
+- **Distance:** no nearer than 0.3 m and no further than 4 m. Aiming level, or upward, goes to the furthest.
+- **Floor:** an aim past the floor's edge stops there, with the object whole on the floor. The floor is the thin static entities, as for walking.
+- **Height:** the object keeps its floor height; it only slides.
+
+`release` leaves it where it is, so it drops exactly where the phone shows it. Walking without a hold moves nothing.
+
+The hold is shared. The state carries `"manipulation": { "id": 3, "entity": "box", "owner": "mobile_master", "sequence": 12 }`, or `null`. Ids count up across holds. `sequence` is the pose sequence of the latest movement applied, and is `null` until the first. Both pages show **Phone is moving box** under the room status, and both scenes outline the held object in orange.
+
+| Refusal | When |
+| --- | --- |
+| `not_selected` | `id` is not the phone's current selection |
+| `not_tracked` | The phone has no tracked position |
+| `already_held` | A hold is already in progress |
+| `room_version_mismatch`, `room_unavailable` | As for selection |
+| `stale_manipulation` | `release` names a hold that is not the current one |
+| `role_forbidden` | The headset sent `acquire` or `release` |
+| `entity_controlled` | An `entity_transform` for the held object |
+| `selection_held` (on `select`) | The selection cannot change during a hold |
+
+A refused `acquire` starts nothing. A pose without a position, such as closing the room view, ends the hold where the object is, and so does the phone disconnecting. Only position is applied: no rotation, gravity, snapping, or collision with furniture.
+
+**On the phone:**
+- **Pick up:** tap the box, then press and hold it. After 0.3 s it jumps to where the screen centre meets the floor. A pink crosshair marks the centre, and the status line reads **Carrying box · turn and tilt to place it, let go to drop it**. A quick tap does not pick it up.
+- **Aim:** turn and tilt the phone to place it. The phone draws the box at its own aim every frame, using the same rule as Python (`frontend/src/aim.ts`), so it does not lag behind the crosshair. It sends its pose to Python ten times a second, so the headset follows.
+- **Drop:** lift your finger, and the status line reads **Dropped box**. Before letting go, the phone sends its latest pose, so Python places the box where the phone shows it.
+- **Other ways the hold ends:** a cancelled touch drops it, and **Back to start** drops it first.
+
+Tested through the WebSocket seam (`tests/test_manipulation.py`): picking up to the aim, turning, tilting, the 0.3 m and floor-edge limits, walking with the aim, dropping in place, refusals, ending on stopping and on disconnect, and the headset's view.
+
+A desktop run of both pages with synthetic orientation readings, the phone 1.5 m up, went as follows:
+
+| Phone aim | Box position |
+| --- | --- |
+| 45° down | 1.5 m ahead, under the crosshair |
+| 30° down | 2.6 m ahead |
+| Turned 90° left | Stopped at the floor's edge, with the crosshair beyond it |
+| Let go | Stayed there; the headset page showed **Phone is moving box** until then |
+
+Not yet tried on the iPhone and Quest.
 
 ## Prepared room
 

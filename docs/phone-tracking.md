@@ -6,11 +6,11 @@ Issue 19 is about physical phone movement reaching Python and the headset. For n
 
 - **Room view:** connecting as the phone opens the room full screen. **Close** returns to the page, and **Open room view** opens it again.
 - **Viewpoint:** the view stands at `(0, 1.5, 1.6)`, behind the floor center at phone height, facing the desk and tilted 20° down, so the desk, floor, box and cabinet fit on the screen. Walking moves it from there.
-- **Turn with phone:** turns the view with the phone's orientation sensor (`deviceorientation`). iPhone asks for motion permission once. The first reading faces the desk; nothing is printed or measured. **Stop turning** leaves the view facing where it was. The status line reads **Turning with the phone** or **Turning off**.
+- **Turning:** the view turns with the phone's orientation sensor (`deviceorientation`) whenever the room view is open. There is no button: tapping **Connect phone**, or **Open room view**, asks iPhone for motion permission, which it only allows during a tap. The first reading faces the desk; nothing is printed or measured.
 - **Field of view:** 70° along the screen's long side, close to what a phone camera sees.
-- **Drift:** the sensor's heading drifts slowly on its own. Nothing corrects it yet; **Stop turning** and **Turn with phone** again re-anchor it to face the desk.
+- **Drift:** the sensor's heading drifts slowly on its own. Nothing corrects it yet; **Close** and **Open room view** re-anchor it to face the desk.
 
-- **Walk with steps:** counts steps from the accelerometer (`devicemotion`) and moves the view one step length toward where the phone faces with each, gliding over 0.35 s. It also turns on **Turn with phone**, since steps follow the phone's heading; without turning, steps go toward the desk. **Back to start** returns to the starting viewpoint, **Step** cycles the step length through 0.4–0.8 m (default 0.6 m), and **Sensitivity** sets how hard a step must bounce. **Stop walking** leaves the view where it is.
+- **Walking:** whenever the room view is open, steps are counted from the accelerometer (`devicemotion`), and each moves the view one step length toward where the phone faces, gliding over 0.35 s. Without turning readings, steps go toward the desk. **Back to start** returns to the starting viewpoint, and **Step** cycles the step length through 0.4–0.8 m (default 0.6 m). Closing the room view stops walking.
 
 Turning was checked on an iPhone on 19 October 2026 and worked.
 
@@ -19,9 +19,9 @@ Turning was checked on an iPhone on 19 October 2026 and worked.
 The user accepted on 19 October 2026 that walking need not be accurate. Without AR tracking, the phone cannot measure where it is, but its accelerometer shows the bounce of each step.
 
 - **Steps:** gravity's direction is tracked slowly, over about 0.8 s, so the phone may be held at any angle. The acceleration along gravity, smoothed over 60 ms, is the bounce. A step is counted when the bounce rises above the threshold after falling back below zero, at most one every 0.3 s. Readings while the phone turns faster than 150°/s are ignored, so turning it does not take steps.
-- **Sensitivity:** thresholds of 1.6, 1.1 and 0.7 m/s² for low, normal and high. Smoothing lowers the measured bounce by about a quarter at walking pace, so in synthetic tests normal counts steps that bounce about 1.5 m/s² or more, and high about 1.0.
+- **Sensitivity:** the threshold is 1.1 m/s². The user removed the button for choosing it on 20 October 2026; the code keeps 1.6 and 0.7 m/s² for low and high. Smoothing lowers the measured bounce by about a quarter at walking pace, so in synthetic tests normal counts steps that bounce about 1.5 m/s² or more, and high about 1.0.
 - **Where a step goes:** one step length along the phone's heading, level with the floor. The floor's edge and the static furniture, widened by a 0.25 m body radius, stop a step; a step into them slides along them when it can. Movable objects do not block. Thin static entities are the floor; taller static ones are furniture.
-- **Headset:** each step sends the new position to Python as a tracked room-frame pose, so the headset's phone sphere moves with the steps. **Stop walking** sends `inactive`.
+- **Headset:** each step sends the new position to Python as a tracked room-frame pose, so the headset's phone sphere moves with the steps. The pose also carries where the screen centre aims, as heading and pitch. Closing the room view sends `inactive`.
 
 What it cannot do: small moves such as leaning or moving the phone in the hand, sideways or backward steps (each counts as a step forward), or walking in a different direction from where the phone faces. Step length varies, and the heading drifts, so the error grows with every step. **Back to start**, from the starting spot facing the desk, recovers.
 
@@ -55,7 +55,7 @@ Automated, desktop only:
 - The room view opening full screen, closing and reopening, turning on and off with its status line, and a refused motion permission (`frontend/tests/connected-view.spec.ts`).
 - The turn math: an upright phone looks ahead, turning changes the heading by the same angle, tilting does not, and landscape matches portrait (`frontend/tests/phone-view.spec.ts`).
 - Step counting on synthetic motion with the phone tilted: a walk counts its steps, holding still or turning quickly counts none, and gentle steps need the high sensitivity. Steps follow the heading, and the floor's edge and the furniture stop or slide them (`frontend/tests/steps.spec.ts`).
-- Walking end to end: synthetic motion events count steps on the phone page, the desk stops the walk, and the headset page shows each position through Python, then the start position after **Back to start** and `inactive` after **Stop walking** (`frontend/tests/connected-view.spec.ts`).
+- Walking end to end: synthetic motion events count steps on the phone page, the desk stops the walk, and the headset page shows each position through Python, then the start position after **Back to start** and `inactive` after **Close** (`frontend/tests/connected-view.spec.ts`).
 
 On a real iPhone: turning works, as reported by the user on 19 October 2026. Landscape, permission refusal, and drift over time are not recorded. Walking is not yet tried on a phone: record whether steps are counted while walking, missed or added, and how far the view ends up from where you walked.
 

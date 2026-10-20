@@ -32,9 +32,9 @@ test('the phone opens the room full screen and the headset offers VR', async ({ 
   await expect(phone.locator('#scene')).toHaveClass(/room-view/);
   await expect(phone.locator('#scene')).toHaveAttribute('data-view', 'phone');
   expect(await phone.locator('#scene').boundingBox()).toEqual({ x: 0, y: 0, width: 390, height: 844 });
-  await expect(phone.getByRole('button', { name: 'Turn with phone', exact: true })).toBeVisible();
+  await expect(phone.getByRole('button', { name: 'Back to start', exact: true })).toBeVisible();
   await expect(phone.getByRole('button', { name: 'Enter VR', exact: true })).toBeHidden();
-  await expect(phone.getByTestId('view-status')).toHaveText('Turning off');
+  await expect(phone.getByTestId('view-status')).toHaveText('Tap the box to select it');
   // Close returns to the page; the room view opens again from the page.
   await phone.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(phone.locator('#scene')).not.toHaveClass(/room-view/);
@@ -50,18 +50,23 @@ test('the phone opens the room full screen and the headset offers VR', async ({ 
   await vr.close();
 });
 
-test('turning with the phone follows its orientation sensor', async ({ page }) => {
-  // The person allows motion access when the phone asks.
-  await page.addInitScript(() => Object.assign(DeviceOrientationEvent, { requestPermission: async () => 'granted' }));
+test('turning and walking start with the phone, without buttons for them', async ({ page }) => {
+  // The person allows motion access when the phone asks, during the Connect phone tap.
+  const asked: string[] = [];
+  await page.exposeFunction('motionAsked', (kind: string) => { asked.push(kind); });
+  await page.addInitScript(() => {
+    const ask = (window as unknown as { motionAsked: (kind: string) => void }).motionAsked;
+    Object.assign(DeviceOrientationEvent, { requestPermission: async () => { ask('orientation'); return 'granted'; } });
+    Object.assign(DeviceMotionEvent, { requestPermission: async () => { ask('motion'); return 'granted'; } });
+  });
   await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
-  await page.getByRole('button', { name: 'Turn with phone', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Stop turning', exact: true })).toBeVisible();
-  await expect(page.getByTestId('view-status')).toHaveText('Turning with the phone');
-  await page.evaluate(() => window.dispatchEvent(new DeviceOrientationEvent('deviceorientation', { alpha: 0, beta: 90, gamma: 0 })));
-  await page.getByRole('button', { name: 'Stop turning', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Turn with phone', exact: true })).toBeVisible();
-  await expect(page.getByTestId('view-status')).toHaveText('Turning off');
+  await expect(page.getByTestId('view-status')).toHaveText('Tap the box to select it');
+  expect(asked.sort()).toEqual(['motion', 'orientation']);
+  for (const name of ['Turn with phone', 'Walk with steps', 'Sensitivity: normal', 'Deselect', 'Hold to move']) {
+    await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
+  }
+  await expect(page.getByTestId('tracking')).toHaveText('Tracked');
 });
 
 test('a refused motion permission is explained', async ({ page }) => {
@@ -69,10 +74,9 @@ test('a refused motion permission is explained', async ({ page }) => {
   await page.addInitScript(() => Object.assign(DeviceOrientationEvent, { requestPermission: async () => 'denied' }));
   await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
-  await page.getByRole('button', { name: 'Turn with phone', exact: true }).click();
   await expect(page.getByTestId('view-status')).toHaveText(
     'Motion permission was denied. Allow motion access for this site, then try again.');
-  await expect(page.getByRole('button', { name: 'Turn with phone', exact: true })).toBeVisible();
+  await expect(page.getByTestId('connection')).toHaveText('Connected · Phone');
 });
 
 test('walking steps move the phone, and the headset sees where it went', async ({ browser }) => {
@@ -86,8 +90,7 @@ test('walking steps move the phone, and the headset sees where it went', async (
   await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
   await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
-  await phone.getByRole('button', { name: 'Walk with steps', exact: true }).click();
-  await expect(phone.getByTestId('view-status')).toHaveText('Walking · 0 steps');
+  await expect(phone.getByTestId('view-status')).toHaveText('Tap the box to select it');
   await expect(vr.getByTestId('marker-position')).toHaveText('0.00, 1.50, 1.60 m');
   // Three seconds of a phone bouncing with each step, read 60 times a second.
   await phone.evaluate(() => new Promise<void>(resolve => {
@@ -110,7 +113,8 @@ test('walking steps move the phone, and the headset sees where it went', async (
   await expect(vr.getByTestId('marker-position')).toHaveText(`0.00, 1.50, ${(1.6 - 0.6 * Math.min(steps, 3)).toFixed(2)} m`);
   await phone.getByRole('button', { name: 'Back to start', exact: true }).click();
   await expect(vr.getByTestId('marker-position')).toHaveText('0.00, 1.50, 1.60 m');
-  await phone.getByRole('button', { name: 'Stop walking', exact: true }).click();
+  // Closing the room view stops walking.
+  await phone.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(vr.getByTestId('tracking')).toHaveText('Inactive · no positional input');
   await phone.close();
   await vr.close();
