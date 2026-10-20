@@ -48,6 +48,8 @@ export interface SessionState {
     pitch: number | null;
   };
   alignment: { mobile_master: AlignmentState; vr_solver: AlignmentState };
+  /** How Python is delivering: an induced delay for testing slow networks, 0 normally. */
+  delivery: { simulated_delay_ms: number };
   /** The hold in progress, if any: the held object follows its owner's phone. */
   manipulation: { id: number; entity: string; owner: Role; sequence: number | null } | null;
   room: RoomState;

@@ -27,6 +27,7 @@ from backend.captures import (
     ImageKind,
     Upload,
 )
+from backend.delivery import Outbox
 from backend.errors import Refusal
 from backend.preparation import JobRequest, PreparationService, worker_from_environment
 from backend.prepared_room import ASSET_URL_PREFIX, PreparedRoomError, load_prepared_room
@@ -108,7 +109,10 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     except PreparedRoomError as exc:
         prepared = None
         load_error = str(exc)
-    room = PrototypeRoom(load_error=load_error)
+    delay_ms = float(os.environ.get("ESCAPE_ROOM_SIMULATED_DELAY_MS") or 0)
+    if not 0 <= delay_ms <= 5000:
+        raise ValueError("ESCAPE_ROOM_SIMULATED_DELAY_MS must be from 0 to 5000.")
+    room = PrototypeRoom(load_error=load_error, delivery_delay=delay_ms / 1000)
     if prepared is not None:
         room.entities = [entity.model_copy(deep=True) for entity in prepared.entities]
         room.room_version = prepared.room_version
@@ -185,15 +189,17 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     @app.websocket("/api/ws")
     async def room_socket(socket: WebSocket, role: Role) -> None:
         sequence = 0
+        outbox = Outbox(socket, room.delivery_delay)
 
         async def reject(code: str, message: str) -> None:
-            await socket.send_json({"type": "error", "code": code, "message": message})
+            outbox.reply({"type": "error", "code": code, "message": message})
 
         try:
             async with room.lock:
                 await socket.accept()
                 previous = room.sockets.get(role)
                 room.sockets[role] = socket
+                room.outboxes[role] = outbox
                 room.loaded_versions[role] = None
                 room.alignment[role] = Alignment()
                 if role == "mobile_master":
@@ -208,7 +214,7 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                     except (RuntimeError, OSError, TimeoutError):
                         pass
                 room.revision += 1
-                await socket.send_json({"type": "welcome", "state": room.snapshot()})
+                outbox.reply({"type": "welcome", "state": room.snapshot()})
                 await room.broadcast(exclude=socket)
             while True:
                 message = await socket.receive()
@@ -255,6 +261,7 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                         result = room.accept_room_version(role, incoming.room_version)
                         if result == "mismatch":
                             await reject(*ROOM_VERSION_MISMATCH)
+                            await outbox.close(flush=True)
                             await socket.close(code=1008, reason="Room version mismatch")
                             return
                         if result == "unavailable":
@@ -306,7 +313,7 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                             code, text = SELECTION_REFUSALS[result]
                             rejected = {"code": code, "message": text}
                         # Selection is private intent: only the phone hears the result.
-                        await socket.send_json(
+                        outbox.reply(
                             {"type": "selection", "id": room.selection, "rejected": rejected}
                         )
                     else:
@@ -331,9 +338,12 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
             pass
         finally:
             async with room.lock:
+                if room.outboxes.get(role) is outbox:
+                    del room.outboxes[role]
                 if room.sockets.get(role) is socket:
                     room.disconnect(role)
                     await room.broadcast()
+            await outbox.close()
 
     if directory.is_dir():
         app.mount(ASSET_URL_PREFIX, StaticFiles(directory=directory), name="prepared-room")

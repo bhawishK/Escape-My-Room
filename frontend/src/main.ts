@@ -5,6 +5,7 @@ import { FloorDepth } from './floor-depth';
 import { GazeCursor } from './gaze-cursor';
 import { RoomPreparation } from './preparation';
 import { floorPoint } from './aim';
+import { MotionStats } from './motion-stats';
 import { PhoneLook, START_EYE, headingOf, phoneViewpoint, pitchOf, type RoomPose } from './phone-view';
 import type { Role, SessionState } from './protocol';
 import { SessionClient } from './session';
@@ -35,6 +36,8 @@ let selected: string | null = null;
 let holding = false;
 /** The hold this phone has asked to end, so it is asked once. */
 let releasing: number | null = null;
+/** How motion reaches this device, for the diagnostic report. */
+const motion = new MotionStats();
 /** How long a press on the selected object lasts before it is picked up, so a tap is not. */
 const PICK_UP_MS = 300;
 /** While carrying, the phone tells Python where it is and faces this often, so the object follows. */
@@ -189,8 +192,12 @@ function applyState(next: SessionState): void {
   if (state && next.revision < state.revision) return;
   const before = ownHold();
   state = next;
+  motion.state();
   const held = next.manipulation;
   view?.showControl(held?.entity ?? null);
+  // Another device's hold arrives a few times a second; draw it gliding between placements.
+  view?.smooth(held && role && held.owner !== role ? held.entity : null);
+  if (held && held.owner === role) motion.acknowledge(held.sequence);
   element('control-status').textContent = held ?
     `${held.owner === 'mobile_master' ? 'Phone' : 'Headset'} is moving ${entityLabel(held.entity)}` :
     'No object is being moved';
@@ -262,6 +269,7 @@ const client = new SessionClient({
             vr_solver: { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } },
           },
           manipulation: null,
+          delivery: { simulated_delay_ms: 0 },
           room: {
             available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
             entities: [], loaded_by: { mobile_master: null, vr_solver: null },
@@ -286,6 +294,8 @@ const client = new SessionClient({
       `${result.rejected.message}${result.id ? ` ${entityLabel(result.id)} is still selected.` : ''}` : now;
     controls();
   },
+  poseSent: sequence => motion.pose(sequence),
+  poseReplaced: () => motion.replaced(),
   error: message => {
     showError(message);
     // The room view covers the page's error box, so its status line says it too.
@@ -377,8 +387,17 @@ try {
   }, () => confirmAlignment());
   const sceneView = view;
   handleRoomTouches(sceneView);
+  // `?smoothing=` sets the glide in milliseconds for trying other settings; 0 turns it off.
+  const smoothing = new URLSearchParams(location.search).get('smoothing');
+  if (smoothing !== null && Number(smoothing) >= 0 && Number(smoothing) <= 1000) {
+    sceneView.smoothingMs = Number(smoothing);
+  }
+  sceneView.onCorrection = meters => motion.correction(meters);
+  let lastFrame: number | null = null;
   sceneView.renderer.setAnimationLoop((time, frame) => {
     xr?.frame(frame);
+    sceneView.tick(lastFrame === null ? 0 : time - lastFrame);
+    lastFrame = time;
     if (roomViewOpen) {
       // A new height eases in rather than jumping.
       const target = measuredHeight ?? START_EYE.y;
@@ -528,6 +547,9 @@ element('download-report').addEventListener('click', () => {
     recorded_at: new Date().toISOString(), role, xr: xr?.getReport() ?? null,
     gaze: gaze.report(), floor_height: depth.report(), user_agent: navigator.userAgent,
     dom_overlay_hold_events: holdEvents, marker: state?.marker ?? null,
+    motion: motion.report({
+      smoothing_ms: view?.smoothingMs ?? null, simulated_delay_ms: state?.delivery.simulated_delay_ms ?? null,
+    }),
     evidence: 'Browser observations only; complete the manual device smoke-test record separately.',
   };
   const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
@@ -538,6 +560,7 @@ element('download-report').addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 window.addEventListener('pagehide', () => client.leave());
+window.setInterval(() => { element('motion-stats').textContent = motion.summary(); }, 1000);
 controls();
 
 const roomPreparation = new RoomPreparation();

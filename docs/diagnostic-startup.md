@@ -52,6 +52,17 @@ Open `https://192.168.1.10:8443` using the IP you substituted. Allow incoming po
 4. After a dropped connection, use the role button to connect again. There is no session ID to copy or reservation to clear. Opening a second tab in the same role replaces the first.
 5. Optional diagnostics are collapsed below the preview. Download the browser report and fill in the hardware record. The report is capability/pose telemetry, not proof of a passed device test. The phone's report adds a `tracking` section with the video and processing sizes, frames per second and detection time.
 
+## Try a slow network
+
+To see how motion looks over a slow network, start Python with an induced delay. Each message to each device then arrives that long after Python accepted it:
+
+```powershell
+$env:ESCAPE_ROOM_SIMULATED_DELAY_MS = '300'
+.\.venv\Scripts\python.exe -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --workers 1 --ws-max-size 16384
+```
+
+Open the headset page with `?smoothing=60`, for example, to try a different glide for the object the phone holds; the default is 120 ms, and 0 turns it off. The diagnostics line and the downloaded report's `motion` section record the rates, round trips and corrections. See [motion delivery](diagnostic-protocol.md#motion-delivery).
+
 ## Automated checks
 
 From the repository root:

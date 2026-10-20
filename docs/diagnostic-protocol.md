@@ -141,6 +141,47 @@ A desktop run of both pages with synthetic orientation readings, the phone 1.5 m
 
 Not yet tried on the iPhone and Quest.
 
+## Motion delivery
+
+Issue #9. While the phone moves a held object, the headset should see continuous motion and the exact final placement, even on a slow network, without anything queueing up during a long hold.
+
+**Python.** Each connected device has its own outbox (`backend/delivery.py`), emptied by its own task, so a slow device holds up neither the phone nor the room.
+- Replies (welcome, errors, selection results) are all delivered, and everything goes in the order it was handed over.
+- Shared state is coalesced. Of the states waiting, only the newest is sent, so movement never builds a backlog. The final state, such as a release, always arrives.
+- A device that takes more than 2 s to accept a message is disconnected, rather than left with a growing queue. It can connect again.
+- Earlier, Python sent each state to every device one after another while holding the room lock, so a slow headset delayed the phone's next movement.
+- The state carries `"delivery": { "simulated_delay_ms": 0 }`.
+
+**Induced delay.** `ESCAPE_ROOM_SIMULATED_DELAY_MS` (0 to 5000) delays every item to every device by that long after Python accepted it. It reproduces network latency for testing, and works like a delay line: what waits is bounded by what arrives within the delay, and only the newest due state is sent.
+
+**Phone.** The phone sends its pose ten times a second while holding, separately from drawing, which runs every frame. If the connection is congested (more than 16 KiB unsent), only the newest pose waits, replacing any older one, and it goes as soon as the connection drains. Letting go sends any waiting pose before the release, even when congested, so the release commits the last aim. The phone draws its own held object from its own aim, so the delay does not affect what the person holding it sees.
+
+**Headset.** The other device's held object glides toward each accepted placement instead of stepping at each update. It closes about 63% of the gap every 120 ms; `?smoothing=<ms>` on the page URL sets this, from 0 (off) to 1000. Only the drawing is smoothed. When the hold ends, the next placement is Python's final one and is drawn exactly, not the last glide position.
+
+**Measurements.** Each page records these, on the diagnostics line under **Device smoke-test diagnostics** and in the downloaded report's `motion` section:
+- State and pose rates over the last 5 s.
+- Poses replaced while the connection was congested.
+- The acknowledgement round trip: from sending a pose until a state including it arrives, timed on the phone's own clock.
+- Each jump from the drawn object to the final placement when a hold ends.
+- The smoothing, the induced delay, and the browser's own connection estimate where it gives one.
+
+No one-way latency between devices is worked out, since their clocks are not synchronised. No latency target is set before measurements on the real devices exist.
+
+**Tested** through the WebSocket seam (`tests/test_motion_delivery.py`):
+- A hundred moves sent in a burst under a 200 ms delay reach the headset as at most ten states. The last equals the phone's final placement.
+- Movement sent after a release does not move the object.
+- The delay holds back every state during steady movement, not only the first.
+- The state reports the delay.
+
+**Desktop measurements.** Two Edge pages on one computer, with synthetic orientation readings. The phone held the box and swept its aim 60° in 2.8 s, then let go. Desktop only; not evidence of device behaviour.
+
+| Induced delay | Poses sent | States at headset | Phone ack (median) | Headset jump at release | Final placement |
+| --- | --- | --- | --- | --- | --- |
+| 0 ms | 28 | 28 | 1 ms | 0.091 m | Same on all three |
+| 300 ms | 27 | 27 | 313 ms | 0.093 m | Same on all three |
+
+The jump at release is the 120 ms glide trailing a box swung at about 0.6 m/s. A shorter `?smoothing=` shrinks it, and makes the steps between updates more visible. On the iPhone and Quest, record the same table: on the normal network and with a delay, the rates, the acknowledgement round trip, the corrections, and whether the motion is easy to follow.
+
 ## Prepared room
 
 `GET /api/room` returns the same room descriptor served in `state.room`, without `loaded_by`. Python loads `manifest.json` from `assets/prepared-room/`, or from `ESCAPE_ROOM_PREPARED_DIR` when set, at startup. The manifest is the identity contract: room version, entity IDs, static or movable kind, selectable flag, and bottom-center placement in meters. Node names in the assets are only pointers. If the manifest is missing or invalid, or an asset disagrees with it, the room is unavailable. The [prepared room note](prepared-room.md) lists both manifest forms and their checks. `/api/room` then returns HTTP 503 with that reason, and both sockets receive `room.available: false` plus the same `room.error`. Neither device is given a different room.

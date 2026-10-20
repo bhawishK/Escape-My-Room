@@ -8,6 +8,7 @@ from typing import Any, Literal
 from fastapi import WebSocket
 
 from backend.alignment import Alignment
+from backend.delivery import Outbox
 from backend.prepared_room import FRAME, QUATERNION_ORDER, UNITS, SceneEntity
 from backend.protocol import MarkerState, PoseMessage, Position, Role
 
@@ -50,6 +51,10 @@ class Manipulation:
 @dataclass
 class PrototypeRoom:
     sockets: dict[Role, WebSocket] = field(default_factory=lambda: dict[Role, WebSocket]())
+    # Each connected device's outbox, which shared state is published to.
+    outboxes: dict[Role, Outbox] = field(default_factory=lambda: dict[Role, Outbox]())
+    # Seconds every delivery is held back, to reproduce a slow network on purpose; 0 normally.
+    delivery_delay: float = 0.0
     revision: int = 0
     marker: MarkerState = field(default_factory=MarkerState)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -77,6 +82,8 @@ class PrototypeRoom:
             "revision": self.revision,
             "mobile_connected": "mobile_master" in self.sockets,
             "vr_connected": "vr_solver" in self.sockets,
+            # Recorded with motion measurements, so each is read against its network conditions.
+            "delivery": {"simulated_delay_ms": round(self.delivery_delay * 1000)},
             "marker": self.marker.model_dump(),
             "alignment": {role: value.model_dump() for role, value in self.alignment.items()},
             "manipulation": None
@@ -182,14 +189,11 @@ class PrototypeRoom:
         return "ok"
 
     async def broadcast(self, exclude: WebSocket | None = None) -> None:
-        event = {"type": "state", "state": self.snapshot()}
-        for socket in list(self.sockets.values()):
-            if socket is not exclude:
-                try:
-                    await asyncio.wait_for(socket.send_json(event), timeout=2)
-                except (RuntimeError, OSError, TimeoutError):
-                    # The socket endpoint owns disconnect cleanup.
-                    continue
+        """Hand the newest state to each device's outbox; no device waits on another's network."""
+        state = self.snapshot()
+        for outbox in list(self.outboxes.values()):
+            if outbox.socket is not exclude:
+                outbox.publish(state)
 
     def accept_pose(self, pose: PoseMessage) -> None:
         self.marker = MarkerState(

@@ -52,6 +52,17 @@ export class DiagnosticScene {
   private readonly control = new THREE.BoxHelper(new THREE.Object3D(), 0xffa64d);
   private controlled: string | null = null;
   private predicted: { id: string; position: THREE.Vector3 } | null = null;
+  /**
+   * An object another device holds glides toward each accepted placement over about this many
+   * milliseconds, rather than stepping at each network update; 0 draws each placement at once.
+   * Only the drawing is smoothed: Python's placement is unchanged.
+   */
+  smoothingMs = 120;
+  private smoothed: { id: string; target: THREE.Vector3 } | null = null;
+  /** Where an object was drawn when its hold ended, to measure the jump to Python's final placement. */
+  private settling: { id: string; from: THREE.Vector3 } | null = null;
+  /** Called with how far an object jumped, in meters, to reach its final placement after a hold. */
+  onCorrection: ((meters: number) => void) | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -172,9 +183,33 @@ export class DiagnosticScene {
    * returns it to Python's placement at the next state.
    */
   predict(id: string | null, position: Position | null = null): void {
+    if (!(id && position) && this.predicted) this.settling = { id: this.predicted.id, from: this.predicted.position.clone() };
     this.predicted = id && position ? { id, position: new THREE.Vector3(position.x, position.y, position.z) } : null;
     if (!this.predicted) return;
     this.entityRoots.get(this.predicted.id)?.position.copy(this.predicted.position);
+    this.outlineSelection();
+  }
+
+  /**
+   * Glides an object another device holds toward its accepted placements; null ends the glide,
+   * and the next placement, the final one, is drawn exactly.
+   */
+  smooth(id: string | null): void {
+    if ((this.smoothed?.id ?? null) === id) return;
+    const ending = this.smoothed;
+    this.smoothed = null;
+    const endingRoot = ending ? this.entityRoots.get(ending.id) : undefined;
+    if (ending && endingRoot) this.settling = { id: ending.id, from: endingRoot.position.clone() };
+    const root = id ? this.entityRoots.get(id) : undefined;
+    if (id && root) this.smoothed = { id, target: root.position.clone() };
+  }
+
+  /** Moves any glide on by `ms` milliseconds of drawing. */
+  tick(ms: number): void {
+    const root = this.smoothed ? this.entityRoots.get(this.smoothed.id) : undefined;
+    if (!this.smoothed || !root) return;
+    const blend = this.smoothingMs <= 0 ? 1 : 1 - Math.exp(-ms / this.smoothingMs);
+    root.position.lerp(this.smoothed.target, blend);
     this.outlineSelection();
   }
 
@@ -232,7 +267,22 @@ export class DiagnosticScene {
       this.loadingVersion = null;
       return { version, acknowledge: true };
     }
+    const gliding = this.smoothed ? this.entityRoots.get(this.smoothed.id)?.position.clone() : undefined;
     applyPlacement(this.entityRoots, room.entities);
+    if (this.smoothed && gliding) {
+      // The new placement becomes where the glide heads, from where it is drawn now.
+      const root = this.entityRoots.get(this.smoothed.id);
+      if (root) {
+        this.smoothed.target.copy(root.position);
+        root.position.copy(gliding);
+      }
+    }
+    if (this.settling) {
+      // The hold has ended and this is Python's final placement, drawn exactly.
+      const root = this.entityRoots.get(this.settling.id);
+      if (root) this.onCorrection?.(root.position.distanceTo(this.settling.from));
+      this.settling = null;
+    }
     // Python's answer is a moment old; the phone's own aim stays in charge of what it draws.
     if (this.predicted) this.entityRoots.get(this.predicted.id)?.position.copy(this.predicted.position);
     this.outlineSelection();
@@ -248,6 +298,8 @@ export class DiagnosticScene {
     this.entityRoots = new Map();
     this.pointAt(null);
     this.predicted = null;
+    this.smoothed = null;
+    this.settling = null;
     this.select(null);
     this.showControl(null);
     this.grid.visible = true;
