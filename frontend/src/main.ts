@@ -36,6 +36,12 @@ let selected: string | null = null;
 let holding = false;
 /** The hold this phone has asked to end, so it is asked once. */
 let releasing: number | null = null;
+/** What to do when the motion sensor stops, said wherever the phone explains it. */
+const TRACKING_HELP = 'Hold the phone up; once the view moves with it again, tap and hold the box.';
+/** Whether the phone's orientation sensor has stopped reporting while the room view is open. */
+let trackingLost = false;
+/** Why this phone last let go of a hold itself, other than lifting the finger; shown on the status line. */
+let interruption: string | null = null;
 /** How motion reaches this device, for the diagnostic report. */
 const motion = new MotionStats();
 /** How long a press on the selected object lasts before it is picked up, so a tap is not. */
@@ -64,6 +70,11 @@ const walker = new StepWalker(START_EYE, () => headingOf(viewPose().orientation)
  */
 function publishWalk(position: { x: number; y: number; z: number } | null): void {
   const facing = viewPose().orientation;
+  if (position && trackingLost) {
+    // Without the sensor the aim is unknown; Python must not be given a made-up one.
+    client.sendPose({ tracking_status: 'lost', reference_space: null, position: null, heading: null, pitch: null });
+    return;
+  }
   client.sendPose(position ?
     {
       tracking_status: 'tracked', reference_space: 'room', position: { ...position, y: viewHeight },
@@ -156,6 +167,7 @@ function setRoomView(open: boolean): void {
     gaze.stop();
     depth.stop();
     look.stop();
+    trackingLost = false;
     if (walker.active) {
       walker.stop();
       if (connected) publishWalk(null);
@@ -200,7 +212,7 @@ function applyState(next: SessionState): void {
   if (held && held.owner === role) motion.acknowledge(held.sequence);
   element('control-status').textContent = held ?
     `${held.owner === 'mobile_master' ? 'Phone' : 'Headset'} is moving ${entityLabel(held.entity)}` :
-    'No object is being moved';
+    holdEndLabel(next.last_hold_end);
   const mine = ownHold();
   if (mine && !holding) {
     // The pick-up was accepted after the finger lifted, so drop it at once.
@@ -211,7 +223,13 @@ function applyState(next: SessionState): void {
     releasing = null;
     carryFloor = null;
     view?.predict(null);
-    element('view-status').textContent = `Dropped ${entityLabel(before.entity)}`;
+    const label = entityLabel(before.entity);
+    const reason = next.last_hold_end?.reason;
+    element('view-status').textContent = interruption ? `Dropped ${label} where it was: ${interruption}` :
+      reason === 'tracking_lost' ? `Dropped ${label} where it was: motion tracking stopped. ${TRACKING_HELP}` :
+      reason === 'silent' ? `Dropped ${label} where it was: the phone went quiet. Tap and hold it again.` :
+      `Dropped ${label}`;
+    interruption = null;
   }
   controls();
   view?.apply(next);
@@ -269,6 +287,7 @@ const client = new SessionClient({
             vr_solver: { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } },
           },
           manipulation: null,
+          last_hold_end: null,
           delivery: { simulated_delay_ms: 0 },
           room: {
             available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
@@ -303,14 +322,44 @@ const client = new SessionClient({
   },
 });
 
+/** What the headset and the page say about how the latest hold ended. */
+function holdEndLabel(end: SessionState['last_hold_end']): string {
+  if (!end) return 'No object is being moved';
+  const label = entityLabel(end.entity);
+  const why = {
+    released: `Phone placed ${label}`,
+    tracking_lost: `Phone lost tracking · ${label} left where it was`,
+    tracking_stopped: `Phone stopped tracking · ${label} left where it was`,
+    interrupted: `Phone was interrupted · ${label} left where it was`,
+    silent: `Phone went quiet · ${label} left where it was`,
+    disconnected: `Phone disconnected · ${label} left where it was`,
+  } as const;
+  return why[end.reason];
+}
+
+/**
+ * Lets go of a hold the person can no longer control, such as when the page is hidden or the
+ * screen turns, and says why. The object stays where it was last placed.
+ */
+function interruptHold(why: string): void {
+  if (!holding && !ownHold()) return;
+  holding = false;
+  // A pick-up not yet accepted is let go of when it is, as for a lifted finger.
+  if (ownHold()) {
+    interruption = why;
+    endHold(true);
+  }
+  controls();
+}
+
 /** Asks Python to end this phone's hold, once; the object stays where it is. */
-function endHold(): void {
+function endHold(interrupted = false): void {
   const mine = ownHold();
   if (!mine || releasing === mine.id) return;
   releasing = mine.id;
   // Python places it from the latest aim, so it drops exactly where the phone shows it.
   publishWalk(walker.position());
-  client.sendRelease(mine.id);
+  client.sendRelease(mine.id, interrupted);
 }
 
 /** Asks Python to select a room object, or to deselect with null; Python decides what is eligible. */
@@ -332,16 +381,28 @@ function pickable(id: string | null): id is string {
  */
 function handleRoomTouches(sceneView: DiagnosticScene): void {
   const canvas = sceneView.renderer.domElement;
-  let press: { pointer: number; target: string | null; timer: number } | null = null;
+  // `long` once the press has lasted long enough to pick up, so lifting it is never a tap.
+  let press: { pointer: number; target: string | null; timer: number; long: boolean } | null = null;
   canvas.addEventListener('pointerdown', event => {
     if (!roomViewOpen || role !== 'mobile_master' || press) return;
     const target = sceneView.entityAt({ x: event.offsetX / canvas.clientWidth, y: event.offsetY / canvas.clientHeight });
     canvas.setPointerCapture(event.pointerId);
-    press = { pointer: event.pointerId, target, timer: 0 };
+    press = { pointer: event.pointerId, target, timer: 0, long: false };
     if (target !== null && target === selected) {
       press.timer = window.setTimeout(() => {
         const version = state?.room.room_version;
         if (!press || selected === null || version === null || version === undefined) return;
+        press.long = true;
+        if (trackingLost) {
+          element('view-status').textContent = `Motion tracking has stopped. ${TRACKING_HELP}`;
+          return;
+        }
+        if (!look.active) {
+          // Without the sensor there is no aim, only a made-up default one.
+          element('view-status').textContent = 'Allow motion access to aim: tap Close, then Open room view.';
+          return;
+        }
+        interruption = null;
         holding = true;
         const id = selected;
         carryFloor = state?.room.entities.find(entity => entity.id === id)?.position.y ?? 0;
@@ -352,12 +413,14 @@ function handleRoomTouches(sceneView: DiagnosticScene): void {
   });
   const finish = (event: PointerEvent, tapped: boolean) => {
     if (!press || event.pointerId !== press.pointer) return;
-    const { target, timer } = press;
+    const { target, timer, long } = press;
     press = null;
     clearTimeout(timer);
     if (holding) {
       holding = false;
       endHold();
+    } else if (long) {
+      // A hold that ended on its own, such as on lost tracking, has already said why.
     } else if (tapped && target === selected && target !== null) {
       element('view-status').textContent = `Press and hold ${entityLabel(target)} to pick it up`;
     } else if (tapped && pickable(target)) {
@@ -404,6 +467,23 @@ try {
       viewHeight += 0.05 * (target - viewHeight);
       const pose = viewPose();
       sceneView.follow(pose);
+      const sensor = look.tracking();
+      if (sensor === 'lost' && !trackingLost) {
+        // The sensor stopped: let go where the object is, and tell Python the aim is unknown.
+        trackingLost = true;
+        holding = false;
+        const mine = ownHold();
+        // Python ends the hold on the lost pose; asking it to let go as well would be refused.
+        if (mine) releasing = mine.id;
+        publishWalk(walker.position());
+        element('view-status').textContent = mine ?
+          `Dropped ${entityLabel(mine.entity)} where it was: motion tracking stopped. ${TRACKING_HELP}` :
+          `Motion tracking stopped. ${TRACKING_HELP}`;
+      } else if (sensor === 'tracking' && trackingLost) {
+        trackingLost = false;
+        publishWalk(walker.target());
+        element('view-status').textContent = 'Motion tracking is back · tap and hold the box to pick it up';
+      }
       const mine = ownHold();
       if (mine && carryFloor !== null) {
         // Drawn where the screen centre meets the floor now; Python confirms it a moment later.
@@ -560,6 +640,12 @@ element('download-report').addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 window.addEventListener('pagehide', () => client.leave());
+// Input the person can no longer see or control must not keep a hold going.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) interruptHold('the page was hidden. Tap and hold it again.');
+});
+window.addEventListener('blur', () => interruptHold('the page lost focus. Tap and hold it again.'));
+screen.orientation?.addEventListener('change', () => interruptHold('the screen turned. Tap and hold it again.'));
 window.setInterval(() => { element('motion-stats').textContent = motion.summary(); }, 1000);
 controls();
 

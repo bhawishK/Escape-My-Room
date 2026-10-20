@@ -61,6 +61,8 @@ $env:ESCAPE_ROOM_SIMULATED_DELAY_MS = '300'
 .\.venv\Scripts\python.exe -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --workers 1 --ws-max-size 16384
 ```
 
+Similarly, `ESCAPE_ROOM_HOLD_TIMEOUT_MS` (default 1500) sets how long a holding phone may go without sending a pose before Python lets go of the object for it; see [tracking loss](diagnostic-protocol.md#tracking-loss-and-interruptions).
+
 Open the headset page with `?smoothing=60`, for example, to try a different glide for the object the phone holds; the default is 120 ms, and 0 turns it off. The diagnostics line and the downloaded report's `motion` section record the rates, round trips and corrections. See [motion delivery](diagnostic-protocol.md#motion-delivery).
 
 ## Automated checks

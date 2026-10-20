@@ -50,6 +50,11 @@ export interface SessionState {
   alignment: { mobile_master: AlignmentState; vr_solver: AlignmentState };
   /** How Python is delivering: an induced delay for testing slow networks, 0 normally. */
   delivery: { simulated_delay_ms: number };
+  /** How the latest hold ended, so the headset can say why the object was let go. */
+  last_hold_end: {
+    entity: string;
+    reason: 'released' | 'interrupted' | 'tracking_lost' | 'tracking_stopped' | 'silent' | 'disconnected';
+  } | null;
   /** The hold in progress, if any: the held object follows its owner's phone. */
   manipulation: { id: number; entity: string; owner: Role; sequence: number | null } | null;
   room: RoomState;

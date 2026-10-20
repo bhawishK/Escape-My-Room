@@ -83,7 +83,10 @@ SELECTION_REFUSALS = {
 MANIPULATION_REFUSALS = {
     "mismatch": ROOM_VERSION_MISMATCH,
     "not_selected": ("not_selected", "Select the object before holding it."),
-    "not_tracked": ("not_tracked", "Turn on Walk with steps so the phone has a position."),
+    "not_tracked": (
+        "not_tracked",
+        "The phone has no tracked aim. Keep the room view open with motion allowed and retry.",
+    ),
     "already_held": ("already_held", "The object is already being moved."),
     "stale": ("stale_manipulation", "That hold has already ended."),
 }
@@ -112,7 +115,14 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     delay_ms = float(os.environ.get("ESCAPE_ROOM_SIMULATED_DELAY_MS") or 0)
     if not 0 <= delay_ms <= 5000:
         raise ValueError("ESCAPE_ROOM_SIMULATED_DELAY_MS must be from 0 to 5000.")
-    room = PrototypeRoom(load_error=load_error, delivery_delay=delay_ms / 1000)
+    timeout_ms = float(os.environ.get("ESCAPE_ROOM_HOLD_TIMEOUT_MS") or 1500)
+    if not 100 <= timeout_ms <= 60000:
+        raise ValueError("ESCAPE_ROOM_HOLD_TIMEOUT_MS must be from 100 to 60000.")
+    room = PrototypeRoom(
+        load_error=load_error, delivery_delay=delay_ms / 1000, hold_timeout=timeout_ms / 1000
+    )
+    # Running hold watchdogs, kept so they are not collected mid-watch.
+    watchers: set[asyncio.Task[None]] = set()
     if prepared is not None:
         room.entities = [entity.model_copy(deep=True) for entity in prepared.entities]
         room.room_version = prepared.room_version
@@ -287,7 +297,9 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                         if isinstance(incoming, AcquireMessage):
                             result = room.acquire(incoming.room_version, incoming.id)
                         else:
-                            result = room.release(incoming.manipulation_id)
+                            result = room.release(
+                                incoming.manipulation_id, incoming.reason == "interrupted"
+                            )
                         if result == "unavailable":
                             await reject(
                                 "room_unavailable",
@@ -297,6 +309,10 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                         if result != "ok":
                             await reject(*MANIPULATION_REFUSALS[result])
                             continue
+                        if isinstance(incoming, AcquireMessage) and room.manipulation:
+                            watcher = asyncio.create_task(room.watch_hold(room.manipulation.id))
+                            watchers.add(watcher)
+                            watcher.add_done_callback(watchers.discard)
                         await room.broadcast()
                     elif isinstance(incoming, SelectMessage):
                         if role != "mobile_master":

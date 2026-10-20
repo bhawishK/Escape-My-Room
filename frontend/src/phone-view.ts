@@ -51,18 +51,33 @@ export function pitchOf(orientation: Rotation): number {
 
 interface Reading { alpha: number; beta: number; gamma: number }
 
+/** A sensor silent for longer than this has stopped tracking. iPhone reports about 60 times a second. */
+const STALE_MS = 600;
+
 /** Turns the view as the phone turns, using the browser's `deviceorientation` events. */
 export class PhoneLook {
   private reading: Reading | null = null;
+  /** When the latest reading arrived, on the page's clock. */
+  private readAt = 0;
   private heading = 0;
   private anchored = false;
   private listening = false;
   private readonly listener = (event: DeviceOrientationEvent) => {
     if (event.alpha === null || event.beta === null || event.gamma === null) return;
     this.reading = { alpha: event.alpha, beta: event.beta, gamma: event.gamma };
+    this.readAt = performance.now();
   };
 
   get active(): boolean { return this.listening; }
+
+  /**
+   * Whether the sensor is tracking: 'waiting' before its first reading (a desktop browser may
+   * never give one), 'tracking' while readings arrive, and 'lost' once they stop.
+   */
+  tracking(now = performance.now()): 'waiting' | 'tracking' | 'lost' {
+    if (!this.listening || !this.reading) return 'waiting';
+    return now - this.readAt > STALE_MS ? 'lost' : 'tracking';
+  }
 
   /** Call from a button press: iPhone asks for motion permission and only allows it during a gesture. */
   async start(): Promise<void> {

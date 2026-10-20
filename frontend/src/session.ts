@@ -132,11 +132,14 @@ export class SessionClient {
   }
 
   /** Lets go of a hold; the object stays where it is. */
-  sendRelease(manipulationId: number): void {
+  /** Lets go of a hold; `interrupted` when the person did not choose to, such as on the page hiding. */
+  sendRelease(manipulationId: number, interrupted = false): void {
     if (this.socket?.readyState !== WebSocket.OPEN) return;
     // The last aim goes first even on a congested connection, so the release commits it.
     this.flushPose(true);
-    this.socket.send(JSON.stringify({ type: 'release', manipulation_id: manipulationId }));
+    this.socket.send(JSON.stringify({
+      type: 'release', manipulation_id: manipulationId, reason: interrupted ? 'interrupted' : 'placed',
+    }));
   }
 
   sendRoomLoaded(roomVersion: number): void {

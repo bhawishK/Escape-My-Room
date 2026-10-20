@@ -72,6 +72,9 @@ class ReleaseMessage(WireModel):
 
     type: Literal["release"]
     manipulation_id: int = Field(ge=1)
+    # "interrupted" when the phone let go without the person choosing to, such as on the page
+    # being hidden, so the headset can tell that from a placement.
+    reason: Literal["placed", "interrupted"] = "placed"
 
 
 class PoseMessage(WireModel):

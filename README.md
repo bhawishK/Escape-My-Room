@@ -27,7 +27,12 @@ Issue #1 now has a Python service and a responsive browser diagnostic. Open the 
 - **Headset:** the held object glides between updates and lands exactly on the final placement.
 - **Testing and measurement:** a setting adds network delay for testing, and each page records rates, round trips and corrections.
 
-See [motion delivery](docs/diagnostic-protocol.md#motion-delivery).
+See [motion delivery](docs/diagnostic-protocol.md#motion-delivery). Issue #10 lets go of the object, where it is, when the phone loses tracking:
+
+- **What ends a hold:** the motion sensor stopping, the page being hidden or losing focus, the screen turning, or the phone going quiet.
+- **What people see:** the phone explains how to carry on, and the headset sees why the hold ended.
+
+See [tracking loss](docs/diagnostic-protocol.md#tracking-loss-and-interruptions).
 
 The agreed first target is **iPhone 16 Chrome for the mobile page and Meta Quest 3 for immersive VR**. The user chose to build the iPhone page first and add movement tracking later; Issue #19 has added turning, and position tracking is still to be chosen. The user confirmed the VR side works and accepted Issue #1 for closure without a Quest report. The iPhone Chrome report records the mobile-master role and shared state; Quest versions and detailed lifecycle/permission observations remain unrecorded. Physical phone translation is pending in Issue #19.
 

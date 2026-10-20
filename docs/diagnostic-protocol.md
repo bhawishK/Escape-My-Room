@@ -182,6 +182,60 @@ No one-way latency between devices is worked out, since their clocks are not syn
 
 The jump at release is the 120 ms glide trailing a box swung at about 0.6 m/s. A shorter `?smoothing=` shrinks it, and makes the steps between updates more visible. On the iPhone and Quest, record the same table: on the normal network and with a delay, the rates, the acknowledgement round trip, the corrections, and whether the motion is easy to follow.
 
+## Tracking loss and interruptions
+
+Issue #10. When the phone can no longer aim the object it holds, the hold ends at once and the object stays where it was last placed. The user chose this policy on 20 October 2026, over freezing the hold until tracking returns. To carry on, the person picks the object up again once tracking is back. Python never moves it from an old or made-up pose.
+
+The phone has no WebXR session, so its "tracking" is the orientation sensor that aims the object, plus the page itself. Each failure is handled separately:
+
+| What happens | Detected by | Result |
+| --- | --- | --- |
+| The orientation sensor stops reporting | No reading for 0.6 s while the room view is open | The phone sends a `lost` pose. Python ends the hold with reason `tracking_lost`, and the phone's marker shows **Lost**. |
+| The sensor reports again | A fresh reading | The phone sends a tracked pose and says **Motion tracking is back · tap and hold the box to pick it up**. |
+| The page is hidden (screen locked, another app) | `visibilitychange` | The phone lets go (`interrupted`). |
+| The page loses focus | `blur` | The phone lets go (`interrupted`). |
+| The screen turns | `screen.orientation` change | The phone lets go (`interrupted`). The aim already allows for the screen's angle, so the room frame needs no re-anchoring. |
+| The touch is cancelled | `pointercancel`, lost pointer capture | The phone lets go (`released`), as before. |
+| Motion access is refused | The sensor never starts | No pick-up. The phone says to allow motion access: **Close**, then **Open room view**. |
+| Walking stops or the room view closes | An `inactive` pose | Python ends the hold with reason `tracking_stopped`. |
+| The phone goes silent: a frozen page, or one stopped in the background before it could say so | No pose for `ESCAPE_ROOM_HOLD_TIMEOUT_MS` (default 1500 ms, 100 to 60000) | Python ends the hold with reason `silent`. The phone sends poses ten times a second while holding. |
+| The phone disconnects | The socket closes | Python ends the hold with reason `disconnected`. |
+
+**Messages.** The state carries `"last_hold_end": { "entity": "box", "reason": "tracking_lost" }` once any hold has ended. Reasons are `released`, `interrupted`, `tracking_lost`, `tracking_stopped`, `silent` and `disconnected`. Both pages show it under the room status:
+- **Phone placed box**
+- **Phone was interrupted · box left where it was**
+- **Phone lost tracking · box left where it was**
+- **Phone went quiet · box left where it was**
+
+The phone's status line says why it let go and what to do. For example: **Dropped box where it was: motion tracking stopped. Hold the phone up; once the view moves with it again, tap and hold the box.**
+
+**Releases.** `release` takes an optional `"reason": "interrupted"`, sent when the phone lets go without the person choosing to; the default is `"placed"`.
+
+**Refusals.** While the phone's tracking is lost, a pick-up is refused with `not_tracked`, and the phone says to hold the phone up and try again. A press that lasted long enough to pick up never counts as a tap when it ends, so the explanation stays on screen.
+
+**Recovery.** A new hold always starts afresh, from the phone's current aim. Recovering with the same aim leaves the object where it is: it does not jump. The object goes to the aim, as for any pick-up. The phone's view is not re-anchored by tracking loss. **Close** and **Open room view** re-anchor it, and closing ends any hold first.
+
+**Before a desktop browser's first reading.** If the sensor has never reported, which is usual in a desktop browser, the phone is not counted as lost. Holding then uses the default aim.
+
+**The silence timeout and #11.** The timeout ends a hold whenever no pose arrives in time, including on a network stall. That is deliberate: a hold must not outlive its phone. Reconnecting after a dropped connection is ticket #11.
+
+**Tests.** Through the WebSocket seam (`tests/test_tracking_loss.py`):
+- a `lost` pose ends the hold in place, and the headset sees the reason;
+- a phone without tracking cannot pick up until it is tracked again;
+- a silent phone loses its hold where the object is;
+- an interrupted release lets go in place, and the headset sees `interrupted`.
+
+**Desktop run.** Two Edge pages, with a synthetic sensor reporting 20 times a second:
+1. Stopping the sensor mid-hold dropped the box where it was, with the explanation above. The headset page showed **Phone lost tracking · box left where it was**, and the phone's marker showed **Lost**.
+2. Restarting the sensor showed **Motion tracking is back**, and the marker returned to **Tracked**.
+3. A new hold picked the box up without it moving.
+4. Losing focus mid-hold dropped it in place, and the headset page showed **Phone was interrupted · box left where it was**.
+
+Still to record on the iPhone and Quest:
+- locking the screen and switching apps mid-hold;
+- turning the phone to landscape mid-hold;
+- what the headset shows in each case.
+
 ## Prepared room
 
 `GET /api/room` returns the same room descriptor served in `state.room`, without `loaded_by`. Python loads `manifest.json` from `assets/prepared-room/`, or from `ESCAPE_ROOM_PREPARED_DIR` when set, at startup. The manifest is the identity contract: room version, entity IDs, static or movable kind, selectable flag, and bottom-center placement in meters. Node names in the assets are only pointers. If the manifest is missing or invalid, or an asset disagrees with it, the room is unavailable. The [prepared room note](prepared-room.md) lists both manifest forms and their checks. `/api/room` then returns HTTP 503 with that reason, and both sockets receive `room.available: false` plus the same `room.error`. Neither device is given a different room.

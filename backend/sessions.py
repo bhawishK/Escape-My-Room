@@ -35,6 +35,13 @@ def floor_bounds(entities: list[SceneEntity]) -> tuple[float, float, float, floa
     return (min(xs), max(xs), min(zs), max(zs)) if xs else None
 
 
+# Why a hold ended: let go, let go on an interruption, the phone's tracking was lost or turned
+# off, the phone went silent or disconnected.
+HoldEnd = Literal[
+    "released", "interrupted", "tracking_lost", "tracking_stopped", "silent", "disconnected"
+]
+
+
 @dataclass
 class Manipulation:
     """One hold: the owner's phone aims the object across the floor until it is let go."""
@@ -46,6 +53,8 @@ class Manipulation:
     rest_y: float
     # The pose sequence of the latest movement applied, or None before the first.
     sequence: int | None = None
+    # When the owner's phone last sent a pose, on the event loop's clock.
+    heard_at: float = 0.0
 
 
 @dataclass
@@ -55,6 +64,8 @@ class PrototypeRoom:
     outboxes: dict[Role, Outbox] = field(default_factory=lambda: dict[Role, Outbox]())
     # Seconds every delivery is held back, to reproduce a slow network on purpose; 0 normally.
     delivery_delay: float = 0.0
+    # Seconds without a pose from the holding phone after which its hold ends where the object is.
+    hold_timeout: float = 1.5
     revision: int = 0
     marker: MarkerState = field(default_factory=MarkerState)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -69,6 +80,8 @@ class PrototypeRoom:
     # The one hold in progress, shared with both devices; its id counts up across holds.
     manipulation: Manipulation | None = None
     manipulation_count: int = 0
+    # How the latest hold ended, shared so the headset can say why the object was let go.
+    last_hold_end: dict[str, str] | None = None
     alignment: dict[Role, Alignment] = field(
         default_factory=lambda: {
             "mobile_master": Alignment(),
@@ -94,6 +107,7 @@ class PrototypeRoom:
                 "owner": self.manipulation.owner,
                 "sequence": self.manipulation.sequence,
             },
+            "last_hold_end": self.last_hold_end,
             "room": {
                 "available": available,
                 "room_version": self.room_version,
@@ -175,16 +189,19 @@ class PrototypeRoom:
             entity=entity_id,
             owner="mobile_master",
             rest_y=self.entity(entity_id).position.y,
+            heard_at=asyncio.get_running_loop().time(),
         )
         self.carry()
         self.revision += 1
         return "ok"
 
-    def release(self, manipulation_id: int) -> Literal["ok", "stale"]:
+    def release(
+        self, manipulation_id: int, interrupted: bool = False
+    ) -> Literal["ok", "stale"]:
         """End the current hold; the object stays on the floor where it was aimed."""
         if self.manipulation is None or self.manipulation.id != manipulation_id:
             return "stale"
-        self.drop()
+        self.drop("interrupted" if interrupted else "released")
         self.revision += 1
         return "ok"
 
@@ -205,11 +222,13 @@ class PrototypeRoom:
         )
         held = self.manipulation
         if held is not None and pose.position is None:
-            # Without a phone position there is nothing to carry it in front of.
-            self.drop()
+            # Without a phone position the aim is unknown: let go where it is, and never aim
+            # it again from an old pose.
+            self.drop("tracking_lost" if pose.tracking_status == "lost" else "tracking_stopped")
         elif held is not None:
             self.carry()
             held.sequence = pose.sequence
+            held.heard_at = asyncio.get_running_loop().time()
         self.revision += 1
 
     def entity(self, entity_id: str) -> SceneEntity:
@@ -246,14 +265,32 @@ class PrototypeRoom:
 
         entity.position = Position(x=bounded(x), y=held.rest_y, z=bounded(z))
 
-    def drop(self) -> None:
-        """End the hold, letting the object fall straight down to the height it rested at."""
+    async def watch_hold(self, identity: int) -> None:
+        """End hold `identity` where the object is if its phone goes quiet for `hold_timeout`."""
+        loop = asyncio.get_running_loop()
+        while True:
+            await asyncio.sleep(self.hold_timeout / 4)
+            async with self.lock:
+                held = self.manipulation
+                if held is None or held.id != identity:
+                    return
+                if loop.time() - held.heard_at > self.hold_timeout:
+                    # A frozen or backgrounded page must not keep the hold, or aim it later
+                    # from a pose that is long out of date.
+                    self.drop("silent")
+                    self.revision += 1
+                    await self.broadcast()
+                    return
+
+    def drop(self, reason: HoldEnd) -> None:
+        """End the hold for `reason`, letting the object down to the height it rested at."""
         held = self.manipulation
         if held is None:
             return
         entity = self.entity(held.entity)
         entity.position = Position(x=entity.position.x, y=held.rest_y, z=entity.position.z)
         self.manipulation = None
+        self.last_hold_end = {"entity": held.entity, "reason": reason}
 
     def disconnect(self, role: Role) -> None:
         self.sockets.pop(role, None)
@@ -262,5 +299,5 @@ class PrototypeRoom:
         if role == "mobile_master":
             self.marker = MarkerState(tracking_status="lost")
             self.selection = None
-            self.drop()
+            self.drop("disconnected")
         self.revision += 1
