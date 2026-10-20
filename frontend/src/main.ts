@@ -32,6 +32,11 @@ let roomViewOpen = false;
 /** The room object Python accepted as this phone's selection. It is private to the phone. */
 let selected: string | null = null;
 const deselectButton = element<HTMLButtonElement>('deselect');
+const holdButton = element<HTMLButtonElement>('hold-move');
+/** Whether the person is pressing Hold to move; Python decides whether a hold is in progress. */
+let holding = false;
+/** The hold this phone has asked to end, so it is asked once. */
+let releasing: number | null = null;
 const look = new PhoneLook();
 const walkButton = element<HTMLButtonElement>('walk-toggle');
 const walker = new StepWalker(START_EYE, () => {
@@ -107,7 +112,10 @@ function controls(): void {
   gazeButton.disabled = !connected;
   const pointing = gaze.getPhase() === 'tracking';
   for (const id of ['gaze-mode', 'gaze-calibrate', 'gaze-test']) element(id).hidden = !pointing;
-  deselectButton.hidden = selected === null;
+  const mine = ownHold();
+  deselectButton.hidden = selected === null || mine !== null;
+  holdButton.hidden = selected === null && mine === null;
+  holdButton.dataset.held = String(holding);
   gazeModeButton.textContent = gaze.getMode() === 'eyes' ? 'Switch to head' : 'Switch to eyes';
 }
 
@@ -147,9 +155,32 @@ function roomLabel(next: SessionState, ready: boolean): string {
   return `Room version ${next.room.room_version} · ${names.join(', ')}`;
 }
 
+/** The hold this phone owns, if Python has one in progress. */
+function ownHold(): SessionState['manipulation'] {
+  const held = state?.manipulation ?? null;
+  return held && held.owner === 'mobile_master' && role === 'mobile_master' ? held : null;
+}
+
 function applyState(next: SessionState): void {
   if (state && next.revision < state.revision) return;
+  const before = ownHold();
   state = next;
+  const held = next.manipulation;
+  view?.showControl(held?.entity ?? null);
+  element('control-status').textContent = held ?
+    `${held.owner === 'mobile_master' ? 'Phone' : 'Headset'} is moving ${entityLabel(held.entity)}` :
+    'No object is being moved';
+  const mine = ownHold();
+  if (mine && !holding) {
+    // The hold was accepted after the button was let go, so end it at once.
+    endHold();
+  } else if (mine && !before) {
+    element('view-status').textContent = `Moving ${entityLabel(mine.entity)} · walk to carry it`;
+  } else if (!mine && before) {
+    releasing = null;
+    element('view-status').textContent = `Placed ${entityLabel(before.entity)}`;
+  }
+  controls();
   view?.apply(next);
   if (role) view?.applyView(next.alignment[role]);
   walker.setFloorplan(floorplan(next.room.available ? next.room.entities : []));
@@ -202,6 +233,7 @@ const client = new SessionClient({
             mobile_master: { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } },
             vr_solver: { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } },
           },
+          manipulation: null,
           room: {
             available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
             entities: [], loaded_by: { mobile_master: null, vr_solver: null },
@@ -224,8 +256,20 @@ const client = new SessionClient({
       `${result.rejected.message}${result.id ? ` ${entityLabel(result.id)} is still selected.` : ''}` : now;
     controls();
   },
-  error: showError,
+  error: message => {
+    showError(message);
+    // The room view covers the page's error box, so its status line says it too.
+    if (roomViewOpen) element('view-status').textContent = message;
+  },
 });
+
+/** Asks Python to end this phone's hold, once; the object stays where it is. */
+function endHold(): void {
+  const mine = ownHold();
+  if (!mine || releasing === mine.id) return;
+  releasing = mine.id;
+  client.sendRelease(mine.id);
+}
 
 /** Asks Python to select a room object, or to deselect with null; Python decides what is eligible. */
 function requestSelection(id: string | null): void {
@@ -360,6 +404,8 @@ walkButton.addEventListener('click', () => {
   }).finally(controls);
 });
 element('walk-reset').addEventListener('click', () => {
+  // Going back to the start must not carry a held object back with it.
+  endHold();
   publishWalk(walker.reset());
   element('view-status').textContent = 'Back at the start';
 });
@@ -395,6 +441,21 @@ element('gaze-calibrate').addEventListener('click', () => gaze.calibrate());
 element('gaze-test').addEventListener('click', () => gaze.test());
 element('gaze-cancel').addEventListener('click', () => gaze.cancel());
 deselectButton.addEventListener('click', () => requestSelection(null));
+holdButton.addEventListener('pointerdown', event => {
+  holdButton.setPointerCapture(event.pointerId);
+  holding = true;
+  const version = state?.room.room_version;
+  if (selected !== null && version !== null && version !== undefined) client.sendAcquire(version, selected);
+  controls();
+});
+for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+  holdButton.addEventListener(name, () => {
+    if (!holding) return;
+    holding = false;
+    endHold();
+    controls();
+  });
+}
 element('open-room-view').addEventListener('click', () => setRoomView(true));
 element('close-room-view').addEventListener('click', () => setRoomView(false));
 const confirmAlignment = () => {

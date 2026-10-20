@@ -51,6 +51,21 @@ class SelectMessage(WireModel):
     id: str | None = Field(max_length=64)
 
 
+class AcquireMessage(WireModel):
+    """The phone takes hold of its selected object, to carry it as the phone moves."""
+
+    type: Literal["acquire"]
+    room_version: int = Field(ge=1)
+    id: str = Field(max_length=64)
+
+
+class ReleaseMessage(WireModel):
+    """The phone lets go of its hold; the object stays where the hold left it."""
+
+    type: Literal["release"]
+    manipulation_id: int = Field(ge=1)
+
+
 class PoseMessage(WireModel):
     type: Literal["pose"]
     sequence: int = Field(ge=1)

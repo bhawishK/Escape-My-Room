@@ -31,10 +31,12 @@ from backend.errors import Refusal
 from backend.preparation import JobRequest, PreparationService, worker_from_environment
 from backend.prepared_room import ASSET_URL_PREFIX, PreparedRoomError, load_prepared_room
 from backend.protocol import (
+    AcquireMessage,
     CalibrateMessage,
     EntityTransformMessage,
     MarkerState,
     PoseMessage,
+    ReleaseMessage,
     Role,
     RoomLoadedMessage,
     SelectMessage,
@@ -43,7 +45,13 @@ from backend.protocol import (
 from backend.sessions import PrototypeRoom
 
 type Incoming = (
-    PoseMessage | RoomLoadedMessage | EntityTransformMessage | CalibrateMessage | SelectMessage
+    PoseMessage
+    | RoomLoadedMessage
+    | EntityTransformMessage
+    | CalibrateMessage
+    | SelectMessage
+    | AcquireMessage
+    | ReleaseMessage
 )
 # The message model for each incoming `type`.
 INCOMING: dict[str, type[Incoming]] = {
@@ -52,13 +60,31 @@ INCOMING: dict[str, type[Incoming]] = {
     "entity_transform": EntityTransformMessage,
     "calibrate": CalibrateMessage,
     "select": SelectMessage,
+    "acquire": AcquireMessage,
+    "release": ReleaseMessage,
 }
+
+ROOM_VERSION_MISMATCH = (
+    "room_version_mismatch",
+    "Room version does not match. Reload and connect again.",
+)
 
 # Why a selection was refused, as the phone shows it.
 SELECTION_REFUSALS = {
-    "mismatch": ("room_version_mismatch", "Room version does not match. Reload and connect again."),
+    "mismatch": ROOM_VERSION_MISMATCH,
     "unknown": ("unknown_entity", "That room object does not exist."),
     "not_selectable": ("entity_not_selectable", "That object is fixed and cannot be selected."),
+    "held": ("selection_held", "Let go of the object before changing the selection."),
+}
+
+
+# Why a hold or release was refused, as the phone shows it.
+MANIPULATION_REFUSALS = {
+    "mismatch": ROOM_VERSION_MISMATCH,
+    "not_selected": ("not_selected", "Select the object before holding it."),
+    "not_tracked": ("not_tracked", "Turn on Walk with steps so the phone has a position."),
+    "already_held": ("already_held", "The object is already being moved."),
+    "stale": ("stale_manipulation", "That hold has already ended."),
 }
 
 
@@ -82,7 +108,10 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     except PreparedRoomError as exc:
         prepared = None
         load_error = str(exc)
-    room = PrototypeRoom(load_error=load_error)
+    gain = float(os.environ.get("ESCAPE_ROOM_MANIPULATION_GAIN") or 1.0)
+    if not 0 < gain <= 10:
+        raise ValueError("ESCAPE_ROOM_MANIPULATION_GAIN must be above 0 and at most 10.")
+    room = PrototypeRoom(load_error=load_error, gain=gain)
     if prepared is not None:
         room.entities = [entity.model_copy(deep=True) for entity in prepared.entities]
         room.room_version = prepared.room_version
@@ -228,10 +257,7 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                     elif isinstance(incoming, RoomLoadedMessage):
                         result = room.accept_room_version(role, incoming.room_version)
                         if result == "mismatch":
-                            await reject(
-                                "room_version_mismatch",
-                                "Room version does not match. Reload and connect again.",
-                            )
+                            await reject(*ROOM_VERSION_MISMATCH)
                             await socket.close(code=1008, reason="Room version mismatch")
                             return
                         if result == "unavailable":
@@ -248,6 +274,24 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                                 "room_unavailable",
                                 room.load_error or "Prepared room is unavailable.",
                             )
+                            continue
+                        await room.broadcast()
+                    elif isinstance(incoming, AcquireMessage | ReleaseMessage):
+                        if role != "mobile_master":
+                            await reject("role_forbidden", "Only the phone holds objects for now.")
+                            continue
+                        if isinstance(incoming, AcquireMessage):
+                            result = room.acquire(incoming.room_version, incoming.id)
+                        else:
+                            result = room.release(incoming.manipulation_id)
+                        if result == "unavailable":
+                            await reject(
+                                "room_unavailable",
+                                room.load_error or "Prepared room is unavailable.",
+                            )
+                            continue
+                        if result != "ok":
+                            await reject(*MANIPULATION_REFUSALS[result])
                             continue
                         await room.broadcast()
                     elif isinstance(incoming, SelectMessage):
@@ -275,6 +319,9 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                             continue
                         if result == "unknown":
                             await reject("unknown_entity", "That room object does not exist.")
+                            continue
+                        if result == "controlled":
+                            await reject("entity_controlled", "The phone is moving that object.")
                             continue
                         if result == "unavailable":
                             await reject(

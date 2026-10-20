@@ -46,6 +46,8 @@ export interface SessionState {
     position: Position | null;
   };
   alignment: { mobile_master: AlignmentState; vr_solver: AlignmentState };
+  /** The hold in progress, if any: the held object follows its owner's phone. */
+  manipulation: { id: number; entity: string; owner: Role; gain: number; sequence: number | null } | null;
   room: RoomState;
 }
 

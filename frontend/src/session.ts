@@ -89,6 +89,18 @@ export class SessionClient {
     this.socket.send(JSON.stringify({ type: 'select', room_version: roomVersion, id }));
   }
 
+  /** Asks Python to start holding the selected object, so walking carries it. */
+  sendAcquire(roomVersion: number, id: string): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: 'acquire', room_version: roomVersion, id }));
+  }
+
+  /** Lets go of a hold; the object stays where it is. */
+  sendRelease(manipulationId: number): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: 'release', manipulation_id: manipulationId }));
+  }
+
   sendRoomLoaded(roomVersion: number): void {
     if (this.socket?.readyState !== WebSocket.OPEN) return;
     this.socket.send(JSON.stringify({ type: 'room_loaded', room_version: roomVersion }));

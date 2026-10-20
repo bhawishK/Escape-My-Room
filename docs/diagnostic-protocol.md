@@ -1,6 +1,6 @@
 # Prototype connection and pose contract
 
-Python owns one shared room in one process. There are no session IDs, participant IDs, join grants, tokens, accounts, or simulator inputs. Object ownership and manipulation remain later slices.
+Python owns one shared room in one process. There are no session IDs, participant IDs, join grants, tokens, accounts, or simulator inputs. The headset grabbing objects, and competing requests for control, remain later slices.
 
 ## Connect a device
 
@@ -80,6 +80,39 @@ The phone selects the object it means to manipulate. Only the phone may send:
 Selection is private intent. It is not in the shared state, does not change the revision, is never sent to the headset, and does not move the object or give anyone control of it. A new phone connection, or the phone disconnecting, clears it.
 
 On the phone's room view a tap selects the object drawn under the finger: the view casts a ray from the camera through the tap, and the nearest surface hit names the entity, so furniture in front hides what is behind it. Tapping empty space sends nothing and reads **Nothing to select there**. Python decides eligibility, so tapping the desk is refused with its message. An accepted selection is outlined with a pink halo, the status line reads **Selected box**, and **Deselect** appears. Closing the room view deselects. Tested on desktop through the WebSocket seam (`tests/test_selection.py`); not yet tried on the iPhone.
+
+## Hold and move an object
+
+The phone carries its selected object by walking. It has no measured position yet, so the phone's position is the step-counted one from **Walk with steps** ([phone tracking](phone-tracking.md)). Movement is therefore coarse: about one step length, 0.6 m by default, at a time. The user chose this on 20 October 2026 over dragging on the screen, so the technique stays phone movement until real tracking arrives.
+
+Only the phone may send:
+
+```json
+{ "type": "acquire", "room_version": 1, "id": "box" }
+{ "type": "release", "manipulation_id": 3 }
+```
+
+An accepted `acquire` starts a hold. Python records where the phone and the object are at that moment. Every later tracked pose moves the object by the phone's displacement since then, multiplied by the gain. The object keeps its height; only movement across the floor carries it. The pose `sequence` orders these movements, and `revision` orders the states. `release` ends the hold, and the object stays where it is. A new hold takes fresh starting places, so the object does not jump. Moving the phone without a hold moves nothing.
+
+The hold is shared. The state carries `"manipulation": { "id": 3, "entity": "box", "owner": "mobile_master", "gain": 1.0, "sequence": 12 }`, or `null`. Ids count up across holds. `sequence` is the pose sequence of the latest movement applied, and is `null` until the first. The selection cannot change during a hold (`selection_held`). Both pages show **Phone is moving box** under the room status, and both scenes outline the held object in orange.
+
+| Refusal | When |
+| --- | --- |
+| `not_selected` | `id` is not the phone's current selection |
+| `not_tracked` | The phone has no tracked position; turn on **Walk with steps** |
+| `already_held` | A hold is already in progress |
+| `room_version_mismatch`, `room_unavailable` | As for selection |
+| `stale_manipulation` | `release` names a hold that is not the current one |
+| `role_forbidden` | The headset sent `acquire` or `release` |
+| `entity_controlled` | An `entity_transform` for the held object |
+
+A refused `acquire` starts nothing. A pose without a position, such as **Stop walking**, ends the hold in place, and so does the phone disconnecting.
+
+**Gain:** 1.0 by default, so the object moves as far as the phone. `ESCAPE_ROOM_MANIPULATION_GAIN` sets it, from above 0 up to 10. The frame is room meters, the same as the furniture. Only translation across the floor is applied: no height change, rotation, gravity, snapping or collision. A held object can therefore pass through furniture or off the floor's edge. Positions are clamped to ±100 m.
+
+**On the phone:** select the box, turn on **Walk with steps**, then keep **Hold to move** pressed and walk. The status line reads **Moving box · walk to carry it**, then **Placed box** on letting go. Lifting the finger, a cancelled touch, or losing the pointer all release the hold. **Back to start** releases it first, so returning does not carry the box back. While the hold is on, the selection's pink halo follows the box.
+
+Tested through the WebSocket seam (`tests/test_manipulation.py`): carrying, release, re-holding without a jump, refusals, gain, ending on stopping and on disconnect, and the headset's view. A desktop run of both pages with synthetic steps carried the box 1.8 m in three steps, showed **Phone is moving box** on the headset page, and left the box in place when walking on after release. Not yet tried on the iPhone and Quest.
 
 ## Prepared room
 

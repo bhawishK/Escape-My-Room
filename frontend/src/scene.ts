@@ -48,6 +48,9 @@ export class DiagnosticScene {
     }),
   );
   private selected: string | null = null;
+  /** Outlines the object someone is holding, on both devices. */
+  private readonly control = new THREE.BoxHelper(new THREE.Object3D(), 0xffa64d);
+  private controlled: string | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -89,6 +92,8 @@ export class DiagnosticScene {
     this.selection.visible = false;
     this.selectionShell.visible = false;
     this.scene.add(this.selection, this.selectionShell);
+    this.control.visible = false;
+    this.scene.add(this.control);
     container.append(this.renderer.domElement);
     container.dataset.view = 'overview';
     const resize = () => {
@@ -161,7 +166,16 @@ export class DiagnosticScene {
     this.outlineSelection();
   }
 
+  /** Outlines the object being held, or none for null. */
+  showControl(id: string | null): void {
+    this.controlled = id;
+    this.outlineSelection();
+  }
+
   private outlineSelection(): void {
+    const held = this.controlled ? this.entityRoots.get(this.controlled) : undefined;
+    if (held) this.control.setFromObject(held);
+    this.control.visible = held !== undefined;
     const root = this.selected ? this.entityRoots.get(this.selected) : undefined;
     if (root) {
       this.selection.setFromObject(root);
@@ -220,6 +234,7 @@ export class DiagnosticScene {
     this.entityRoots = new Map();
     this.pointAt(null);
     this.select(null);
+    this.showControl(null);
     this.grid.visible = true;
   }
 
