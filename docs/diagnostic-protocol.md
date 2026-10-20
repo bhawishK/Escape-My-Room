@@ -24,6 +24,10 @@ The first event is `{ "type": "welcome", "state": ... }`. Later events are `{ "t
     "reference_space": null,
     "position": null
   },
+  "participants": {
+    "mobile_master": { "tracking_status": "inactive", "position": null, "heading": null },
+    "vr_solver": { "tracking_status": "inactive", "position": null, "heading": null }
+  },
   "room": {
     "available": true,
     "room_version": 1,
@@ -37,7 +41,7 @@ The first event is `{ "type": "welcome", "state": ... }`. Later events are `{ "t
 }
 ```
 
-The example omits the entity objects. The default room lists `floor`, `desk`, `cabinet`, and `box`. Each entity has `id`, `label`, `asset_url`, `node`, `kind`, `selectable`, `size`, `position`, and a unit-quaternion `rotation` in `(x, y, z, w)` order. In the stand-in room every entity shares `/assets/prepared-room/room.gltf` and has the identity rotation; a multi-asset room gives each entity its own GLB. `units`, `frame`, and `quaternion_order` are null while the room is unavailable. Revision increases for joins, accepted poses, room acknowledgements, accepted entity moves, and disconnects. Closing the VR socket sets `vr_connected` to false. Closing the phone socket also clears its marker to `lost`, without disconnecting VR. Restarting Python removes all state. There is no automatic reconnect; the role button starts a fresh connection. There are no HTTP reservations to release if a socket fails.
+The example omits the entity objects. The default room lists `floor`, `desk`, `cabinet`, and `box`. Each entity has `id`, `label`, `asset_url`, `node`, `kind`, `selectable`, `size`, `position`, and a unit-quaternion `rotation` in `(x, y, z, w)` order. In the stand-in room every entity shares `/assets/prepared-room/room.gltf` and has the identity rotation; a multi-asset room gives each entity its own GLB. `units`, `frame`, and `quaternion_order` are null while the room is unavailable. Revision increases for joins, accepted poses, accepted presence, room acknowledgements, accepted entity moves, and disconnects. Closing the VR socket sets `vr_connected` to false. Closing the phone socket also clears its marker to `lost`, without disconnecting VR. Restarting Python removes all state. There is no automatic reconnect; the role button starts a fresh connection. There are no HTTP reservations to release if a socket fails.
 
 Connected status represents a live page connection, not proof that immersive VR has started or positional tracking works. Roles constrain message behavior; they are not authentication. Anyone who can access this prototype URL can choose either role.
 
@@ -181,6 +185,24 @@ No one-way latency between devices is worked out, since their clocks are not syn
 | 300 ms | 27 | 27 | 313 ms | 0.093 m | Same on all three |
 
 The jump at release is the 120 ms glide trailing a box swung at about 0.6 m/s. A shorter `?smoothing=` shrinks it, and makes the steps between updates more visible. On the iPhone and Quest, record the same table: on the normal network and with a delay, the rates, the acknowledgement round trip, the corrections, and whether the motion is easy to follow.
+
+## Publish presence
+
+Either role can publish where that person is. A presence update changes only that role's entry in `participants`. It does not move a room object, and an object move does not change presence. Each socket has its own presence sequence, separate from the phone's pose sequence, starting at 1 and strictly increasing.
+
+```json
+{
+  "type": "presence",
+  "sequence": 1,
+  "tracking_status": "tracked",
+  "position": { "x": 0.0, "y": 1.5, "z": 1.6 },
+  "heading": 0.0
+}
+```
+
+`heading` is radians about Y. `0` faces the desk, along room `-Z`. Positive turns left. A tracked update requires a position and a heading, both already in the room frame. The Quest converts its `local` viewer pose with the alignment it confirmed before sending. The phone sends the room view's place directly. `inactive` and `lost` require a null position and a null heading.
+
+The page sends at most 20 presence updates a second and drops one when the socket already has 16 KiB waiting. If a tracked participant sends nothing for 1.5 seconds, Python marks that entry `stale` and keeps the last position and heading. Disconnecting sets that role to `lost` and clears the position and heading. A new tab in the same role starts at `inactive`. Each page draws the other person's marker and hides its own. See [participant presence](participant-presence.md).
 
 ## Prepared room
 

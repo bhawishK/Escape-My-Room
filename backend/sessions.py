@@ -2,6 +2,7 @@
 
 import asyncio
 import math
+import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -10,7 +11,17 @@ from fastapi import WebSocket
 from backend.alignment import Alignment
 from backend.delivery import Outbox
 from backend.prepared_room import FRAME, QUATERNION_ORDER, UNITS, SceneEntity
-from backend.protocol import MarkerState, PoseMessage, Position, Role
+from backend.protocol import (
+    MarkerState,
+    PoseMessage,
+    Position,
+    PresenceMessage,
+    PresenceState,
+    Role,
+)
+
+# A tracked participant who stops sending is marked stale after this long. The last place stays.
+PRESENCE_STALE_AFTER = 1.5
 
 # A carried object sits where the screen's centre meets the floor, no nearer or further than this.
 CARRY_NEAREST = 0.3
@@ -75,6 +86,15 @@ class PrototypeRoom:
             "vr_solver": Alignment(),
         }
     )
+    presence: dict[Role, PresenceState] = field(
+        default_factory=lambda: {
+            "mobile_master": PresenceState(),
+            "vr_solver": PresenceState(),
+        }
+    )
+    presence_seen: dict[Role, float] = field(default_factory=dict)
+    # One timer per role, armed only while that person is tracked.
+    presence_timers: dict[Role, asyncio.TimerHandle] = field(default_factory=dict)
 
     def snapshot(self) -> dict[str, Any]:
         available = self.load_error is None and self.room_version is not None
@@ -85,6 +105,7 @@ class PrototypeRoom:
             # Recorded with motion measurements, so each is read against its network conditions.
             "delivery": {"simulated_delay_ms": round(self.delivery_delay * 1000)},
             "marker": self.marker.model_dump(),
+            "participants": {role: value.model_dump() for role, value in self.presence.items()},
             "alignment": {role: value.model_dump() for role, value in self.alignment.items()},
             "manipulation": None
             if self.manipulation is None
@@ -195,6 +216,66 @@ class PrototypeRoom:
             if outbox.socket is not exclude:
                 outbox.publish(state)
 
+    def accept_presence(self, role: Role, presence: PresenceMessage) -> None:
+        self.presence[role] = PresenceState(
+            tracking_status=presence.tracking_status,
+            position=presence.position,
+            heading=presence.heading,
+        )
+        if presence.tracking_status == "tracked":
+            self.presence_seen[role] = time.monotonic()
+        else:
+            self.presence_seen.pop(role, None)
+        self.revision += 1
+        self.arm_presence(role)
+
+    def cancel_presence_timer(self, role: Role) -> None:
+        pending = self.presence_timers.pop(role, None)
+        if pending is not None:
+            pending.cancel()
+
+    def arm_presence(self, role: Role, delay: float = PRESENCE_STALE_AFTER) -> None:
+        """Mark this person stale `delay` seconds after the sighting, without a polling task."""
+
+        self.cancel_presence_timer(role)
+        if self.presence[role].tracking_status != "tracked" or role not in self.presence_seen:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        seen = self.presence_seen[role]
+        self.presence_timers[role] = loop.call_later(delay, self._presence_due, role, seen)
+
+    def _presence_due(self, role: Role, seen: float) -> None:
+        self.presence_timers.pop(role, None)
+        asyncio.get_running_loop().create_task(self._apply_stale(role, seen))
+
+    async def _apply_stale(self, role: Role, seen: float) -> None:
+        async with self.lock:
+            if self.presence_seen.get(role) != seen:
+                return
+            if self.expire_presence():
+                await self.broadcast()
+                return
+            # The timer can land on the 1.5 s boundary, which is not stale yet.
+            if self.presence[role].tracking_status == "tracked":
+                self.arm_presence(role, 0.05)
+
+    def expire_presence(self, now: float | None = None) -> bool:
+        """Mark tracked participants stale when their last update is too old."""
+
+        clock = time.monotonic() if now is None else now
+        changed = False
+        for role, seen in list(self.presence_seen.items()):
+            current = self.presence[role]
+            if current.tracking_status == "tracked" and clock - seen > PRESENCE_STALE_AFTER:
+                current.tracking_status = "stale"
+                changed = True
+        if changed:
+            self.revision += 1
+        return changed
+
     def accept_pose(self, pose: PoseMessage) -> None:
         self.marker = MarkerState(
             tracking_status=pose.tracking_status,
@@ -259,6 +340,9 @@ class PrototypeRoom:
         self.sockets.pop(role, None)
         self.loaded_versions[role] = None
         self.alignment[role] = Alignment()
+        self.cancel_presence_timer(role)
+        self.presence[role] = PresenceState(tracking_status="lost")
+        self.presence_seen.pop(role, None)
         if role == "mobile_master":
             self.marker = MarkerState(tracking_status="lost")
             self.selection = None

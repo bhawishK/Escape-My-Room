@@ -37,6 +37,8 @@ from backend.protocol import (
     EntityTransformMessage,
     MarkerState,
     PoseMessage,
+    PresenceMessage,
+    PresenceState,
     ReleaseMessage,
     Role,
     RoomLoadedMessage,
@@ -53,6 +55,7 @@ type Incoming = (
     | SelectMessage
     | AcquireMessage
     | ReleaseMessage
+    | PresenceMessage
 )
 # The message model for each incoming `type`.
 INCOMING: dict[str, type[Incoming]] = {
@@ -63,6 +66,7 @@ INCOMING: dict[str, type[Incoming]] = {
     "select": SelectMessage,
     "acquire": AcquireMessage,
     "release": ReleaseMessage,
+    "presence": PresenceMessage,
 }
 
 ROOM_VERSION_MISMATCH = (
@@ -94,7 +98,6 @@ class OverviewChoice(WireModel):
 
 
 def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -> FastAPI:
-    app = FastAPI(title="Escape My Room prototype")
     repository = Path(__file__).resolve().parents[1]
     data = data_dir or Path(os.environ.get("ESCAPE_ROOM_DATA_DIR") or repository / "data")
     captures = CaptureStore(data / "captures", CaptureLimits.from_environment())
@@ -116,6 +119,8 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     if prepared is not None:
         room.entities = [entity.model_copy(deep=True) for entity in prepared.entities]
         room.room_version = prepared.room_version
+
+    app = FastAPI(title="Escape My Room prototype")
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:
@@ -189,6 +194,7 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     @app.websocket("/api/ws")
     async def room_socket(socket: WebSocket, role: Role) -> None:
         sequence = 0
+        presence_sequence = 0
         outbox = Outbox(socket, room.delivery_delay)
 
         async def reject(code: str, message: str) -> None:
@@ -202,6 +208,9 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                 room.outboxes[role] = outbox
                 room.loaded_versions[role] = None
                 room.alignment[role] = Alignment()
+                room.presence[role] = PresenceState()
+                room.presence_seen.pop(role, None)
+                room.cancel_presence_timer(role)
                 if role == "mobile_master":
                     room.marker = MarkerState()
                     room.selection = None
@@ -256,6 +265,16 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                             continue
                         sequence = incoming.sequence
                         room.accept_pose(incoming)
+                        await room.broadcast()
+                    elif isinstance(incoming, PresenceMessage):
+                        if incoming.sequence <= presence_sequence:
+                            await reject(
+                                "stale_sequence",
+                                "Presence sequences must increase on this socket.",
+                            )
+                            continue
+                        presence_sequence = incoming.sequence
+                        room.accept_presence(role, incoming)
                         await room.broadcast()
                     elif isinstance(incoming, RoomLoadedMessage):
                         result = room.accept_room_version(role, incoming.room_version)

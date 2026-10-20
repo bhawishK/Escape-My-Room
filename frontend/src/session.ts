@@ -1,5 +1,5 @@
 import type { CalibrationInput } from './alignment';
-import type { PoseInput, Role, SelectionResult, ServerEvent, SessionState } from './protocol';
+import type { PoseInput, PresenceInput, Role, SelectionResult, ServerEvent, SessionState } from './protocol';
 
 interface SessionEvents {
   state: (state: SessionState) => void;
@@ -17,6 +17,7 @@ const DRAIN_CHECK_MS = 30;
 export class SessionClient {
   private socket: WebSocket | null = null;
   private sequence = 0;
+  private presenceSequence = 0;
   /** The newest pose not yet sent because the connection was congested. */
   private waitingPose: PoseInput | null = null;
   private drainTimer: number | null = null;
@@ -31,6 +32,7 @@ export class SessionClient {
     const socket = new WebSocket(url);
     this.socket = socket;
     this.sequence = 0;
+    this.presenceSequence = 0;
     this.stopWaitingPose();
     try {
       await new Promise<void>((resolve, reject) => {
@@ -112,6 +114,14 @@ export class SessionClient {
     this.waitingPose = null;
     this.socket.send(JSON.stringify({ type: 'pose', sequence: ++this.sequence, ...pose }));
     this.events.poseSent?.(this.sequence);
+  }
+
+  /** At most one presence update in flight beyond the 16 KiB socket buffer. Returns whether it sent. */
+  sendPresence(presence: PresenceInput): boolean {
+    if (this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > 16384) return false;
+    const sequence = ++this.presenceSequence;
+    this.socket.send(JSON.stringify({ type: 'presence', sequence, ...presence }));
+    return true;
   }
 
   sendCalibration(input: CalibrationInput): void {

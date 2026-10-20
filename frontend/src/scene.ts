@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type { RoomPose } from './phone-view';
-import type { AlignmentState, Position, SessionState } from './protocol';
+import type { AlignmentState, Position, PresenceState, Role, SessionState } from './protocol';
 import { applyPlacement, placeEntities } from './room';
 
 const emptyRoom = (): SessionState['room'] => ({
@@ -17,6 +17,8 @@ export class DiagnosticScene {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(OVERVIEW_FOV, 1, 0.01, 100);
   private readonly marker: THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>;
+  private readonly people = new Map<Role, THREE.Group>();
+  private localRole: Role | null = null;
   private readonly grid: THREE.GridHelper;
   private readonly loader = new GLTFLoader();
   private readonly container: HTMLElement;
@@ -88,6 +90,8 @@ export class DiagnosticScene {
     this.marker.name = 'phone-marker';
     this.marker.visible = false;
     this.roomAnchor.add(this.marker);
+    this.people.set('mobile_master', this.person(0x66e6cf, 'presence-phone'));
+    this.people.set('vr_solver', this.person(0xf0b429, 'presence-headset'));
     this.statusCanvas.width = 512;
     this.statusCanvas.height = 160;
     this.statusTexture = new THREE.CanvasTexture(this.statusCanvas);
@@ -119,11 +123,55 @@ export class DiagnosticScene {
     resize();
   }
 
+  /** This page's role, so its own presence marker stays hidden. */
+  setLocalRole(role: Role | null): void {
+    this.localRole = role;
+  }
+
   apply(state: SessionState): void {
     const position = state.marker.position;
-    // A phone looking out from its own view does not draw itself.
-    this.marker.visible = position !== null && this.following === null;
+    const phone = state.participants?.mobile_master;
+    const phoneShown = phone?.tracking_status === 'tracked' || phone?.tracking_status === 'stale';
+    // A phone looking out from its own view does not draw itself. A live presence marker replaces it.
+    this.marker.visible = position !== null && this.following === null && !phoneShown;
     if (position) this.marker.position.set(position.x, position.y, position.z);
+    for (const who of ['mobile_master', 'vr_solver'] as const) {
+      this.showPerson(who, state.participants?.[who]);
+    }
+  }
+
+  private person(color: number, name: string): THREE.Group {
+    const group = new THREE.Group();
+    group.name = name;
+    group.visible = false;
+    const material = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.25 });
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.08, 24, 16), material);
+    const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.2, 12), material.clone());
+    arrow.rotation.x = Math.PI / 2;
+    arrow.position.z = -0.18;
+    group.add(head, arrow);
+    this.roomAnchor.add(group);
+    return group;
+  }
+
+  private showPerson(role: Role, presence: PresenceState | undefined): void {
+    const group = this.people.get(role);
+    if (!group) return;
+    const visible = role !== this.localRole &&
+      (presence?.tracking_status === 'tracked' || presence?.tracking_status === 'stale') &&
+      presence.position !== null && presence.heading !== null;
+    group.visible = visible;
+    if (!presence?.position || presence.heading === null) return;
+    group.position.set(presence.position.x, presence.position.y, presence.position.z);
+    group.rotation.y = presence.heading;
+    const stale = presence.tracking_status === 'stale';
+    group.traverse(child => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const material = mesh.material as THREE.MeshStandardMaterial;
+      material.transparent = true;
+      material.opacity = stale ? 0.35 : 1;
+    });
   }
 
   /** Moves this device's view to the phone's room pose, or back to the default view with null. */
