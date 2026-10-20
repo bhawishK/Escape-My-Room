@@ -4,7 +4,7 @@ Issue #49 tests whether the phone's back camera can estimate the phone's height 
 
 ## How it works
 
-1. **Measure height:** opens the back camera, shown small top left so it can be aimed at the floor. It also turns on **Turn with phone**, whose orientation sensor gives gravity's direction, and leaves it on afterwards; select **Stop turning** to stop it.
+1. **Measure height:** opens the back camera, shown small top left so it can be aimed at the floor. It uses the orientation sensor, which is always on in the room view, for gravity's direction.
 2. **Model:** each frame is fitted, centered, into a 616 × 1064 canvas turned to the frame's orientation and padded with the model's mean color. [Metric3D v2](https://github.com/YvanYin/Metric3D) ViT-Small (`onnx-community/metric3d-vit-small`, CC0-1.0, pinned revision `ee63b95`, 76 MB fp16) estimates depth and surface normals for every pixel. It runs in a Web Worker with [ONNX Runtime Web](https://onnxruntime.ai/) 1.30.0.
 3. **Meters:** Metric3D predicts depth as a camera with a 1000 px focal length would see it, so depth is scaled by the frame's focal length on the canvas over 1000. The focal length is assumed to be 0.75 × the frame's long side, the iPhone 16 main camera's roughly 67° view.
 4. **Floor:** pixels whose normals face up (within 20° of the sensor's up) are placed in 3D. The floor is the lowest level surface with real support, not the biggest one, so a desk top is not mistaken for it. A plane is fitted through the floor points, and the camera's height is its distance from that plane. Gravity only has to be roughly right.

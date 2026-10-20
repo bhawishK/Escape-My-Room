@@ -108,10 +108,7 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     except PreparedRoomError as exc:
         prepared = None
         load_error = str(exc)
-    gain = float(os.environ.get("ESCAPE_ROOM_MANIPULATION_GAIN") or 1.0)
-    if not 0 < gain <= 10:
-        raise ValueError("ESCAPE_ROOM_MANIPULATION_GAIN must be above 0 and at most 10.")
-    room = PrototypeRoom(load_error=load_error, gain=gain)
+    room = PrototypeRoom(load_error=load_error)
     if prepared is not None:
         room.entities = [entity.model_copy(deep=True) for entity in prepared.entities]
         room.room_version = prepared.room_version

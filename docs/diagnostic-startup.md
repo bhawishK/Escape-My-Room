@@ -46,7 +46,7 @@ Open `https://192.168.1.10:8443` using the IP you substituted. Allow incoming po
 
 ## Use the two views
 
-1. On iPhone, select **Connect phone**. The room opens full screen; **Turn with phone** looks around as the phone turns. **Close** returns to the page, which shows **Waiting for VR device** until the headset joins. See [phone view and tracking](phone-tracking.md).
+1. On iPhone, select **Connect phone**. The room opens full screen, turning as the phone turns and moving a step at a time as you walk; allow motion access when asked. Tap the box to select it, press and hold it to carry it, and let go to drop it. **Close** returns to the page, which shows **Waiting for VR device** until the headset joins. See [phone view and tracking](phone-tracking.md).
 2. Open the same URL on Quest and select **Connect VR headset**. The phone should show **VR device connected**. Both pages should show room version 1 with the floor, desk, cabinet, and movable box. Select **Enter VR** on Quest to look around that room. This separate click provides the browser gesture required to start immersive XR.
 3. End VR using **End VR** when the overlay is available, or a controller select action when it is not. Select **Disconnect** to leave the shared room. The phone returns to **Waiting for VR device** after the VR page disconnects. Connected status means the headset page is connected; it does not prove immersive mode or positional tracking.
 4. After a dropped connection, use the role button to connect again. There is no session ID to copy or reservation to clear. Opening a second tab in the same role replaces the first.

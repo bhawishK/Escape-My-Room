@@ -9,7 +9,7 @@ import type { Role, SessionState } from './protocol';
 import { SessionClient } from './session';
 import { DiagnosticScene } from './scene';
 import { STEP_LENGTHS, StepWalker } from './step-walk';
-import { floorplan, type Sensitivity } from './steps';
+import { floorplan } from './steps';
 import { XRDiagnostic, xrError } from './xr';
 
 const phoneButton = element<HTMLButtonElement>('connect-phone');
@@ -18,7 +18,6 @@ const disconnectButton = element<HTMLButtonElement>('disconnect');
 const alignButton = element<HTMLButtonElement>('confirm-alignment');
 const startButton = element<HTMLButtonElement>('start-xr');
 const endButton = element<HTMLButtonElement>('end-xr');
-const lookButton = element<HTMLButtonElement>('look-around');
 const roomViewHud = element('room-view-hud');
 const overlay = element('xr-overlay');
 let role: Role | null = null;
@@ -31,28 +30,48 @@ let xr: XRDiagnostic | null = null;
 let roomViewOpen = false;
 /** The room object Python accepted as this phone's selection. It is private to the phone. */
 let selected: string | null = null;
-const deselectButton = element<HTMLButtonElement>('deselect');
-const holdButton = element<HTMLButtonElement>('hold-move');
-/** Whether the person is pressing Hold to move; Python decides whether a hold is in progress. */
+/** Whether a finger is holding the selected object; Python decides whether it is picked up. */
 let holding = false;
 /** The hold this phone has asked to end, so it is asked once. */
 let releasing: number | null = null;
+/** How long a press on the selected object lasts before it is picked up, so a tap is not. */
+const PICK_UP_MS = 300;
+/** While carrying, the phone tells Python where it is and faces this often, so the object follows. */
+const CARRY_POSE_MS = 100;
+let lastCarryPose = 0;
 const look = new PhoneLook();
-const walkButton = element<HTMLButtonElement>('walk-toggle');
-const walker = new StepWalker(START_EYE, () => {
+/** Which way the phone faces: 0 toward the desk, positive turning left; null without a reading. */
+function heading(): number | null {
   const facing = look.orientation();
-  return facing ? headingOf(facing) : 0;
-}, {
+  return facing ? headingOf(facing) : null;
+}
+const walker = new StepWalker(START_EYE, () => heading() ?? 0, {
   step: (position, steps) => {
-    element('view-status').textContent = `Walking · ${steps} ${steps === 1 ? 'step' : 'steps'}`;
+    if (selected === null) element('view-status').textContent = `Walking · ${steps} ${steps === 1 ? 'step' : 'steps'}`;
     publishWalk(position);
   },
 });
-/** Tells Python where walking has put the phone, so the headset shows it there. */
+/** Tells Python where walking has put the phone and which way it faces, so the headset shows it. */
 function publishWalk(position: { x: number; y: number; z: number } | null): void {
   client.sendPose(position ?
-    { tracking_status: 'tracked', reference_space: 'room', position } :
-    { tracking_status: 'inactive', reference_space: null, position: null });
+    { tracking_status: 'tracked', reference_space: 'room', position, heading: heading() } :
+    { tracking_status: 'inactive', reference_space: null, position: null, heading: null });
+}
+/**
+ * Turning and walking run whenever the room view is open. Call from a tap: iPhone asks for motion
+ * permission and only allows it during the tap that asks.
+ */
+function startMotion(): void {
+  const turning = look.active ? Promise.resolve() : look.start();
+  const walking = walker.active ? Promise.resolve() : walker.start();
+  void Promise.all([turning, walking]).then(() => {
+    element('view-status').textContent = 'Tap the box to select it';
+    publishWalk(walker.target());
+  }).catch(error => {
+    look.stop();
+    walker.stop();
+    showRoomViewError(error, 'Motion access could not start.');
+  }).finally(controls);
 }
 const depthButton = element<HTMLButtonElement>('depth-toggle');
 /** The measured height to show the room from, or null for the default, and the height shown now. */
@@ -98,12 +117,8 @@ function controls(): void {
   endButton.disabled = !xrActive;
   element('vr-controls').hidden = role !== 'vr_solver';
   element('phone-controls').hidden = role !== 'mobile_master';
-  lookButton.textContent = look.active ? 'Stop turning' : 'Turn with phone';
-  walkButton.textContent = walker.active ? 'Stop walking' : 'Walk with steps';
-  walkButton.disabled = !connected;
-  for (const id of ['walk-reset', 'walk-length', 'walk-sensitivity']) element(id).hidden = !walker.active;
+  for (const id of ['walk-reset', 'walk-length']) element(id).hidden = !walker.active;
   element('walk-length').textContent = `Step ${walker.stepLength.toFixed(1)} m`;
-  element('walk-sensitivity').textContent = `Sensitivity: ${walker.sensitivity}`;
   depthButton.textContent = depth.getPhase() !== 'off' ? 'Cancel measuring' :
     measuredHeight === null ? 'Measure height' : 'Measure again';
   depthButton.disabled = !connected;
@@ -112,10 +127,6 @@ function controls(): void {
   gazeButton.disabled = !connected;
   const pointing = gaze.getPhase() === 'tracking';
   for (const id of ['gaze-mode', 'gaze-calibrate', 'gaze-test']) element(id).hidden = !pointing;
-  const mine = ownHold();
-  deselectButton.hidden = selected === null || mine !== null;
-  holdButton.hidden = selected === null && mine === null;
-  holdButton.dataset.held = String(holding);
   gazeModeButton.textContent = gaze.getMode() === 'eyes' ? 'Switch to head' : 'Switch to eyes';
 }
 
@@ -129,6 +140,7 @@ function setRoomView(open: boolean): void {
     if (selected !== null) requestSelection(null);
     gaze.stop();
     depth.stop();
+    look.stop();
     if (walker.active) {
       walker.stop();
       if (connected) publishWalk(null);
@@ -172,13 +184,13 @@ function applyState(next: SessionState): void {
     'No object is being moved';
   const mine = ownHold();
   if (mine && !holding) {
-    // The hold was accepted after the button was let go, so end it at once.
+    // The pick-up was accepted after the finger lifted, so drop it at once.
     endHold();
   } else if (mine && !before) {
-    element('view-status').textContent = `Moving ${entityLabel(mine.entity)} · walk to carry it`;
+    element('view-status').textContent = `Carrying ${entityLabel(mine.entity)} · let go to drop it`;
   } else if (!mine && before) {
     releasing = null;
-    element('view-status').textContent = `Placed ${entityLabel(before.entity)}`;
+    element('view-status').textContent = `Dropped ${entityLabel(before.entity)}`;
   }
   controls();
   view?.apply(next);
@@ -228,7 +240,7 @@ const client = new SessionClient({
         view.clearRoom();
         view.apply({
           revision: 0, mobile_connected: false, vr_connected: false,
-          marker: { position: null, tracking_status: 'inactive', reference_space: null },
+          marker: { position: null, tracking_status: 'inactive', reference_space: null, heading: null },
           alignment: {
             mobile_master: { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } },
             vr_solver: { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } },
@@ -250,7 +262,9 @@ const client = new SessionClient({
   selection: result => {
     selected = result.id;
     view?.select(result.id);
-    const now = result.id ? `Selected ${entityLabel(result.id)}` : 'Nothing selected';
+    const label = result.id ? entityLabel(result.id) : '';
+    const now = result.id ? `${label.charAt(0).toUpperCase()}${label.slice(1)} selected · press and hold it to pick it up` :
+      'Tap the box to select it';
     // A refusal keeps the current selection, so say what is still selected.
     element('view-status').textContent = result.rejected ?
       `${result.rejected.message}${result.id ? ` ${entityLabel(result.id)} is still selected.` : ''}` : now;
@@ -278,6 +292,56 @@ function requestSelection(id: string | null): void {
   client.sendSelection(version, id);
 }
 
+/** Whether an entity can be picked up: only movable, selectable ones; furniture and floor cannot. */
+function pickable(id: string | null): id is string {
+  const entity = id === null ? undefined : state?.room.entities.find(candidate => candidate.id === id);
+  return entity !== undefined && entity.kind === 'movable' && entity.selectable;
+}
+
+/**
+ * A tap selects the object under the finger, or deselects on anything else. A press held on the
+ * selected object picks it up, and lifting the finger drops it.
+ */
+function handleRoomTouches(sceneView: DiagnosticScene): void {
+  const canvas = sceneView.renderer.domElement;
+  let press: { pointer: number; target: string | null; timer: number } | null = null;
+  canvas.addEventListener('pointerdown', event => {
+    if (!roomViewOpen || role !== 'mobile_master' || press) return;
+    const target = sceneView.entityAt({ x: event.offsetX / canvas.clientWidth, y: event.offsetY / canvas.clientHeight });
+    canvas.setPointerCapture(event.pointerId);
+    press = { pointer: event.pointerId, target, timer: 0 };
+    if (target !== null && target === selected) {
+      press.timer = window.setTimeout(() => {
+        const version = state?.room.room_version;
+        if (!press || selected === null || version === null || version === undefined) return;
+        holding = true;
+        client.sendAcquire(version, selected);
+      }, PICK_UP_MS);
+    }
+  });
+  const finish = (event: PointerEvent, tapped: boolean) => {
+    if (!press || event.pointerId !== press.pointer) return;
+    const { target, timer } = press;
+    press = null;
+    clearTimeout(timer);
+    if (holding) {
+      holding = false;
+      endHold();
+    } else if (tapped && target === selected && target !== null) {
+      element('view-status').textContent = `Press and hold ${entityLabel(target)} to pick it up`;
+    } else if (tapped && pickable(target)) {
+      requestSelection(target);
+    } else if (tapped && selected !== null) {
+      requestSelection(null);
+    } else if (tapped) {
+      element('view-status').textContent = 'Tap the box to select it';
+    }
+  };
+  canvas.addEventListener('pointerup', event => finish(event, true));
+  canvas.addEventListener('pointercancel', event => finish(event, false));
+  canvas.addEventListener('lostpointercapture', event => finish(event, false));
+}
+
 try {
   view = new DiagnosticScene(element('scene'));
   xr = new XRDiagnostic(view, overlay, (report, active) => {
@@ -291,19 +355,14 @@ try {
     controls();
   }, () => confirmAlignment());
   const sceneView = view;
-  // A tap on the room view selects the object drawn there.
-  sceneView.renderer.domElement.addEventListener('click', event => {
-    if (!roomViewOpen || role !== 'mobile_master') return;
-    const canvas = sceneView.renderer.domElement;
-    const id = sceneView.entityAt({ x: event.offsetX / canvas.clientWidth, y: event.offsetY / canvas.clientHeight });
-    if (id === null) {
-      element('view-status').textContent = 'Nothing to select there';
-      return;
-    }
-    requestSelection(id);
-  });
-  sceneView.renderer.setAnimationLoop((_time, frame) => {
+  handleRoomTouches(sceneView);
+  sceneView.renderer.setAnimationLoop((time, frame) => {
     xr?.frame(frame);
+    if (roomViewOpen && ownHold() && time - lastCarryPose >= CARRY_POSE_MS) {
+      // A carried object follows the phone as it glides between steps and turns.
+      lastCarryPose = time;
+      publishWalk(walker.position());
+    }
     if (roomViewOpen) {
       // A new height eases in rather than jumping.
       const target = measuredHeight ?? START_EYE.y;
@@ -324,7 +383,11 @@ async function connect(roleToJoin: Role): Promise<void> {
   controls();
   try {
     await client.join(roleToJoin);
-    if (roleToJoin === 'mobile_master') setRoomView(true);
+    if (roleToJoin === 'mobile_master') {
+      setRoomView(true);
+      // Motion may have started before the connection did; tell Python where the phone starts.
+      if (walker.active) publishWalk(walker.target());
+    }
   } catch (error) {
     role = null;
     showError(error instanceof Error ? error.message : 'Unable to connect. Try again.');
@@ -334,7 +397,10 @@ async function connect(roleToJoin: Role): Promise<void> {
   }
 }
 
-phoneButton.addEventListener('click', () => { void connect('mobile_master'); });
+phoneButton.addEventListener('click', () => {
+  startMotion();
+  void connect('mobile_master');
+});
 vrButton.addEventListener('click', () => { void connect('vr_solver'); });
 startButton.addEventListener('click', () => {
   if (!role || !xr) return;
@@ -359,17 +425,6 @@ function showRoomViewError(error: unknown, fallback: string): void {
   showError(message);
   element('view-status').textContent = message;
 }
-lookButton.addEventListener('click', () => {
-  if (look.active) {
-    look.stop();
-    element('view-status').textContent = 'Turning off';
-    controls();
-    return;
-  }
-  void look.start().then(() => {
-    element('view-status').textContent = 'Turning with the phone';
-  }).catch(error => showRoomViewError(error, 'Motion access could not start.')).finally(controls);
-});
 gazeButton.addEventListener('click', () => {
   if (gaze.getPhase() !== 'off') {
     gaze.stop();
@@ -384,25 +439,6 @@ gazeModeButton.addEventListener('click', () => {
   gaze.setMode(gaze.getMode() === 'eyes' ? 'head' : 'eyes');
   controls();
 });
-walkButton.addEventListener('click', () => {
-  if (walker.active) {
-    walker.stop();
-    publishWalk(null);
-    element('view-status').textContent = 'Walking off';
-    controls();
-    return;
-  }
-  element('error').hidden = true;
-  // Both permission requests start inside the button press; iPhone refuses them after it.
-  const turning = look.active ? Promise.resolve() : look.start();
-  void Promise.all([walker.start(), turning]).then(() => {
-    element('view-status').textContent = 'Walking · 0 steps';
-    publishWalk(walker.target());
-  }).catch(error => {
-    walker.stop();
-    showRoomViewError(error, 'Motion access could not start.');
-  }).finally(controls);
-});
 element('walk-reset').addEventListener('click', () => {
   // Going back to the start must not carry a held object back with it.
   endHold();
@@ -411,11 +447,6 @@ element('walk-reset').addEventListener('click', () => {
 });
 element('walk-length').addEventListener('click', () => {
   walker.stepLength = STEP_LENGTHS[(STEP_LENGTHS.indexOf(walker.stepLength as typeof STEP_LENGTHS[number]) + 1) % STEP_LENGTHS.length];
-  controls();
-});
-element('walk-sensitivity').addEventListener('click', () => {
-  const order: Sensitivity[] = ['normal', 'high', 'low'];
-  walker.setSensitivity(order[(order.indexOf(walker.sensitivity) + 1) % order.length]);
   controls();
 });
 depthButton.addEventListener('click', () => {
@@ -440,23 +471,10 @@ element('depth-default').addEventListener('click', () => {
 element('gaze-calibrate').addEventListener('click', () => gaze.calibrate());
 element('gaze-test').addEventListener('click', () => gaze.test());
 element('gaze-cancel').addEventListener('click', () => gaze.cancel());
-deselectButton.addEventListener('click', () => requestSelection(null));
-holdButton.addEventListener('pointerdown', event => {
-  holdButton.setPointerCapture(event.pointerId);
-  holding = true;
-  const version = state?.room.room_version;
-  if (selected !== null && version !== null && version !== undefined) client.sendAcquire(version, selected);
-  controls();
+element('open-room-view').addEventListener('click', () => {
+  startMotion();
+  setRoomView(true);
 });
-for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) {
-  holdButton.addEventListener(name, () => {
-    if (!holding) return;
-    holding = false;
-    endHold();
-    controls();
-  });
-}
-element('open-room-view').addEventListener('click', () => setRoomView(true));
 element('close-room-view').addEventListener('click', () => setRoomView(false));
 const confirmAlignment = () => {
   if (!connected) return;

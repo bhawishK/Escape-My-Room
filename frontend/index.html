@@ -36,7 +36,7 @@
           </div>
           <div id="phone-controls" hidden>
             <button id="open-room-view">Open room view</button>
-            <p class="hint">The room fills the screen. Tap the box to select it; it is outlined in pink and only you see the selection. With <strong>Walk with steps</strong> on, keep <strong>Hold to move</strong> pressed and walk: the box comes with you, step by step, and stays where you let go. <strong>Turn with phone</strong> looks around as you turn. <strong>Walk with steps</strong> moves the view a step at a time as you walk, roughly; it counts steps rather than measuring where you are. <strong>Gaze cursor</strong> points at objects with your eyes or head through the front camera, after a short calibration. <strong>Measure height</strong> sets the view to how high the phone is, measured once from the back camera with an AI depth model; it downloads 76 MB the first time.</p>
+            <p class="hint">The room fills the screen and follows you: it turns as the phone turns and moves a step at a time as you walk, roughly, by counting steps. Tap the box to select it; it is outlined in pink and only you see the selection. Press and hold the box to pick it up: it comes in front of you while you walk and turn, and drops to the floor where you let go. Tap anywhere else to deselect. <strong>Gaze cursor</strong> points at objects with your eyes or head through the front camera, after a short calibration. <strong>Measure height</strong> sets the view to how high the phone is, measured once from the back camera with an AI depth model; it downloads 76 MB the first time.</p>
           </div>
           <p class="hint">iPhone 16 Chrome shows the room full screen and turns it with the phone. Meta Quest 3 uses the immersive VR view.</p>
           <button id="disconnect" class="secondary" disabled>Disconnect</button>
@@ -94,16 +94,11 @@
     <div id="room-view-hud" hidden>
       <p id="view-status" data-testid="view-status" class="hud-status" role="status">Turning off</p>
       <div class="hud-buttons">
-        <button id="look-around">Turn with phone</button>
-        <button id="walk-toggle">Walk with steps</button>
         <button id="walk-reset" class="secondary" hidden>Back to start</button>
         <button id="walk-length" class="secondary" hidden>Step 0.6 m</button>
-        <button id="walk-sensitivity" class="secondary" hidden>Sensitivity: normal</button>
         <button id="gaze-toggle">Gaze cursor</button>
         <button id="depth-toggle">Measure height</button>
         <button id="depth-default" class="secondary" hidden>Default height</button>
-        <button id="hold-move" hidden>Hold to move</button>
-        <button id="deselect" class="secondary" hidden>Deselect</button>
         <button id="gaze-mode" class="secondary" hidden>Switch to head</button>
         <button id="gaze-calibrate" class="secondary" hidden>Calibrate</button>
         <button id="gaze-test" class="secondary" hidden>Test accuracy</button>

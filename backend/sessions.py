@@ -1,6 +1,7 @@
 """One shared room for the connected phone and VR prototype."""
 
 import asyncio
+import math
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -10,16 +11,20 @@ from backend.alignment import Alignment
 from backend.prepared_room import FRAME, QUATERNION_ORDER, UNITS, SceneEntity
 from backend.protocol import MarkerState, PoseMessage, Position, Role
 
+# A carried object is held this far in front of the phone, its bottom this far below it.
+CARRY_DISTANCE = 0.8
+CARRY_BELOW = 0.6
+
 
 @dataclass
 class Manipulation:
-    """One hold: the object follows the owner's phone from where both were when it began."""
+    """One hold: the object is carried in front of the owner's phone until it is dropped."""
 
     id: int
     entity: str
     owner: Role
-    phone_start: Position
-    entity_start: Position
+    # The height the object rested at when picked up; dropping returns it there.
+    rest_y: float
     # The pose sequence of the latest movement applied, or None before the first.
     sequence: int | None = None
 
@@ -41,8 +46,6 @@ class PrototypeRoom:
     # The one hold in progress, shared with both devices; its id counts up across holds.
     manipulation: Manipulation | None = None
     manipulation_count: int = 0
-    # How far the object moves for each meter the phone moves while held.
-    gain: float = 1.0
     alignment: dict[Role, Alignment] = field(
         default_factory=lambda: {
             "mobile_master": Alignment(),
@@ -64,7 +67,6 @@ class PrototypeRoom:
                 "id": self.manipulation.id,
                 "entity": self.manipulation.entity,
                 "owner": self.manipulation.owner,
-                "gain": self.gain,
                 "sequence": self.manipulation.sequence,
             },
             "room": {
@@ -131,7 +133,7 @@ class PrototypeRoom:
     def acquire(
         self, room_version: int, entity_id: str
     ) -> Literal["ok", "unavailable", "mismatch", "not_selected", "not_tracked", "already_held"]:
-        """Start the phone's hold on its selected object, from where phone and object are now."""
+        """Pick up the phone's selected object and bring it in front of the phone."""
         if self.load_error is not None or self.room_version is None:
             return "unavailable"
         if room_version != self.room_version:
@@ -142,23 +144,22 @@ class PrototypeRoom:
             return "not_tracked"
         if self.manipulation is not None:
             return "already_held"
-        entity = next(entity for entity in self.entities if entity.id == entity_id)
         self.manipulation_count += 1
         self.manipulation = Manipulation(
             id=self.manipulation_count,
             entity=entity_id,
             owner="mobile_master",
-            phone_start=self.marker.position,
-            entity_start=entity.position,
+            rest_y=self.entity(entity_id).position.y,
         )
+        self.carry()
         self.revision += 1
         return "ok"
 
     def release(self, manipulation_id: int) -> Literal["ok", "stale"]:
-        """End the current hold; the object stays where the hold left it."""
+        """End the current hold; the object drops straight down to where it rested."""
         if self.manipulation is None or self.manipulation.id != manipulation_id:
             return "stale"
-        self.manipulation = None
+        self.drop()
         self.revision += 1
         return "ok"
 
@@ -177,28 +178,44 @@ class PrototypeRoom:
             tracking_status=pose.tracking_status,
             reference_space=pose.reference_space,
             position=pose.position,
+            heading=pose.heading,
         )
         held = self.manipulation
         if held is not None and pose.position is None:
-            # Without a phone position the hold has nothing to follow, so it ends in place.
-            self.manipulation = None
-        elif held is not None and pose.position is not None:
-            phone, start, origin = pose.position, held.entity_start, held.phone_start
-
-            def follow(entity_start: float, phone_now: float, phone_start: float) -> float:
-                return max(-100, min(100, entity_start + self.gain * (phone_now - phone_start)))
-
-            moved = Position(
-                x=follow(start.x, phone.x, origin.x),
-                # The object keeps its height: only movement across the floor carries it.
-                y=start.y,
-                z=follow(start.z, phone.z, origin.z),
-            )
-            for entity in self.entities:
-                if entity.id == held.entity:
-                    entity.position = moved
+            # Without a phone position there is nothing to carry it in front of.
+            self.drop()
+        elif held is not None:
+            self.carry()
             held.sequence = pose.sequence
         self.revision += 1
+
+    def entity(self, entity_id: str) -> SceneEntity:
+        return next(entity for entity in self.entities if entity.id == entity_id)
+
+    def carry(self) -> None:
+        """Place the held object in front of the phone, where the phone faces."""
+        held, phone = self.manipulation, self.marker.position
+        if held is None or phone is None:
+            return
+        heading = self.marker.heading or 0.0
+
+        def bounded(value: float) -> float:
+            return max(-100, min(100, value))
+
+        self.entity(held.entity).position = Position(
+            x=bounded(phone.x - math.sin(heading) * CARRY_DISTANCE),
+            y=bounded(phone.y - CARRY_BELOW),
+            z=bounded(phone.z - math.cos(heading) * CARRY_DISTANCE),
+        )
+
+    def drop(self) -> None:
+        """End the hold, letting the object fall straight down to the height it rested at."""
+        held = self.manipulation
+        if held is None:
+            return
+        entity = self.entity(held.entity)
+        entity.position = Position(x=entity.position.x, y=held.rest_y, z=entity.position.z)
+        self.manipulation = None
 
     def disconnect(self, role: Role) -> None:
         self.sockets.pop(role, None)
@@ -207,5 +224,5 @@ class PrototypeRoom:
         if role == "mobile_master":
             self.marker = MarkerState(tracking_status="lost")
             self.selection = None
-            self.manipulation = None
+            self.drop()
         self.revision += 1
