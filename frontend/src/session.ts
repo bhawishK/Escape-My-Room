@@ -1,9 +1,10 @@
 import type { CalibrationInput } from './alignment';
-import type { PoseInput, Role, ServerEvent, SessionState } from './protocol';
+import type { PoseInput, Role, SelectionResult, ServerEvent, SessionState } from './protocol';
 
 interface SessionEvents {
   state: (state: SessionState) => void;
   connection: (connected: boolean) => void;
+  selection: (result: SelectionResult) => void;
   error: (message: string) => void;
 }
 
@@ -40,6 +41,8 @@ export class SessionClient {
               resolve();
             } else if (message.type === 'state') {
               this.events.state(message.state);
+            } else if (message.type === 'selection') {
+              this.events.selection({ id: message.id, rejected: message.rejected });
             } else if (message.type === 'error') {
               this.events.error(message.message);
             }
@@ -78,6 +81,12 @@ export class SessionClient {
   sendCalibration(input: CalibrationInput): void {
     if (this.socket?.readyState !== WebSocket.OPEN) return;
     this.socket.send(JSON.stringify({ type: 'calibrate', ...input }));
+  }
+
+  /** Asks Python to select a room object for this phone, or to deselect with null. */
+  sendSelection(roomVersion: number, id: string | null): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: 'select', room_version: roomVersion, id }));
   }
 
   sendRoomLoaded(roomVersion: number): void {

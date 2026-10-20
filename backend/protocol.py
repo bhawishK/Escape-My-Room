@@ -43,6 +43,14 @@ class EntityTransformMessage(WireModel):
     position: Position
 
 
+class SelectMessage(WireModel):
+    """The phone's private choice of the object it means to manipulate; a null id deselects."""
+
+    type: Literal["select"]
+    room_version: int = Field(ge=1)
+    id: str | None = Field(max_length=64)
+
+
 class PoseMessage(WireModel):
     type: Literal["pose"]
     sequence: int = Field(ge=1)

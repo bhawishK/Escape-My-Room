@@ -38,6 +38,16 @@ export class DiagnosticScene {
   /** Outlines the object the phone's gaze cursor is over. */
   private readonly highlight = new THREE.BoxHelper(new THREE.Object3D(), 0xffd399);
   private highlighted: string | null = null;
+  /** Outlines the object this phone has selected, in a colour apart from the gaze outline. */
+  private readonly selection = new THREE.BoxHelper(new THREE.Object3D(), 0xff5fa2);
+  /** A halo around the selected object: only its far faces are drawn, so the object keeps its colour. */
+  private readonly selectionShell = new THREE.Mesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshBasicMaterial({
+      color: 0xff5fa2, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.BackSide,
+    }),
+  );
+  private selected: string | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -76,6 +86,9 @@ export class DiagnosticScene {
     this.roomAnchor.add(this.statusLabel);
     this.highlight.visible = false;
     this.scene.add(this.highlight);
+    this.selection.visible = false;
+    this.selectionShell.visible = false;
+    this.scene.add(this.selection, this.selectionShell);
     container.append(this.renderer.domElement);
     container.dataset.view = 'overview';
     const resize = () => {
@@ -115,19 +128,24 @@ export class DiagnosticScene {
     }
   }
 
+  /** The room entity drawn at a point on the view, 0–1 across and down, or null where there is none. */
+  entityAt(point: { x: number; y: number }): string | null {
+    if (!this.roomGroup) return null;
+    this.raycaster.setFromCamera(new THREE.Vector2(point.x * 2 - 1, 1 - point.y * 2), this.camera);
+    // The nearest surface wins, so furniture in front hides what is behind it.
+    const hit = this.raycaster.intersectObject(this.roomGroup, true)[0];
+    for (let object: THREE.Object3D | null = hit?.object ?? null; object; object = object.parent) {
+      for (const [id, root] of this.entityRoots) if (root === object) return id;
+    }
+    return null;
+  }
+
   /**
-   * The room entity at a point on the view, 0–1 across and down, outlined until another is
-   * pointed at; null, and no outline, where there is none or for a null point.
+   * The room entity at a point on the view, outlined until another is pointed at; null, and no
+   * outline, where there is none or for a null point.
    */
   pointAt(point: { x: number; y: number } | null): string | null {
-    let found: string | null = null;
-    if (point && this.roomGroup) {
-      this.raycaster.setFromCamera(new THREE.Vector2(point.x * 2 - 1, 1 - point.y * 2), this.camera);
-      const hit = this.raycaster.intersectObject(this.roomGroup, true)[0];
-      for (let object: THREE.Object3D | null = hit?.object ?? null; object && !found; object = object.parent) {
-        for (const [id, root] of this.entityRoots) if (root === object) found = id;
-      }
-    }
+    const found = point ? this.entityAt(point) : null;
     if (found !== this.highlighted) {
       this.highlighted = found;
       const root = found ? this.entityRoots.get(found) : undefined;
@@ -135,6 +153,25 @@ export class DiagnosticScene {
       this.highlight.visible = root !== undefined;
     }
     return found;
+  }
+
+  /** Outlines the entity Python accepted as this phone's selection, or none for null. */
+  select(id: string | null): void {
+    this.selected = id;
+    this.outlineSelection();
+  }
+
+  private outlineSelection(): void {
+    const root = this.selected ? this.entityRoots.get(this.selected) : undefined;
+    if (root) {
+      this.selection.setFromObject(root);
+      const bounds = new THREE.Box3().setFromObject(root);
+      bounds.getCenter(this.selectionShell.position);
+      bounds.getSize(this.selectionShell.scale).multiplyScalar(1.2);
+    }
+    this.selection.visible = root !== undefined;
+    this.selectionShell.visible = root !== undefined;
+    this.container.dataset.selected = root ? this.selected! : '';
   }
 
   async syncRoom(state: SessionState): Promise<{ version: number; acknowledge: boolean } | null> {
@@ -170,6 +207,7 @@ export class DiagnosticScene {
       return { version, acknowledge: true };
     }
     applyPlacement(this.entityRoots, room.entities);
+    this.outlineSelection();
     return { version: room.room_version, acknowledge: false };
   }
 
@@ -181,6 +219,7 @@ export class DiagnosticScene {
     this.roomGroup = null;
     this.entityRoots = new Map();
     this.pointAt(null);
+    this.select(null);
     this.grid.visible = true;
   }
 

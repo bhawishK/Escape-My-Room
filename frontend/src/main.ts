@@ -29,6 +29,9 @@ let state: SessionState | null = null;
 let view: DiagnosticScene | null = null;
 let xr: XRDiagnostic | null = null;
 let roomViewOpen = false;
+/** The room object Python accepted as this phone's selection. It is private to the phone. */
+let selected: string | null = null;
+const deselectButton = element<HTMLButtonElement>('deselect');
 const look = new PhoneLook();
 const walkButton = element<HTMLButtonElement>('walk-toggle');
 const walker = new StepWalker(START_EYE, () => {
@@ -68,9 +71,13 @@ const gaze = new GazeCursor({
   phase: () => controls(),
   hover: point => {
     const id = view?.pointAt(point) ?? null;
-    return id && (state?.room.entities.find(entity => entity.id === id)?.label ?? id);
+    return id && entityLabel(id);
   },
 });
+
+function entityLabel(id: string): string {
+  return state?.room.entities.find(entity => entity.id === id)?.label ?? id;
+}
 
 function showError(message: string): void {
   element('error').textContent = message;
@@ -100,6 +107,7 @@ function controls(): void {
   gazeButton.disabled = !connected;
   const pointing = gaze.getPhase() === 'tracking';
   for (const id of ['gaze-mode', 'gaze-calibrate', 'gaze-test']) element(id).hidden = !pointing;
+  deselectButton.hidden = selected === null;
   gazeModeButton.textContent = gaze.getMode() === 'eyes' ? 'Switch to head' : 'Switch to eyes';
 }
 
@@ -110,6 +118,7 @@ function setRoomView(open: boolean): void {
   element('scene').classList.toggle('room-view', open);
   document.documentElement.classList.toggle('room-view-open', open);
   if (!open) {
+    if (selected !== null) requestSelection(null);
     gaze.stop();
     depth.stop();
     if (walker.active) {
@@ -201,12 +210,29 @@ const client = new SessionClient({
       }
       void xr?.end().catch(error => showError(xrError(error)));
       look.stop();
+      selected = null;
       setRoomView(false);
     }
     controls();
   },
+  selection: result => {
+    selected = result.id;
+    view?.select(result.id);
+    const now = result.id ? `Selected ${entityLabel(result.id)}` : 'Nothing selected';
+    // A refusal keeps the current selection, so say what is still selected.
+    element('view-status').textContent = result.rejected ?
+      `${result.rejected.message}${result.id ? ` ${entityLabel(result.id)} is still selected.` : ''}` : now;
+    controls();
+  },
   error: showError,
 });
+
+/** Asks Python to select a room object, or to deselect with null; Python decides what is eligible. */
+function requestSelection(id: string | null): void {
+  const version = state?.room.room_version;
+  if (!connected || version === null || version === undefined) return;
+  client.sendSelection(version, id);
+}
 
 try {
   view = new DiagnosticScene(element('scene'));
@@ -221,6 +247,17 @@ try {
     controls();
   }, () => confirmAlignment());
   const sceneView = view;
+  // A tap on the room view selects the object drawn there.
+  sceneView.renderer.domElement.addEventListener('click', event => {
+    if (!roomViewOpen || role !== 'mobile_master') return;
+    const canvas = sceneView.renderer.domElement;
+    const id = sceneView.entityAt({ x: event.offsetX / canvas.clientWidth, y: event.offsetY / canvas.clientHeight });
+    if (id === null) {
+      element('view-status').textContent = 'Nothing to select there';
+      return;
+    }
+    requestSelection(id);
+  });
   sceneView.renderer.setAnimationLoop((_time, frame) => {
     xr?.frame(frame);
     if (roomViewOpen) {
@@ -357,6 +394,7 @@ element('depth-default').addEventListener('click', () => {
 element('gaze-calibrate').addEventListener('click', () => gaze.calibrate());
 element('gaze-test').addEventListener('click', () => gaze.test());
 element('gaze-cancel').addEventListener('click', () => gaze.cancel());
+deselectButton.addEventListener('click', () => requestSelection(null));
 element('open-room-view').addEventListener('click', () => setRoomView(true));
 element('close-room-view').addEventListener('click', () => setRoomView(false));
 const confirmAlignment = () => {

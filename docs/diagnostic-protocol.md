@@ -1,6 +1,6 @@
 # Prototype connection and pose contract
 
-Python owns one shared room in one process. There are no session IDs, participant IDs, join grants, tokens, accounts, or simulator inputs. Room alignment, selection, object ownership, and manipulation remain later slices.
+Python owns one shared room in one process. There are no session IDs, participant IDs, join grants, tokens, accounts, or simulator inputs. Object ownership and manipulation remain later slices.
 
 ## Connect a device
 
@@ -60,6 +60,26 @@ Sequences strictly increase within each socket, starting at 1. Coordinates must 
 The phone page sends no poses at present, so the marker stays `inactive`; see [phone tracking](phone-tracking.md). The contract is kept for whichever position tracking is chosen.
 
 Malformed JSON, binary frames, schema violations, solver publications, and repeated sequences produce `{ "type": "error", "code": "...", "message": "..." }` without changing the marker. Codes are `invalid_message`, `role_forbidden`, and `stale_sequence`. Text messages are limited to 16 KiB; the documented server invocation enforces the same transport limit, which may close oversized frames. These are correctness checks, not sensor attestation.
+
+## Select an object
+
+The phone selects the object it means to manipulate. Only the phone may send:
+
+```json
+{ "type": "select", "room_version": 1, "id": "box" }
+```
+
+`"id": null` deselects. Python checks the room version, that the entity exists, and that it is movable and `selectable`. It replies to the phone alone:
+
+```json
+{ "type": "selection", "id": "box", "rejected": null }
+```
+
+`id` is the phone's selection after the request. A refused request leaves the current selection in place and says why in `rejected`, as `{ "code": "...", "message": "..." }`. Codes are `entity_not_selectable` (static furniture or the floor), `unknown_entity`, `room_version_mismatch`, and `room_unavailable`; the socket stays open for all of them. The headset's `select` gets an `error` event with `role_forbidden`.
+
+Selection is private intent. It is not in the shared state, does not change the revision, is never sent to the headset, and does not move the object or give anyone control of it. A new phone connection, or the phone disconnecting, clears it.
+
+On the phone's room view a tap selects the object drawn under the finger: the view casts a ray from the camera through the tap, and the nearest surface hit names the entity, so furniture in front hides what is behind it. Tapping empty space sends nothing and reads **Nothing to select there**. Python decides eligibility, so tapping the desk is refused with its message. An accepted selection is outlined with a pink halo, the status line reads **Selected box**, and **Deselect** appears. Closing the room view deselects. Tested on desktop through the WebSocket seam (`tests/test_selection.py`); not yet tried on the iPhone.
 
 ## Prepared room
 

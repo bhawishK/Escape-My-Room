@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi import (
     FastAPI,
@@ -37,9 +37,29 @@ from backend.protocol import (
     PoseMessage,
     Role,
     RoomLoadedMessage,
+    SelectMessage,
     WireModel,
 )
 from backend.sessions import PrototypeRoom
+
+type Incoming = (
+    PoseMessage | RoomLoadedMessage | EntityTransformMessage | CalibrateMessage | SelectMessage
+)
+# The message model for each incoming `type`.
+INCOMING: dict[str, type[Incoming]] = {
+    "pose": PoseMessage,
+    "room_loaded": RoomLoadedMessage,
+    "entity_transform": EntityTransformMessage,
+    "calibrate": CalibrateMessage,
+    "select": SelectMessage,
+}
+
+# Why a selection was refused, as the phone shows it.
+SELECTION_REFUSALS = {
+    "mismatch": ("room_version_mismatch", "Room version does not match. Reload and connect again."),
+    "unknown": ("unknown_entity", "That room object does not exist."),
+    "not_selectable": ("entity_not_selectable", "That object is fixed and cannot be selected."),
+}
 
 
 class OverviewChoice(WireModel):
@@ -152,6 +172,7 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                 room.alignment[role] = Alignment()
                 if role == "mobile_master":
                     room.marker = MarkerState()
+                    room.selection = None
                 if previous is not None:
                     try:
                         await asyncio.wait_for(
@@ -179,23 +200,13 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                 if not isinstance(payload, dict):
                     await reject("invalid_message", "Send a valid XR pose using the contract.")
                     continue
+                message_type = cast(dict[str, Any], payload).get("type")
+                model = INCOMING.get(message_type) if isinstance(message_type, str) else None
+                if model is None:
+                    await reject("invalid_message", "Send a valid XR pose using the contract.")
+                    continue
                 try:
-                    if payload.get("type") == "pose":
-                        incoming: (
-                            PoseMessage
-                            | RoomLoadedMessage
-                            | EntityTransformMessage
-                            | CalibrateMessage
-                        ) = PoseMessage.model_validate(payload)
-                    elif payload.get("type") == "room_loaded":
-                        incoming = RoomLoadedMessage.model_validate(payload)
-                    elif payload.get("type") == "entity_transform":
-                        incoming = EntityTransformMessage.model_validate(payload)
-                    elif payload.get("type") == "calibrate":
-                        incoming = CalibrateMessage.model_validate(payload)
-                    else:
-                        await reject("invalid_message", "Send a valid XR pose using the contract.")
-                        continue
+                    incoming = model.model_validate(payload)
                 except ValidationError:
                     await reject("invalid_message", "Send a valid XR pose using the contract.")
                     continue
@@ -239,6 +250,24 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                             )
                             continue
                         await room.broadcast()
+                    elif isinstance(incoming, SelectMessage):
+                        if role != "mobile_master":
+                            await reject("role_forbidden", "Only the phone selects objects.")
+                            continue
+                        result = room.select(incoming.room_version, incoming.id)
+                        rejected = None
+                        if result == "unavailable":
+                            rejected = {
+                                "code": "room_unavailable",
+                                "message": room.load_error or "Prepared room is unavailable.",
+                            }
+                        elif result != "ok":
+                            code, text = SELECTION_REFUSALS[result]
+                            rejected = {"code": code, "message": text}
+                        # Selection is private intent: only the phone hears the result.
+                        await socket.send_json(
+                            {"type": "selection", "id": room.selection, "rejected": rejected}
+                        )
                     else:
                         result = room.move_entity(incoming.id, incoming.position)
                         if result == "static":

@@ -55,7 +55,14 @@ export interface PoseInput {
   position: Position | null;
 }
 
+/** Python's private answer to the phone's selection request: the selection now, and any refusal. */
+export interface SelectionResult {
+  id: string | null;
+  rejected: { code: string; message: string } | null;
+}
+
 export type ServerEvent =
   | { type: 'welcome'; state: SessionState }
+  | ({ type: 'selection' } & SelectionResult)
   | { type: 'state'; state: SessionState }
   | { type: 'error'; code: string; message: string };
