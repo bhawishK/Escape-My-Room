@@ -2,7 +2,7 @@
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import WebSocket
 
@@ -23,6 +23,8 @@ class PrototypeRoom:
     loaded_versions: dict[Role, int | None] = field(
         default_factory=lambda: {"mobile_master": None, "vr_solver": None}
     )
+    # The phone's private selection; it is never part of the shared snapshot.
+    selection: str | None = None
     alignment: dict[Role, Alignment] = field(
         default_factory=lambda: {
             "mobile_master": Alignment(),
@@ -78,6 +80,23 @@ class PrototypeRoom:
         self.revision += 1
         return "ok"
 
+    def select(
+        self, room_version: int, entity_id: str | None
+    ) -> Literal["ok", "unavailable", "mismatch", "unknown", "not_selectable"]:
+        """Choose the phone's selection; anything but "ok" leaves the current one in place."""
+        if self.load_error is not None or self.room_version is None:
+            return "unavailable"
+        if room_version != self.room_version:
+            return "mismatch"
+        if entity_id is not None:
+            entity = next((entity for entity in self.entities if entity.id == entity_id), None)
+            if entity is None:
+                return "unknown"
+            if entity.kind != "movable" or not entity.selectable:
+                return "not_selectable"
+        self.selection = entity_id
+        return "ok"
+
     async def broadcast(self, exclude: WebSocket | None = None) -> None:
         event = {"type": "state", "state": self.snapshot()}
         for socket in list(self.sockets.values()):
@@ -102,4 +121,5 @@ class PrototypeRoom:
         self.alignment[role] = Alignment()
         if role == "mobile_master":
             self.marker = MarkerState(tracking_status="lost")
+            self.selection = None
         self.revision += 1
