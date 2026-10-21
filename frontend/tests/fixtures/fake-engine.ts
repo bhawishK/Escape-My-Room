@@ -1,0 +1,75 @@
+import type { Page } from '@playwright/test';
+
+/** What the fake 8th Wall engine was asked to do, for a test to check. */
+export interface EngineCalls {
+  configure: Record<string, unknown>[];
+  origins: { origin?: unknown; facing?: unknown }[];
+  modules: string[];
+  runs: number;
+  stops: number;
+  cameraFeed: boolean;
+}
+
+/**
+ * Stands in for the 8th Wall engine binary, following its camera pipeline module contract: modules
+ * are added, `run` starts them, and `frame` delivers one tracking result to every module.
+ */
+function installFakeEngine(): void {
+  type Module = { name: string; onStart?: (args: { canvas: unknown }) => void; onUpdate?: (args: unknown) => void };
+  let modules: Module[] = [];
+  const calls = { configure: [] as unknown[], origins: [] as unknown[], modules: [] as string[], runs: 0, stops: 0, cameraFeed: false };
+  const engine = {
+    addCameraPipelineModule(module: Module) { modules.push(module); calls.modules.push(module.name); },
+    addCameraPipelineModules(added: Module[]) { added.forEach(module => engine.addCameraPipelineModule(module)); },
+    clearCameraPipelineModules() { modules = []; },
+    run({ canvas }: { canvas: unknown }) {
+      calls.runs++;
+      modules.forEach(module => module.onStart?.({ canvas }));
+    },
+    stop() { calls.stops++; },
+    XrController: {
+      configure(options: unknown) { calls.configure.push(options); },
+      updateCameraProjectionMatrix(options: unknown) { calls.origins.push(options); },
+      recenter() {},
+      pipelineModule: () => ({ name: 'reality' }),
+    },
+    XrDevice: { isDeviceBrowserCompatible: () => true },
+    XrConfig: {
+      device: () => ({ MOBILE: 'mobile', MOBILE_AND_HEADSETS: 'mobile-and-headsets', ANY: 'any' }),
+      camera: () => ({ BACK: 'back', FRONT: 'front' }),
+    },
+    GlTextureRenderer: { pipelineModule: () => { calls.cameraFeed = true; return { name: 'gltexturerenderer' }; } },
+  };
+  const target = window as unknown as Record<string, unknown>;
+  target.XR8 = engine;
+  target.fakeEngine = {
+    calls,
+    frame(reality: Record<string, unknown>) {
+      const result = { trackingStatus: 'NORMAL', trackingReason: 'UNSPECIFIED', ...reality };
+      modules.forEach(module => module.onUpdate?.({ processCpuResult: { reality: result } }));
+    },
+  };
+}
+
+/** Replaces the real engine with the fake, and grants motion permission when asked. */
+export async function useFakeEngine(page: Page): Promise<void> {
+  // The page loads the real engine from the CDN; keep it from replacing the fake.
+  await page.route('**/@8thwall/**', route => route.abort());
+  await page.addInitScript(installFakeEngine);
+  await page.addInitScript(() => {
+    for (const event of [DeviceOrientationEvent, DeviceMotionEvent]) Object.assign(event, { requestPermission: async () => 'granted' });
+  });
+}
+
+/** Delivers one engine frame: a camera position in metres and a rotation as a quaternion. */
+export async function engineFrame(
+  page: Page, position: { x: number; y: number; z: number }, rotation = { x: 0, y: 0, z: 0, w: 1 },
+): Promise<void> {
+  await page.evaluate(([position, rotation]) => {
+    (window as unknown as { fakeEngine: { frame: (reality: unknown) => void } }).fakeEngine.frame({ position, rotation });
+  }, [position, rotation] as const);
+}
+
+export async function engineCalls(page: Page): Promise<EngineCalls> {
+  return page.evaluate(() => (window as unknown as { fakeEngine: { calls: EngineCalls } }).fakeEngine.calls);
+}
