@@ -32,7 +32,7 @@ Two devices can stand in different WebXR coordinates and still name the same roo
 | Phone | `(0.40, 1.50, 0.25)` m | XR `-Z`, the identity view |
 | Headset | `(-0.70, 1.60, 1.10)` m | Turned `0.50` rad about Y from that identity view |
 
-From each pose, the floor point under the head, one meter straight ahead, and the two desk edges are converted with that device's alignment. Both conversions land on:
+From each pose, the floor point under the head (`STANDING_EYE_HEIGHT`, 1.5 m, below it; see [eye height](#reference-space)), one meter straight ahead, and the two desk edges are converted with that device's alignment. Both conversions land on:
 
 | Landmark | Room point |
 | --- | --- |
@@ -45,7 +45,14 @@ The disagreement between the phone conversion and the headset conversion is belo
 
 ## Reference space
 
-Calibration reads the viewer pose in the `local` reference space. The session requires `local`. `local-floor` is optional and is not the space used for the stored yaw and origin. In `local`, Y = 0 is the height of that session's origin, so the known floor point uses the head's X and Z, and the stored origin keeps Y at 0.
+Calibration reads the viewer pose in the `local` reference space. The session requires `local`. `local-floor` is optional and is not the space used for the stored yaw and origin. In `local`, Y = 0 is the height of that session's origin, near where the head started, not the floor. The known floor point therefore uses the head's X and Z only.
+
+**Eye height (Issue 56).** Earlier, the stored origin kept Y at 0. That put the room's floor at the Quest user's eye level, while the phone shows the room from 1.5 m. Now confirming sets the origin's Y to `STANDING_EYE_HEIGHT - head Y` (`frontend/src/alignment.ts`). The head's height at confirmation becomes standing eye height, 1.5 m, with the floor 1.5 m below it.
+- **Same value as the phone:** the phone's starting view, `START_EYE` in `frontend/src/phone-view.ts`, uses the same constant. Both people see the room from the same height.
+- **Head movement still counts:** standing up, crouching and leaning after confirming still move the headset view by the real amount.
+- **Presence:** the headset's presence marker now reports about 1.5 m when standing, like the phone's.
+- **Before confirming:** in VR, the room is drawn 1.5 m below the `local` origin, so the floor is already under the user's feet.
+- **Users of other heights:** everyone sees the room from 1.5 m at confirmation. A taller or shorter user is mapped to that height, not to their own.
 
 ## What makes an alignment stale
 

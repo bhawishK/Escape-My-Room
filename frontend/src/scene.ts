@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { STANDING_EYE_HEIGHT } from './alignment';
 import type { RoomPose } from './phone-view';
 import type { AlignmentState, Position, PresenceState, Role, SessionState } from './protocol';
 import { applyPlacement, placeEntities } from './room';
@@ -370,12 +371,13 @@ export class DiagnosticScene {
       this.roomAnchor.position.set(-cosine * x + sine * z, -y, -sine * x - cosine * z);
     } else {
       this.roomAnchor.rotation.y = 0;
-      this.roomAnchor.position.set(0, 0, 0);
+      // Before alignment the headset's head starts near the `local` origin; stand it on the floor.
+      this.roomAnchor.position.set(0, this.presenting ? -STANDING_EYE_HEIGHT : 0, 0);
     }
     // A tracked pose already places this device's view in the room.
     if (!this.presenting && !this.following && aligned) {
-      this.camera.position.set(0, 1.6, 0);
-      this.camera.lookAt(0, 1.6, -1.2);
+      this.camera.position.set(0, STANDING_EYE_HEIGHT, 0);
+      this.camera.lookAt(0, STANDING_EYE_HEIGHT, -1.2);
     } else if (!this.presenting && !this.following) {
       this.camera.position.set(0, 1.6, 2.4);
       this.camera.lookAt(0, 0.6, -1.2);
