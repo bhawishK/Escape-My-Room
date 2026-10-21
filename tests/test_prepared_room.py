@@ -351,3 +351,14 @@ def test_generated_room_rotation_is_normalized(tmp_path):
     )
     rotation = load_prepared_room(directory).entities[3].rotation
     assert rotation.x**2 + rotation.y**2 + rotation.z**2 + rotation.w**2 == pytest.approx(1.0)
+
+
+def test_large_room_keeps_the_desk_where_alignment_expects_it():
+    room = load_prepared_room(ROOT / "assets" / "large-room")
+    placed = {entity.id: entity for entity in room.entities}
+    assert room.room_version == 2
+    assert (placed["floor"].size.width, placed["floor"].size.depth) == (6.0, 6.0)
+    # The starting view and room alignment use the desk, 1.2 m wide, centred 1.2 m ahead.
+    assert placed["desk"].position.model_dump() == {"x": 0.0, "y": 0.0, "z": -1.2}
+    assert placed["desk"].size.width == 1.2
+    assert [entity.id for entity in room.entities if entity.kind == "movable"] == ["box"]

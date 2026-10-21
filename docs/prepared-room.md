@@ -129,3 +129,43 @@ Assets are served under `/assets/prepared-room/` whichever directory is chosen.
 Automated checks connect both roles to each fixture and check the same version, IDs and entity records. Moving the mug leaves the book, table and floor unchanged, and moving the table is rejected. Every GLB is served, and corrupt, transformed or mismatched assets are refused. In Chromium, both fixtures load on both pages, and a corrupt asset shows a visible failure. The real placement code, run against the served assets, produces world bounds matching each declared size, position and rotation.
 
 These are desktop checks. iPhone and Quest have not loaded the multi-asset room yet.
+
+## Large room
+
+`assets/large-room/` is the same kind of stand-in room, but 6 m square instead of 4 m, for walking with measured phone tracking (Issue 57). It is room version `2`.
+- **Kept from the 4 m room:** the desk, cabinet and box are in the same places, so the phone's starting view and [room alignment](room-alignment.md) still match.
+- **Added:** furniture around the edges gives the larger floor landmarks, with open floor in the middle.
+- **Rebuild:** `python3 assets/large-room/build_room.py`. It reuses the 4 m room's writer.
+
+| ID | Size (W × H × D) | Position (bottom centre) |
+| --- | --- | --- |
+| `floor` | 6.00 × 0.02 × 6.00 m | `(0, -0.02, 0)` |
+| `desk` | 1.20 × 0.75 × 0.60 m | `(0, 0, -1.20)` |
+| `cabinet` | 0.80 × 1.20 × 0.40 m | `(1.40, 0, -1.20)` |
+| `bookshelf` | 1.20 × 1.90 × 0.35 m | `(-2.40, 0, -2.70)` |
+| `sideboard` | 1.60 × 0.50 × 0.45 m | `(0, 0, -2.70)` |
+| `plant` | 0.40 × 1.20 × 0.40 m | `(2.60, 0, -2.60)` |
+| `sofa` | 0.90 × 0.85 × 1.80 m | `(-2.45, 0, 1.20)` |
+| `coffee_table` | 1.00 × 0.45 × 0.60 m | `(-1.30, 0, 1.20)` |
+| `dining_table` | 1.40 × 0.75 × 0.90 m | `(2.10, 0, 1.40)` |
+| `side_table` | 0.50 × 0.55 × 0.50 m | `(2.60, 0, -0.60)` |
+| `box` (movable) | 0.20 × 0.20 × 0.20 m | `(-0.50, 0, -0.40)` |
+
+The 4 m room stays the default; the tests depend on its layout. To serve the large room instead, set `ESCAPE_ROOM_PREPARED_DIR` before starting Python.
+
+Linux or macOS:
+
+```bash
+ESCAPE_ROOM_PREPARED_DIR=assets/large-room .venv/bin/python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --workers 1 --ws-max-size 16384
+```
+
+Windows Command Prompt:
+
+```bat
+set ESCAPE_ROOM_PREPARED_DIR=assets\large-room
+.venv\Scripts\python.exe -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --workers 1 --ws-max-size 16384
+```
+
+Use the same host, port and HTTPS settings as in [the startup guide](diagnostic-startup.md).
+
+With measured tracking the phone moves one-to-one, so the virtual room only helps where the real room has the same free floor. Pick a room, or move the stand-in furniture in the script, to fit the space you walk in. The 6 m floor is larger than many rooms.
