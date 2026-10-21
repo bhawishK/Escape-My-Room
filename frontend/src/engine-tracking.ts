@@ -10,10 +10,16 @@ import type { Position, Rotation, TrackingStatus } from './protocol';
 interface Reality {
   position: Position;
   rotation: Rotation;
+  /** `NORMAL` or `LIMITED`. */
+  trackingStatus?: string;
+  /** Why tracking is limited, such as `INITIALIZING`. */
+  trackingReason?: string;
 }
 
 interface PipelineModule {
   name: string;
+  onCameraStatusChange?: (args: { status: string }) => void;
+  onException?: (error: unknown) => void;
   onStart?: (args: { canvas: HTMLCanvasElement }) => void;
   onUpdate?: (args: { processCpuResult: { reality?: Reality } }) => void;
 }
@@ -29,15 +35,30 @@ export interface Engine {
     updateCameraProjectionMatrix(options: { origin: Position; facing: Rotation }): void;
     pipelineModule(): PipelineModule;
   };
-  XrDevice: { isDeviceBrowserCompatible(options: { allowedDevices: unknown }): boolean };
+  XrDevice: {
+    isDeviceBrowserCompatible(options: { allowedDevices: unknown }): boolean;
+    incompatibleReasons(options: { allowedDevices: unknown }): unknown[];
+  };
   XrConfig: { device(): { MOBILE: unknown } };
 }
 
 /** The engine, when it has loaded and can track on this device and browser; otherwise null. */
 export function trackingEngine(): Engine | null {
+  return engineUnavailable() === null ? (window as unknown as { XR8: Engine }).XR8 : null;
+}
+
+/** Why the engine cannot track here, or null when it can. */
+export function engineUnavailable(): string | null {
   const engine = (window as unknown as { XR8?: Engine }).XR8;
-  if (!engine) return null;
-  return engine.XrDevice.isDeviceBrowserCompatible({ allowedDevices: engine.XrConfig.device().MOBILE }) ? engine : null;
+  if (!engine) return 'engine not loaded';
+  try {
+    const allowedDevices = engine.XrConfig.device().MOBILE;
+    if (engine.XrDevice.isDeviceBrowserCompatible({ allowedDevices })) return null;
+    return `device or browser not supported (reasons ${engine.XrDevice.incompatibleReasons({ allowedDevices }).join(', ')})`;
+  } catch (error) {
+    // A partly loaded engine must not stop the phone from counting steps instead.
+    return `engine check failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
 }
 
 // Its starting direction: level, toward the desk. The phone's real tilt comes from the engine.
@@ -46,6 +67,11 @@ const TOWARD_DESK = { w: 1, x: 0, y: 0, z: 0 };
 interface EngineEvents {
   /** The engine has measured a new pose. */
   moved: (pose: RoomPose) => void;
+  /** Opening the camera: `requesting`, `hasStream`, `hasVideo` or `failed`. */
+  camera: (status: string) => void;
+  /** The engine's own tracking status and reason changed. */
+  tracking: (status: string, reason: string) => void;
+  error: (message: string) => void;
 }
 
 export class EngineTracking implements PhoneTracking {
@@ -53,6 +79,8 @@ export class EngineTracking implements PhoneTracking {
   /** Counts starts and stops, so a start that finishes after a stop does not run the engine. */
   private attempts = 0;
   private latest: RoomPose | null = null;
+  /** The engine's last status and reason, to report each change once. */
+  private engineStatus = '';
 
   constructor(private readonly engine: Engine, private readonly canvas: HTMLCanvasElement, private readonly events: EngineEvents) {}
 
@@ -74,6 +102,7 @@ export class EngineTracking implements PhoneTracking {
     // Stopped, or started again, while the person answered the permission prompt.
     if (attempt !== this.attempts) return;
     this.latest = null;
+    this.engineStatus = '';
     const { engine } = this;
     engine.XrController.configure({ scale: 'absolute' });
     engine.clearCameraPipelineModules();
@@ -81,6 +110,8 @@ export class EngineTracking implements PhoneTracking {
       engine.XrController.pipelineModule(),
       {
         name: 'escape-room-tracking',
+        onCameraStatusChange: ({ status }) => this.events.camera(status),
+        onException: error => this.events.error(error instanceof Error ? error.message : String(error)),
         // In metres, x, z and facing start here once scale is known; the engine replaces this y
         // with the phone's measured height above the floor.
         onStart: () => engine.XrController.updateCameraProjectionMatrix({ origin: START_EYE, facing: TOWARD_DESK }),
@@ -88,6 +119,11 @@ export class EngineTracking implements PhoneTracking {
           const reality = processCpuResult.reality;
           if (!reality) return;
           const { position: p, rotation: r } = reality;
+          const engineStatus = `${reality.trackingStatus ?? 'unknown'} ${reality.trackingReason ?? 'unknown'}`;
+          if (engineStatus !== this.engineStatus) {
+            this.engineStatus = engineStatus;
+            this.events.tracking(reality.trackingStatus ?? 'unknown', reality.trackingReason ?? 'unknown');
+          }
           this.latest = { position: { x: p.x, y: p.y, z: p.z }, orientation: { x: r.x, y: r.y, z: r.z, w: r.w } };
           this.events.moved(this.latest);
         },

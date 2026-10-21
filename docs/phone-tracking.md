@@ -48,6 +48,38 @@ No choice has been made.
 
 The pose message is unchanged: a tracked pose carries `reference_space: "room"` and a position in room meters, and Python publishes it as the phone's marker, which the headset draws as a sphere. See the [connection and pose contract](diagnostic-protocol.md). The phone sends a pose only while walking, as a step-counted estimate rather than a measurement; otherwise its marker stays `inactive`. The headset keeps the manual calibration from [room alignment](room-alignment.md).
 
+## Measured tracking with 8th Wall (Issue 57)
+
+Since Issue 59, a phone where the [8th Wall engine](https://github.com/8thwall/engine) can track uses it instead of turning and counted steps:
+- **Tracking:** the engine uses the back camera and motion sensors together, and gives position in metres and the phone's real height above the floor.
+- **Start:** it starts at the room view's starting place, facing the desk.
+- **Camera image:** never drawn.
+- **Fallback:** elsewhere, or before the engine loads, the phone counts steps as described above, and Back to start and the step length button appear only then.
+- **Version:** the engine is pinned to `@8thwall/engine-binary@1.0.0`.
+- **Credits:** the room view carries the credits its licence requires.
+
+Whether it works in iPhone Chrome is checked in Issue 60.
+
+### Movement log for device checks
+
+The room view records what tracking does. **Send log** posts it to Python, which saves it as `movement-logs/<UTC time>.json` in the data folder (`data/` by default). Nothing has to be copied off the phone. The log keeps the last five minutes:
+- **Poses, ten a second:** time since the room view opened, mode (`measured` or `steps`), status, position in metres, heading and pitch in radians.
+- **Events:**
+  - Which mode was chosen, and if steps, why the engine could not track.
+  - The camera opening: `requesting`, `hasStream`, `hasVideo` or `failed`.
+  - The engine's tracking status and reason changes, such as `LIMITED INITIALIZING` then `NORMAL UNSPECIFIED`.
+  - Engine errors.
+  - The room view opening and closing.
+
+For a check without video, mark the floor with tape 1 m from the start toward the desk and 1 m to the side. Then:
+1. Stand on the start facing the desk, and tap **Connect phone**.
+2. Move the phone gently until it follows you.
+3. Stand on each mark for a few seconds, then come back.
+4. Crouch, turn a quarter left, and point at the plain floor for a few seconds.
+5. Tap **Send log**.
+
+The log shows how far the phone thought each mark was.
+
 ## What is verified
 
 Automated, desktop only:
