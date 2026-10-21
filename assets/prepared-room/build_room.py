@@ -8,6 +8,7 @@ viewer shows the same layout.
 import json
 import struct
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent
 ROOM_VERSION = 1
@@ -104,6 +105,11 @@ def box_vertices(width: float, height: float, depth: float) -> tuple[list[float]
 
 
 def main() -> None:
+    write_room(ROOT, ENTITIES, ROOM_VERSION, "prepared-room")
+
+
+def write_room(root: Path, entities: list[dict[str, Any]], room_version: int, scene: str) -> None:
+    """Write `manifest.json`, `room.gltf` and `room.bin` for these boxes, with one movable box."""
     blob = bytearray()
     accessors: list[dict[str, object]] = []
     buffer_views: list[dict[str, int]] = []
@@ -111,7 +117,7 @@ def main() -> None:
     nodes: list[dict[str, object]] = []
     materials: list[dict[str, object]] = []
 
-    for entity in ENTITIES:
+    for entity in entities:
         size = entity["size"]
         positions, normals, indices = box_vertices(size["width"], size["height"], size["depth"])
         packed = struct.pack(f"<{len(positions)}f", *positions)
@@ -205,7 +211,7 @@ def main() -> None:
     document = {
         "asset": {"version": "2.0", "generator": "escape-my-room prepared room"},
         "scene": 0,
-        "scenes": [{"name": "prepared-room", "nodes": list(range(len(nodes)))}],
+        "scenes": [{"name": scene, "nodes": list(range(len(nodes)))}],
         "nodes": nodes,
         "meshes": meshes,
         "materials": materials,
@@ -214,21 +220,21 @@ def main() -> None:
         "buffers": [{"uri": "room.bin", "byteLength": len(blob)}],
     }
     manifest = {
-        "room_version": ROOM_VERSION,
+        "room_version": room_version,
         "units": "meters",
         "asset": "room.gltf",
-        "entities": ENTITIES,
+        "entities": entities,
     }
-    if [entity["id"] for entity in ENTITIES].count("box") != 1:
+    if [entity["id"] for entity in entities].count("box") != 1:
         raise RuntimeError("the room needs exactly one box")
-    movable = [entity["id"] for entity in ENTITIES if entity["kind"] == "movable"]
+    movable = [entity["id"] for entity in entities if entity["kind"] == "movable"]
     if movable != ["box"]:
         raise RuntimeError("only the box is movable")
 
-    (ROOT / "room.bin").write_bytes(blob)
-    (ROOT / "room.gltf").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
-    (ROOT / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    print(f"wrote {len(ENTITIES)} entities, {len(blob)} bytes")
+    (root / "room.bin").write_bytes(blob)
+    (root / "room.gltf").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    (root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    print(f"wrote {len(entities)} entities, {len(blob)} bytes")
 
 
 if __name__ == "__main__":
