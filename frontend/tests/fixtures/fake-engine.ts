@@ -15,7 +15,12 @@ export interface EngineCalls {
  * are added, `run` starts them, and `frame` delivers one tracking result to every module.
  */
 function installFakeEngine(): void {
-  type Module = { name: string; onStart?: (args: { canvas: unknown }) => void; onUpdate?: (args: unknown) => void };
+  type Module = {
+    name: string;
+    onCameraStatusChange?: (args: { status: string }) => void;
+    onStart?: (args: { canvas: unknown }) => void;
+    onUpdate?: (args: unknown) => void;
+  };
   let modules: Module[] = [];
   const calls = { configure: [] as unknown[], origins: [] as unknown[], modules: [] as string[], runs: 0, stops: 0, cameraFeed: false };
   const engine = {
@@ -24,6 +29,8 @@ function installFakeEngine(): void {
     clearCameraPipelineModules() { modules = []; },
     run({ canvas }: { canvas: unknown }) {
       calls.runs++;
+      // The camera opens, as a person allowing camera access sees it.
+      for (const status of ['requesting', 'hasStream', 'hasVideo']) modules.forEach(module => module.onCameraStatusChange?.({ status }));
       modules.forEach(module => module.onStart?.({ canvas }));
     },
     stop() { calls.stops++; },
@@ -33,7 +40,7 @@ function installFakeEngine(): void {
       recenter() {},
       pipelineModule: () => ({ name: 'reality' }),
     },
-    XrDevice: { isDeviceBrowserCompatible: () => true },
+    XrDevice: { isDeviceBrowserCompatible: () => true, incompatibleReasons: () => [] },
     XrConfig: {
       device: () => ({ MOBILE: 'mobile', MOBILE_AND_HEADSETS: 'mobile-and-headsets', ANY: 'any' }),
       camera: () => ({ BACK: 'back', FRONT: 'front' }),

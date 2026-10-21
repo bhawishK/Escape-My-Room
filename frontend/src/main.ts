@@ -7,7 +7,8 @@ import { GazeCursor } from './gaze-cursor';
 import { RoomPreparation } from './preparation';
 import { floorPoint } from './aim';
 import { MotionStats } from './motion-stats';
-import { EngineTracking, trackingEngine } from './engine-tracking';
+import { EngineTracking, engineUnavailable, trackingEngine } from './engine-tracking';
+import { MovementLog, type TrackingMode } from './movement-log';
 import { StepTracking, type PhoneTracking } from './phone-tracking';
 import { START_EYE, headingOf, pitchOf, type RoomPose } from './phone-view';
 import { NO_PRESENCE, type PresenceInput, type Role, type SessionState } from './protocol';
@@ -63,20 +64,33 @@ let measured: EngineTracking | null = null;
 let measuredUnsent = false;
 /** Where the phone is and faces, from whichever source is tracking it. */
 let tracking: PhoneTracking = steps;
+/** What tracking did on this phone, sent to Python with Send log for device checks. */
+const movementLog = new MovementLog();
+const trackingMode = (): TrackingMode => (tracking === measured ? 'measured' : 'steps');
 /**
  * Tracks with the engine when it can run on this phone, and with steps otherwise. The engine may
  * load after the first tap, so a later tap moves from steps to the engine.
  */
 function chooseTracking(): void {
   const engine = trackingEngine();
-  if (!engine) return;
-  measured ??= new EngineTracking(engine, element<HTMLCanvasElement>('engine-canvas'), {
-    moved: () => { measuredUnsent = true; },
-  });
-  if (tracking === measured) return;
-  steps.stop();
-  tracking = measured;
+  if (engine) {
+    measured ??= new EngineTracking(engine, element<HTMLCanvasElement>('engine-canvas'), {
+      moved: () => { measuredUnsent = true; },
+      camera: status => movementLog.event('camera', status),
+      tracking: (status, reason) => movementLog.event('engine tracking', `${status} ${reason}`),
+      error: message => movementLog.event('engine error', message),
+    });
+    if (tracking !== measured) {
+      steps.stop();
+      tracking = measured;
+    }
+  }
+  const mode = engine ? 'measured' : `steps · ${engineUnavailable()}`;
+  if (mode !== loggedMode) movementLog.event('mode', mode);
+  loggedMode = mode;
 }
+/** The mode last written to the movement log, so each change is logged once. */
+let loggedMode = '';
 /**
  * Tells Python where tracking has put the phone and where its screen centre aims, so the headset
  * shows it and a carried object follows the aim. Null says the phone is no longer tracked.
@@ -201,6 +215,8 @@ function controls(): void {
 function setRoomView(open: boolean): void {
   const wasOpen = roomViewOpen;
   roomViewOpen = open;
+  if (open) movementLog.begin();
+  if (open !== wasOpen) movementLog.event('room view', open ? 'opened' : 'closed');
   roomViewHud.hidden = !open;
   element('scene').classList.toggle('room-view', open);
   document.documentElement.classList.toggle('room-view-open', open);
@@ -479,6 +495,7 @@ try {
       viewHeight += 0.05 * (target - viewHeight);
       const pose = tracking.pose();
       sceneView.follow(pose);
+      movementLog.pose(trackingMode(), tracking.status, pose);
       const mine = ownHold();
       if (mine && carryFloor !== null) {
         // Drawn where the screen centre meets the floor now; Python confirms it a moment later.
@@ -619,6 +636,17 @@ for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) {
   holdProbe.addEventListener(event, () => { holdProbe.dataset.held = 'false'; });
 }
 overlay.addEventListener('beforexrselect', event => event.preventDefault());
+element('send-log').addEventListener('click', () => {
+  // Python saves it on the computer it runs on, so nothing has to be copied off the phone.
+  void fetch('/api/movement-logs', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(movementLog.report()),
+  }).then(async response => {
+    // A proxy in front of a stopped Python answers with text, not JSON.
+    const answer = await response.json().catch(() => ({})) as { entries?: number; detail?: string };
+    if (!response.ok) throw new Error(answer.detail ?? 'The movement log could not be saved.');
+    element('view-status').textContent = `Log sent · ${answer.entries} entries`;
+  }).catch(error => showRoomViewError(error, 'The movement log could not be sent.'));
+});
 element('download-report').addEventListener('click', () => {
   const report = {
     recorded_at: new Date().toISOString(), role, xr: xr?.getReport() ?? null,

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -93,6 +94,10 @@ MANIPULATION_REFUSALS = {
 }
 
 
+# Five minutes of poses ten times a second fits in well under this.
+MAX_MOVEMENT_LOG_BYTES = 2 * 1024 * 1024
+
+
 class OverviewChoice(WireModel):
     image_id: str
 
@@ -150,6 +155,32 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                 )
                 image[f"{kind}_url"] = str(path)
         return data
+
+    movement_logs = data / "movement-logs"
+
+    @app.post("/api/movement-logs", status_code=201)
+    async def save_movement_log(request: Request) -> dict[str, Any]:
+        """Keep a phone's movement log from a device check, for the developer to read."""
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > MAX_MOVEMENT_LOG_BYTES:
+            raise HTTPException(413, "The movement log is too large to save.")
+        body = await request.body()
+        if len(body) > MAX_MOVEMENT_LOG_BYTES:
+            raise HTTPException(413, "The movement log is too large to save.")
+        try:
+            log = json.loads(body)
+        except ValueError as exc:
+            raise HTTPException(400, "A movement log must be JSON.") from exc
+        if not isinstance(log, dict) or not isinstance(cast(dict[str, Any], log).get("entries"), list):
+            raise HTTPException(400, "A movement log needs a list of entries.")
+        entries = cast(list[Any], cast(dict[str, Any], log)["entries"])
+        movement_logs.mkdir(parents=True, exist_ok=True)
+        name = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f") + ".json"
+        # Written whole, then renamed, so a reader never sees half a log.
+        pending = movement_logs / (name + ".tmp")
+        pending.write_text(json.dumps(log, indent=2), encoding="utf-8")
+        pending.replace(movement_logs / name)
+        return {"file": name, "entries": len(entries)}
 
     @app.get("/api/captures")
     def list_captures() -> dict[str, list[dict[str, Any]]]:

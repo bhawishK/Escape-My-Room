@@ -1,5 +1,41 @@
 import { expect, test } from '@playwright/test';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { engineCalls, engineFrame, useFakeEngine } from './fixtures/fake-engine';
+
+test('the phone sends its movement log to Python, which saves it for reading after a device check', async ({ page }) => {
+  await useFakeEngine(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await expect(page.locator('#scene')).toHaveAttribute('data-view', 'phone');
+  // Tracking starts, then the person walks a metre toward the desk over a second.
+  await page.evaluate(() => {
+    (window as unknown as { fakeEngine: { frame: (reality: unknown) => void } }).fakeEngine.frame({
+      position: { x: 0, y: 1.5, z: 1.6 }, rotation: { x: 0, y: 0, z: 0, w: 1 }, trackingStatus: 'LIMITED', trackingReason: 'INITIALIZING',
+    });
+  });
+  for (let step = 0; step <= 10; step++) {
+    await engineFrame(page, { x: 0, y: 1.6, z: 1.6 - step * 0.1 });
+    await page.waitForTimeout(100);
+  }
+  await page.getByRole('button', { name: 'Send log', exact: true }).click();
+  await expect(page.getByTestId('view-status')).toHaveText(/^Log sent · \d+ entries$/);
+  const folder = join(process.env.ESCAPE_ROOM_TEST_DATA!, '8771', 'movement-logs');
+  const newest = readdirSync(folder).filter(name => name.endsWith('.json')).sort().at(-1)!;
+  const log = JSON.parse(readFileSync(join(folder, newest), 'utf-8'));
+  expect(log.user_agent).toContain('Mozilla');
+  const events = log.entries.filter((entry: { kind: string }) => entry.kind === 'event').map((entry: { name: string; detail: string }) => `${entry.name}: ${entry.detail}`);
+  expect(events).toEqual(expect.arrayContaining([
+    'mode: measured', 'camera: requesting', 'camera: hasVideo', 'engine tracking: LIMITED INITIALIZING',
+    'engine tracking: NORMAL UNSPECIFIED',
+  ]));
+  const poses = log.entries.filter((entry: { kind: string }) => entry.kind === 'pose');
+  expect(poses.length).toBeGreaterThanOrEqual(5);
+  expect(poses.at(-1)).toMatchObject({ mode: 'measured', status: 'tracked', x: 0, y: 1.6, z: 0.6, heading: 0, pitch: 0 });
+  // Times count up from when the room view opened, in milliseconds.
+  const times = log.entries.map((entry: { t: number }) => entry.t);
+  expect(times).toEqual([...times].sort((a, b) => a - b));
+});
 
 test('8th Wall poses move the phone, and the headset sees where it really is', async ({ browser }) => {
   const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
