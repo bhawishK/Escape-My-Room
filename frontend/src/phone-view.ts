@@ -3,6 +3,7 @@
  * turns the view through the phone's orientation sensor; walking steps move it (see step-walk.ts).
  */
 import * as THREE from 'three';
+import { STANDING_EYE_HEIGHT } from './alignment';
 import type { Position, Rotation } from './protocol';
 
 /** Where a view is in the room and which way it faces, as a Three.js camera would. */
@@ -12,8 +13,8 @@ export interface RoomPose {
   orientation: Rotation;
 }
 
-/** The view starts back from the desk at phone height, so the room fits. */
-export const START_EYE: Position = { x: 0, y: 1.5, z: 1.6 };
+/** The view starts back from the desk at standing eye height, so the room fits. */
+export const START_EYE: Position = { x: 0, y: STANDING_EYE_HEIGHT, z: 1.6 };
 // Facing the desk and tilted 20° down toward it, as a phone is held when looking at it.
 const FACING_DESK: Rotation = { x: Math.sin(-20 * Math.PI / 360), y: 0, z: 0, w: Math.cos(-20 * Math.PI / 360) };
 

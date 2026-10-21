@@ -3,7 +3,7 @@
 import json
 import math
 
-from test_alignment import HEADSET_POSE, PHONE_POSE, alignment_from_pose
+from test_alignment import HEADSET_POSE, PHONE_POSE, STANDING_EYE_HEIGHT, alignment_from_pose
 from test_session_flow import open_socket, receive_until
 
 from backend.alignment import room_heading, xr_to_room
@@ -31,7 +31,7 @@ def test_confirmed_headsets_stand_on_the_floor_center_facing_the_desk():
         room = xr_to_room(alignment, position)
         assert abs(room.x) < 1e-9
         assert abs(room.z) < 1e-9
-        assert abs(room.y - position.y) < 1e-9
+        assert abs(room.y - STANDING_EYE_HEIGHT) < 1e-9
         assert abs(room_heading(alignment, orientation)) < 1e-9
 
 

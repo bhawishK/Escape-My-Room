@@ -36,6 +36,10 @@ def view_forward(orientation):
     return (-2 * (qw * qy + qx * qz), -1 + 2 * (qx * qx + qy * qy))
 
 
+# As in frontend/src/alignment.ts: the head is this high above the floor on confirming.
+STANDING_EYE_HEIGHT = 1.5
+
+
 def alignment_from_pose(position, orientation):
     """Same yaw and origin as frontend/src/alignment.ts for a yaw-only viewer pose."""
     forward_x, forward_z = view_forward(orientation)
@@ -47,19 +51,22 @@ def alignment_from_pose(position, orientation):
         yaw=yaw,
         origin=Position(
             x=-(cosine * position.x + sine * position.z),
-            y=0.0,
+            y=STANDING_EYE_HEIGHT - position.y,
             z=-(-sine * position.x + cosine * position.z),
         ),
     )
 
 
 def pose_point(position, orientation, right_m, forward_m):
-    """A floor point this many meters right and forward of the head, in that device's XR frame."""
+    """A floor point this many meters right and forward of the head, in that device's XR frame.
+
+    The floor is `STANDING_EYE_HEIGHT` under the head the device confirmed from.
+    """
     forward_x, forward_z = view_forward(orientation)
     right_x, right_z = -forward_z, forward_x
     return Position(
         x=position.x + right_x * right_m + forward_x * forward_m,
-        y=0.0,
+        y=position.y - STANDING_EYE_HEIGHT,
         z=position.z + right_z * right_m + forward_z * forward_m,
     )
 

@@ -5,7 +5,14 @@ export interface CalibrationInput {
   origin: Position;
 }
 
-/** Map the current view onto the floor center, facing the desk. */
+/** How high both people's eyes start above the room's floor, in meters: the phone's view and the headset's. */
+export const STANDING_EYE_HEIGHT = 1.5;
+
+/**
+ * Map the current view onto the floor center, facing the desk, with the eyes at
+ * `STANDING_EYE_HEIGHT`. The `local` space has no floor, so the head's height when confirming
+ * becomes standing eye height; moving up or down afterwards still moves the view.
+ */
 export function alignmentFromPose(
   position: Position,
   orientation: { x: number; y: number; z: number; w: number },
@@ -20,7 +27,7 @@ export function alignmentFromPose(
     yaw,
     origin: {
       x: -(cosine * position.x + sine * position.z),
-      y: 0,
+      y: STANDING_EYE_HEIGHT - position.y,
       z: -(-sine * position.x + cosine * position.z),
     },
   };
