@@ -58,7 +58,7 @@ Since Issue 59, a phone where the [8th Wall engine](https://github.com/8thwall/e
 - **Version:** the engine is pinned to `@8thwall/engine-binary@1.0.0`.
 - **Credits:** the room view carries the credits its licence requires.
 
-Whether it works in iPhone Chrome is checked in Issue 60.
+On 21 October 2026 it ran in iPhone Chrome without its camera image. It tracked well between losses, but lost tracking four times in three minutes, each time pointing steeply at the floor and turning fast. See [the iPhone tracking check](iphone-tracking-check.md).
 
 ### Movement log for device checks
 
