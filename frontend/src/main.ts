@@ -7,11 +7,12 @@ import { GazeCursor } from './gaze-cursor';
 import { RoomPreparation } from './preparation';
 import { floorPoint } from './aim';
 import { MotionStats } from './motion-stats';
-import { PhoneLook, START_EYE, headingOf, phoneViewpoint, pitchOf, type RoomPose } from './phone-view';
+import { StepTracking } from './phone-tracking';
+import { START_EYE, headingOf, pitchOf, type RoomPose } from './phone-view';
 import { NO_PRESENCE, type PresenceInput, type Role, type SessionState } from './protocol';
 import { SessionClient } from './session';
 import { DiagnosticScene } from './scene';
-import { STEP_LENGTHS, StepWalker } from './step-walk';
+import { STEP_LENGTHS } from './step-walk';
 import { floorplan, type Floorplan } from './steps';
 import { XRDiagnostic, xrError } from './xr';
 
@@ -48,43 +49,34 @@ let lastCarryPose = 0;
 let carryFloor: number | null = null;
 /** The floor's extent, which a carried object stays on. */
 let carryBounds: Floorplan['floor'] = null;
-const look = new PhoneLook();
-/** Where the room view looks from: walking's place at the view's height, turned with the phone. */
-function viewPose(): RoomPose {
-  return phoneViewpoint(look, { ...walker.position(), y: viewHeight });
-}
-const walker = new StepWalker(START_EYE, () => headingOf(viewPose().orientation), {
-  step: (position, steps) => {
+/** Where the phone is and faces: turning and counted steps, at the view's height. */
+const tracking = new StepTracking(() => viewHeight, {
+  step: (pose, steps) => {
     if (selected === null) element('view-status').textContent = `Walking · ${steps} ${steps === 1 ? 'step' : 'steps'}`;
-    publishWalk(position);
+    publishPose(pose);
   },
 });
 /**
- * Tells Python where walking has put the phone, at the view's height, and where its screen centre
- * aims, so the headset shows it and a carried object follows the aim.
+ * Tells Python where tracking has put the phone and where its screen centre aims, so the headset
+ * shows it and a carried object follows the aim. Null says the phone is no longer tracked.
  */
-function publishWalk(position: { x: number; y: number; z: number } | null): void {
-  const facing = viewPose().orientation;
-  client.sendPose(position ?
+function publishPose(pose: RoomPose | null): void {
+  client.sendPose(pose ?
     {
-      tracking_status: 'tracked', reference_space: 'room', position: { ...position, y: viewHeight },
-      heading: headingOf(facing), pitch: pitchOf(facing),
+      tracking_status: 'tracked', reference_space: 'room', position: pose.position,
+      heading: headingOf(pose.orientation), pitch: pitchOf(pose.orientation),
     } :
     { tracking_status: 'inactive', reference_space: null, position: null, heading: null, pitch: null });
 }
 /**
- * Turning and walking run whenever the room view is open. Call from a tap: iPhone asks for motion
- * permission and only allows it during the tap that asks.
+ * Tracking runs whenever the room view is open. Call from a tap: iPhone asks for motion permission
+ * and only allows it during the tap that asks.
  */
 function startMotion(): void {
-  const turning = look.active ? Promise.resolve() : look.start();
-  const walking = walker.active ? Promise.resolve() : walker.start();
-  void Promise.all([turning, walking]).then(() => {
+  void tracking.start().then(() => {
     element('view-status').textContent = 'Tap the box to select it';
-    publishWalk(walker.target());
+    publishPose(tracking.reportedPose());
   }).catch(error => {
-    look.stop();
-    walker.stop();
     showRoomViewError(error, 'Motion access could not start.');
   }).finally(controls);
 }
@@ -112,12 +104,9 @@ function publishPresence(): void {
 function currentPresence(): PresenceInput | null {
   if (role === 'mobile_master') {
     if (!roomViewOpen) return null;
-    const facing = look.orientation();
-    return {
-      tracking_status: 'tracked',
-      position: { ...walker.position(), y: viewHeight },
-      heading: facing ? headingOf(facing) : 0,
-    };
+    // Before a turn reading the view faces the desk, which is heading 0.
+    const pose = tracking.pose();
+    return { tracking_status: 'tracked', position: pose.position, heading: headingOf(pose.orientation) };
   }
   const viewer = xr?.viewerPose() ?? null;
   const alignment = state?.alignment.vr_solver;
@@ -132,7 +121,7 @@ const depthButton = element<HTMLButtonElement>('depth-toggle');
 /** The measured height to show the room from, or null for the default, and the height shown now. */
 let measuredHeight: number | null = null;
 let viewHeight = START_EYE.y;
-const depth = new FloorDepth(element<HTMLVideoElement>('depth-camera'), () => look.orientation(), {
+const depth = new FloorDepth(element<HTMLVideoElement>('depth-camera'), () => tracking.orientation(), {
   status: message => { element('view-status').textContent = message; },
   phase: () => controls(),
   height: meters => {
@@ -172,8 +161,8 @@ function controls(): void {
   endButton.disabled = !xrActive;
   element('vr-controls').hidden = role !== 'vr_solver';
   element('phone-controls').hidden = role !== 'mobile_master';
-  for (const id of ['walk-reset', 'walk-length']) element(id).hidden = !walker.active;
-  element('walk-length').textContent = `Step ${walker.stepLength.toFixed(1)} m`;
+  for (const id of ['walk-reset', 'walk-length']) element(id).hidden = !tracking.active;
+  element('walk-length').textContent = `Step ${tracking.stepLength.toFixed(1)} m`;
   depthButton.textContent = depth.getPhase() !== 'off' ? 'Cancel measuring' :
     measuredHeight === null ? 'Measure height' : 'Measure again';
   depthButton.disabled = !connected;
@@ -196,10 +185,9 @@ function setRoomView(open: boolean): void {
     if (selected !== null) requestSelection(null);
     gaze.stop();
     depth.stop();
-    look.stop();
-    if (walker.active) {
-      walker.stop();
-      if (connected) publishWalk(null);
+    if (tracking.active) {
+      tracking.stop();
+      if (connected) publishPose(null);
     }
     view?.follow(null);
   }
@@ -271,7 +259,7 @@ function applyState(next: SessionState): void {
   view?.apply(next);
   if (role) view?.applyView(next.alignment[role]);
   const plan = floorplan(next.room.available ? next.room.entities : []);
-  walker.setFloorplan(plan);
+  tracking.setFloorplan(plan);
   carryBounds = plan.floor;
   const roomStatus = element('room-status');
   roomStatus.dataset.available = 'false';
@@ -338,7 +326,6 @@ const client = new SessionClient({
         });
       }
       void xr?.end().catch(error => showError(xrError(error)));
-      look.stop();
       selected = null;
       setRoomView(false);
     }
@@ -370,7 +357,7 @@ function endHold(): void {
   if (!mine || releasing === mine.id) return;
   releasing = mine.id;
   // Python places it from the latest aim, so it drops exactly where the phone shows it.
-  publishWalk(walker.position());
+  publishPose(tracking.pose());
   client.sendRelease(mine.id);
 }
 
@@ -406,7 +393,7 @@ function handleRoomTouches(sceneView: DiagnosticScene): void {
         holding = true;
         const id = selected;
         carryFloor = state?.room.entities.find(entity => entity.id === id)?.position.y ?? 0;
-        publishWalk(walker.position());
+        publishPose(tracking.pose());
         client.sendAcquire(version, selected);
       }, PICK_UP_MS);
     }
@@ -464,7 +451,7 @@ try {
       // A new height eases in rather than jumping.
       const target = measuredHeight ?? START_EYE.y;
       viewHeight += 0.05 * (target - viewHeight);
-      const pose = viewPose();
+      const pose = tracking.pose();
       sceneView.follow(pose);
       const mine = ownHold();
       if (mine && carryFloor !== null) {
@@ -476,7 +463,7 @@ try {
       }
       if (mine && time - lastCarryPose >= CARRY_POSE_MS) {
         lastCarryPose = time;
-        publishWalk(walker.position());
+        publishPose(pose);
       }
     }
     sceneView.renderer.render(sceneView.scene, sceneView.camera);
@@ -496,7 +483,7 @@ async function connect(roleToJoin: Role): Promise<void> {
     if (roleToJoin === 'mobile_master') {
       setRoomView(true);
       // Motion may have started before the connection did; tell Python where the phone starts.
-      if (walker.active) publishWalk(walker.target());
+      if (tracking.status === 'tracked') publishPose(tracking.reportedPose());
     }
   } catch (error) {
     role = null;
@@ -552,11 +539,11 @@ gazeModeButton.addEventListener('click', () => {
 element('walk-reset').addEventListener('click', () => {
   // Going back to the start must not carry a held object back with it.
   endHold();
-  publishWalk(walker.reset());
+  publishPose(tracking.reset());
   element('view-status').textContent = 'Back at the start';
 });
 element('walk-length').addEventListener('click', () => {
-  walker.stepLength = STEP_LENGTHS[(STEP_LENGTHS.indexOf(walker.stepLength as typeof STEP_LENGTHS[number]) + 1) % STEP_LENGTHS.length];
+  tracking.stepLength = STEP_LENGTHS[(STEP_LENGTHS.indexOf(tracking.stepLength as typeof STEP_LENGTHS[number]) + 1) % STEP_LENGTHS.length];
   controls();
 });
 depthButton.addEventListener('click', () => {
@@ -567,8 +554,7 @@ depthButton.addEventListener('click', () => {
   element('error').hidden = true;
   if (gaze.getPhase() !== 'off') gaze.stop('Gaze cursor stopped to measure the height.');
   // Both permission requests start inside the button press; iPhone refuses them after it.
-  const turning = look.active ? Promise.resolve() : look.start();
-  void Promise.all([depth.start(), turning]).catch(error => {
+  void Promise.all([depth.start(), tracking.startTurning()]).catch(error => {
     depth.stop();
     showRoomViewError(error, 'The height could not be measured.');
   }).finally(controls);
