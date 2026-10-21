@@ -7,7 +7,8 @@ import { GazeCursor } from './gaze-cursor';
 import { RoomPreparation } from './preparation';
 import { floorPoint } from './aim';
 import { MotionStats } from './motion-stats';
-import { StepTracking } from './phone-tracking';
+import { EngineTracking, trackingEngine } from './engine-tracking';
+import { StepTracking, type PhoneTracking } from './phone-tracking';
 import { START_EYE, headingOf, pitchOf, type RoomPose } from './phone-view';
 import { NO_PRESENCE, type PresenceInput, type Role, type SessionState } from './protocol';
 import { SessionClient } from './session';
@@ -49,13 +50,33 @@ let lastCarryPose = 0;
 let carryFloor: number | null = null;
 /** The floor's extent, which a carried object stays on. */
 let carryBounds: Floorplan['floor'] = null;
-/** Where the phone is and faces: turning and counted steps, at the view's height. */
-const tracking = new StepTracking(() => viewHeight, {
-  step: (pose, steps) => {
-    if (selected === null) element('view-status').textContent = `Walking · ${steps} ${steps === 1 ? 'step' : 'steps'}`;
+/** Turning and counted steps, at the view's height: used when the engine cannot track. */
+const steps = new StepTracking(() => viewHeight, {
+  step: (pose, count) => {
+    if (selected === null) element('view-status').textContent = `Walking · ${count} ${count === 1 ? 'step' : 'steps'}`;
     publishPose(pose);
   },
 });
+/** Measured tracking from the 8th Wall engine, made once the engine has loaded. */
+let measured: EngineTracking | null = null;
+/** Whether the engine has measured a pose that Python has not been told yet. */
+let measuredUnsent = false;
+/** Where the phone is and faces, from whichever source is tracking it. */
+let tracking: PhoneTracking = steps;
+/**
+ * Tracks with the engine when it can run on this phone, and with steps otherwise. The engine may
+ * load after the first tap, so a later tap moves from steps to the engine.
+ */
+function chooseTracking(): void {
+  const engine = trackingEngine();
+  if (!engine) return;
+  measured ??= new EngineTracking(engine, element<HTMLCanvasElement>('engine-canvas'), {
+    moved: () => { measuredUnsent = true; },
+  });
+  if (tracking === measured) return;
+  steps.stop();
+  tracking = measured;
+}
 /**
  * Tells Python where tracking has put the phone and where its screen centre aims, so the headset
  * shows it and a carried object follows the aim. Null says the phone is no longer tracked.
@@ -73,6 +94,7 @@ function publishPose(pose: RoomPose | null): void {
  * and only allows it during the tap that asks.
  */
 function startMotion(): void {
+  chooseTracking();
   void tracking.start().then(() => {
     element('view-status').textContent = 'Tap the box to select it';
     publishPose(tracking.reportedPose());
@@ -161,8 +183,8 @@ function controls(): void {
   endButton.disabled = !xrActive;
   element('vr-controls').hidden = role !== 'vr_solver';
   element('phone-controls').hidden = role !== 'mobile_master';
-  for (const id of ['walk-reset', 'walk-length']) element(id).hidden = !tracking.active;
-  element('walk-length').textContent = `Step ${tracking.stepLength.toFixed(1)} m`;
+  for (const id of ['walk-reset', 'walk-length']) element(id).hidden = tracking !== steps || !steps.active;
+  element('walk-length').textContent = `Step ${steps.stepLength.toFixed(1)} m`;
   depthButton.textContent = depth.getPhase() !== 'off' ? 'Cancel measuring' :
     measuredHeight === null ? 'Measure height' : 'Measure again';
   depthButton.disabled = !connected;
@@ -177,6 +199,7 @@ function controls(): void {
 
 /** Shows the room full screen on the phone, looking from the phone's place in the room. */
 function setRoomView(open: boolean): void {
+  const wasOpen = roomViewOpen;
   roomViewOpen = open;
   roomViewHud.hidden = !open;
   element('scene').classList.toggle('room-view', open);
@@ -185,10 +208,13 @@ function setRoomView(open: boolean): void {
     if (selected !== null) requestSelection(null);
     gaze.stop();
     depth.stop();
-    if (tracking.active) {
-      tracking.stop();
-      if (connected) publishPose(null);
-    }
+    // Height measurement may have started step turning alongside the engine; stop both. Closing an
+    // open view also cancels an engine start still waiting on its permission prompt; a closed one
+    // is also "closed" while connecting, when the start must go on.
+    const wasTracking = tracking.active;
+    steps.stop();
+    if (wasOpen) measured?.stop();
+    if (wasTracking && connected) publishPose(null);
     view?.follow(null);
   }
 }
@@ -259,7 +285,7 @@ function applyState(next: SessionState): void {
   view?.apply(next);
   if (role) view?.applyView(next.alignment[role]);
   const plan = floorplan(next.room.available ? next.room.entities : []);
-  tracking.setFloorplan(plan);
+  steps.setFloorplan(plan);
   carryBounds = plan.floor;
   const roomStatus = element('room-status');
   roomStatus.dataset.available = 'false';
@@ -461,8 +487,11 @@ try {
         sceneView.predict(mine.entity, floorPoint(
           pose.position, headingOf(pose.orientation), pitchOf(pose.orientation), carryFloor, carryBounds, margin));
       }
-      if (mine && time - lastCarryPose >= CARRY_POSE_MS) {
+      // Carrying sends the aim on time; measured tracking sends each new pose, at the same rate.
+      const newPose = tracking === measured && measuredUnsent;
+      if ((mine || newPose) && time - lastCarryPose >= CARRY_POSE_MS) {
         lastCarryPose = time;
+        measuredUnsent = false;
         publishPose(pose);
       }
     }
@@ -539,11 +568,11 @@ gazeModeButton.addEventListener('click', () => {
 element('walk-reset').addEventListener('click', () => {
   // Going back to the start must not carry a held object back with it.
   endHold();
-  publishPose(tracking.reset());
+  publishPose(steps.reset());
   element('view-status').textContent = 'Back at the start';
 });
 element('walk-length').addEventListener('click', () => {
-  tracking.stepLength = STEP_LENGTHS[(STEP_LENGTHS.indexOf(tracking.stepLength as typeof STEP_LENGTHS[number]) + 1) % STEP_LENGTHS.length];
+  steps.stepLength = STEP_LENGTHS[(STEP_LENGTHS.indexOf(steps.stepLength as typeof STEP_LENGTHS[number]) + 1) % STEP_LENGTHS.length];
   controls();
 });
 depthButton.addEventListener('click', () => {
@@ -554,7 +583,7 @@ depthButton.addEventListener('click', () => {
   element('error').hidden = true;
   if (gaze.getPhase() !== 'off') gaze.stop('Gaze cursor stopped to measure the height.');
   // Both permission requests start inside the button press; iPhone refuses them after it.
-  void Promise.all([depth.start(), tracking.startTurning()]).catch(error => {
+  void Promise.all([depth.start(), steps.startTurning()]).catch(error => {
     depth.stop();
     showRoomViewError(error, 'The height could not be measured.');
   }).finally(controls);

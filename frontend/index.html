@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Escape My Room — connection diagnostic</title>
+    <!-- The 8th Wall engine tracks the phone with its camera and motion sensors; pinned to one version. -->
+    <script src="https://cdn.jsdelivr.net/npm/@8thwall/engine-binary@1.0.0/dist/xr.js" async crossorigin="anonymous" data-preload-chunks="slam"></script>
   </head>
   <body>
     <main id="app">
@@ -106,6 +108,12 @@
         <button id="gaze-calibrate" class="secondary" hidden>Calibrate</button>
         <button id="gaze-test" class="secondary" hidden>Test accuracy</button>
         <button id="close-room-view" class="secondary">Close</button>
+        <p id="engine-credits" data-testid="engine-credits" class="hud-credits">
+          Phone tracking by the 8th Wall Engine, created by Niantic Spatial, Inc. © 2026 Niantic Spatial, Inc.
+          All rights reserved. Licensed under the
+          <a href="https://github.com/8thwall/engine/blob/main/LICENSE" target="_blank" rel="noopener">XR Engine License Agreement</a>,
+          and provided without warranty as it states.
+        </p>
       </div>
     </div>
     <!-- The gaze cursor's front camera, shown small so the person can keep their face in view. -->
@@ -127,6 +135,8 @@
       <button id="hold-probe">Hold input probe</button>
       <button id="overlay-end-xr">End XR</button>
     </div>
+    <!-- The engine reads the camera through this canvas; nothing is drawn on it, and the room view covers it. -->
+    <canvas id="engine-canvas" aria-hidden="true"></canvas>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
