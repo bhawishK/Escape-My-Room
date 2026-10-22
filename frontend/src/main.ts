@@ -78,6 +78,14 @@ function chooseTracking(): void {
       moved: () => { measuredUnsent = true; },
       camera: status => movementLog.event('camera', status),
       tracking: (status, reason) => movementLog.event('engine tracking', `${status} ${reason}`),
+      status: (_, hint) => {
+        // Only a tracking hint is replaced on recovery; other messages are left alone.
+        if (hint) element('view-status').textContent = hint;
+        else if (trackingHint) element('view-status').textContent = viewInstruction();
+        trackingHint = hint;
+        // A loss during a hold is kept from Python, which would drop the object; the aim holds.
+        if (connected && ownHold() === null) publishTracking();
+      },
       error: message => movementLog.event('engine error', message),
     });
     if (tracking !== measured) {
@@ -91,6 +99,20 @@ function chooseTracking(): void {
 }
 /** The mode last written to the movement log, so each change is logged once. */
 let loggedMode = '';
+/** What the status line says about tracking, or empty while tracking is fine. */
+let trackingHint = '';
+/** What to do next in the room view, given the selection. */
+function viewInstruction(): string {
+  if (selected === null) return 'Tap the box to select it';
+  const label = entityLabel(selected);
+  return `${label.charAt(0).toUpperCase()}${label.slice(1)} selected · press and hold it to pick it up`;
+}
+/** Tells Python the phone's tracking now: where it is, or that it has no usable position, and why. */
+function publishTracking(): void {
+  const status = tracking.status;
+  if (status === 'tracked') publishPose(tracking.reportedPose());
+  else client.sendPose({ tracking_status: status, reference_space: null, position: null, heading: null, pitch: null });
+}
 /**
  * Tells Python where tracking has put the phone and where its screen centre aims, so the headset
  * shows it and a carried object follows the aim. Null says the phone is no longer tracked.
@@ -110,8 +132,10 @@ function publishPose(pose: RoomPose | null): void {
 function startMotion(): void {
   chooseTracking();
   void tracking.start().then(() => {
+    // The engine reports its own start, through its status event.
+    if (tracking !== steps) return;
     element('view-status').textContent = 'Tap the box to select it';
-    publishPose(tracking.reportedPose());
+    publishTracking();
   }).catch(error => {
     showRoomViewError(error, 'Motion access could not start.');
   }).finally(controls);
@@ -123,6 +147,8 @@ let presenceSent = false;
 
 function publishPresence(): void {
   if (!connected || !role) return;
+  // While tracking is lost the phone stays quiet, so Python marks it stale at its last good place.
+  if (role === 'mobile_master' && roomViewOpen && tracking.status === 'lost') return;
   const sample = currentPresence();
   if (!sample) {
     if (!presenceSent) return;
@@ -139,7 +165,8 @@ function publishPresence(): void {
 /** The room pose this device can publish, or null when it has no place to report. */
 function currentPresence(): PresenceInput | null {
   if (role === 'mobile_master') {
-    if (!roomViewOpen) return null;
+    // Starting tracking, the phone has no place to report yet.
+    if (!roomViewOpen || (tracking === measured && tracking.status === 'inactive')) return null;
     // Before a turn reading the view faces the desk, which is heading 0.
     const pose = tracking.pose();
     return { tracking_status: 'tracked', position: pose.position, heading: headingOf(pose.orientation) };
@@ -399,8 +426,10 @@ function endHold(): void {
   if (!mine || releasing === mine.id) return;
   releasing = mine.id;
   // Python places it from the latest aim, so it drops exactly where the phone shows it.
-  publishPose(tracking.pose());
+  if (tracking.status === 'tracked') publishPose(tracking.pose());
   client.sendRelease(mine.id);
+  // A loss during the hold was kept from Python so the hold went on; say it now.
+  if (tracking.status !== 'tracked') publishTracking();
 }
 
 /** Asks Python to select a room object, or to deselect with null; Python decides what is eligible. */
@@ -432,10 +461,15 @@ function handleRoomTouches(sceneView: DiagnosticScene): void {
       press.timer = window.setTimeout(() => {
         const version = state?.room.room_version;
         if (!press || selected === null || version === null || version === undefined) return;
+        // Python refuses a hold without a position; say why here instead.
+        if (tracking.status !== 'tracked') {
+          element('view-status').textContent = trackingHint || 'Wait for tracking before picking it up';
+          return;
+        }
         holding = true;
         const id = selected;
         carryFloor = state?.room.entities.find(entity => entity.id === id)?.position.y ?? 0;
-        publishPose(tracking.pose());
+        if (tracking.status === 'tracked') publishPose(tracking.pose());
         client.sendAcquire(version, selected);
       }, PICK_UP_MS);
     }
@@ -506,7 +540,8 @@ try {
       }
       // Carrying sends the aim on time; measured tracking sends each new pose, at the same rate.
       const newPose = tracking === measured && measuredUnsent;
-      if ((mine || newPose) && time - lastCarryPose >= CARRY_POSE_MS) {
+      // A held pose is not sent as tracked: while tracking is lost, Python keeps the last aim.
+      if ((mine || newPose) && tracking.status === 'tracked' && time - lastCarryPose >= CARRY_POSE_MS) {
         lastCarryPose = time;
         measuredUnsent = false;
         publishPose(pose);
@@ -529,7 +564,7 @@ async function connect(roleToJoin: Role): Promise<void> {
     if (roleToJoin === 'mobile_master') {
       setRoomView(true);
       // Motion may have started before the connection did; tell Python where the phone starts.
-      if (tracking.status === 'tracked') publishPose(tracking.reportedPose());
+      if (tracking.active) publishTracking();
     }
   } catch (error) {
     role = null;

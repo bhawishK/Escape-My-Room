@@ -71,11 +71,15 @@ export async function useFakeEngine(page: Page): Promise<void> {
 /** Delivers one engine frame: a camera position in metres and a rotation as a quaternion. */
 export async function engineFrame(
   page: Page, position: { x: number; y: number; z: number }, rotation = { x: 0, y: 0, z: 0, w: 1 },
+  tracking: { trackingStatus: 'NORMAL' | 'LIMITED'; trackingReason: string } = { trackingStatus: 'NORMAL', trackingReason: 'UNSPECIFIED' },
 ): Promise<void> {
-  await page.evaluate(([position, rotation]) => {
-    (window as unknown as { fakeEngine: { frame: (reality: unknown) => void } }).fakeEngine.frame({ position, rotation });
-  }, [position, rotation] as const);
+  await page.evaluate(([position, rotation, tracking]) => {
+    (window as unknown as { fakeEngine: { frame: (reality: unknown) => void } }).fakeEngine.frame({ position, rotation, ...tracking });
+  }, [position, rotation, tracking] as const);
 }
+
+/** A frame while the engine is still working out where it is, as at start-up and after a loss. */
+export const INITIALIZING = { trackingStatus: 'LIMITED', trackingReason: 'INITIALIZING' } as const;
 
 export async function engineCalls(page: Page): Promise<EngineCalls> {
   return page.evaluate(() => (window as unknown as { fakeEngine: { calls: EngineCalls } }).fakeEngine.calls);

@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { engineCalls, engineFrame, useFakeEngine } from './fixtures/fake-engine';
+import { INITIALIZING, engineCalls, engineFrame, useFakeEngine } from './fixtures/fake-engine';
 
 test('the phone sends its movement log to Python, which saves it for reading after a device check', async ({ page }) => {
   await useFakeEngine(page);
@@ -71,4 +71,91 @@ test('the engine starts in metres at the room view’s starting place, facing th
   await expect(page.getByTestId('engine-credits')).toContainText('Niantic Spatial');
   await expect(page.getByRole('link', { name: 'XR Engine License Agreement' })).toHaveAttribute(
     'href', 'https://github.com/8thwall/engine/blob/main/LICENSE');
+});
+
+test('while the engine starts, the phone asks for gentle movement and the headset sees it as inactive', async ({ browser }) => {
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const vr = await browser.newPage();
+  await useFakeEngine(phone);
+  await vr.goto('/');
+  await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
+  await phone.goto('/');
+  await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  // Working out scale, the engine reports poses that mean nothing yet.
+  await engineFrame(phone, { x: 3, y: 0.4, z: -2 }, undefined, INITIALIZING);
+  await expect(phone.getByTestId('view-status')).toHaveText('Starting tracking · move the phone gently');
+  await expect(vr.getByTestId('tracking')).toHaveText('Inactive · no positional input');
+  await engineFrame(phone, { x: 0.2, y: 1.55, z: 1.4 });
+  await expect(vr.getByTestId('tracking')).toHaveText('Tracked');
+  await expect(vr.getByTestId('marker-position')).toHaveText('0.20, 1.55, 1.40 m');
+  await expect(phone.getByTestId('view-status')).toHaveText('Tap the box to select it');
+  await phone.close();
+  await vr.close();
+});
+
+test('a loss holds the view, tells the headset the phone is lost, and recovery tracks again', async ({ browser }) => {
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const vr = await browser.newPage();
+  await useFakeEngine(phone);
+  await vr.goto('/');
+  await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
+  await phone.goto('/');
+  await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await engineFrame(phone, { x: 0.5, y: 1.5, z: 1 });
+  await expect(vr.getByTestId('marker-position')).toHaveText('0.50, 1.50, 1.00 m');
+  await expect(vr.getByTestId('presence-phone')).toHaveText('Phone · here · 0.50, 1.50, 1.00 m · heading 0.00 rad');
+  // Lost, the engine reports a guess tens of metres away, as it did on the iPhone.
+  await engineFrame(phone, { x: 46.5, y: 24.9, z: -25.2 }, undefined, INITIALIZING);
+  await expect(phone.getByTestId('view-status')).toHaveText('Tracking lost · point at something with detail and move slower');
+  await expect(vr.getByTestId('tracking')).toHaveText('Lost · position unavailable');
+  // The phone stops reporting where it is, so the headset marks it stale at the last good place.
+  await expect(vr.getByTestId('presence-phone')).toHaveText('Phone · stale · 0.50, 1.50, 1.00 m · heading 0.00 rad', { timeout: 5000 });
+  await engineFrame(phone, { x: 0.6, y: 1.5, z: 0.9 });
+  await expect(vr.getByTestId('tracking')).toHaveText('Tracked');
+  await expect(vr.getByTestId('marker-position')).toHaveText('0.60, 1.50, 0.90 m');
+  await expect(phone.getByTestId('view-status')).toHaveText('Tap the box to select it');
+  await phone.close();
+  await vr.close();
+});
+
+test('lost while pointing steeply at the floor, the hint says to raise the phone', async ({ page }) => {
+  await useFakeEngine(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  // Tilted 60° down, as before every loss on the iPhone.
+  const down = { x: Math.sin(-Math.PI / 6), y: 0, z: 0, w: Math.cos(-Math.PI / 6) };
+  await engineFrame(page, { x: 0, y: 1.5, z: 1 }, down);
+  await engineFrame(page, { x: 0, y: 1.5, z: 1 }, down, INITIALIZING);
+  await expect(page.getByTestId('view-status')).toHaveText('Tracking lost · raise the phone from the plain floor toward something with detail');
+});
+
+test('a loss while carrying the box keeps the hold, and letting go then drops it and reports the loss', async ({ browser }) => {
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const vr = await browser.newPage();
+  await useFakeEngine(phone);
+  await vr.goto('/');
+  await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
+  await phone.goto('/');
+  await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await expect(phone.getByTestId('room-status')).toHaveAttribute('data-available', 'true');
+  // Straight above the box, looking down, so it fills the middle of the screen.
+  const lookingDown = { x: Math.sin(-Math.PI / 4), y: 0, z: 0, w: Math.cos(-Math.PI / 4) };
+  await engineFrame(phone, { x: -0.5, y: 1.2, z: -0.4 }, lookingDown);
+  await expect(vr.getByTestId('tracking')).toHaveText('Tracked');
+  await phone.mouse.click(195, 422);
+  await expect(phone.getByTestId('view-status')).toHaveText('Box selected · press and hold it to pick it up');
+  await phone.mouse.move(195, 422);
+  await phone.mouse.down();
+  await expect(phone.getByTestId('view-status')).toHaveText(/^Carrying box/);
+  await engineFrame(phone, { x: 9, y: 7, z: -12 }, lookingDown, INITIALIZING);
+  await expect(phone.getByTestId('view-status')).toHaveText(/^Tracking lost/);
+  // Python would drop the box at a pose without a position, so none is sent while it is held.
+  await phone.waitForTimeout(800);
+  await expect(vr.getByTestId('tracking')).toHaveText('Tracked');
+  await expect(phone.getByTestId('view-status')).toHaveText(/^Tracking lost/);
+  await phone.mouse.up();
+  await expect(phone.getByTestId('view-status')).toHaveText('Dropped box');
+  await expect(vr.getByTestId('tracking')).toHaveText('Lost · position unavailable');
+  await phone.close();
+  await vr.close();
 });

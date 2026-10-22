@@ -3,7 +3,7 @@
  * give where the phone is in metres and which way it faces. The camera image is never drawn.
  */
 import type { PhoneTracking } from './phone-tracking';
-import { START_EYE, START_VIEW, type RoomPose } from './phone-view';
+import { START_EYE, START_VIEW, pitchOf, type RoomPose } from './phone-view';
 import type { Position, Rotation, TrackingStatus } from './protocol';
 
 /** One frame of the engine's world tracking. */
@@ -71,8 +71,14 @@ interface EngineEvents {
   camera: (status: string) => void;
   /** The engine's own tracking status and reason changed. */
   tracking: (status: string, reason: string) => void;
+  /** This source's status changed; `hint` says what to do about it, empty when tracked. */
+  status: (status: TrackingStatus, hint: string) => void;
   error: (message: string) => void;
 }
+
+const STARTING_HINT = 'Starting tracking · move the phone gently';
+// Every loss on the iPhone came with the phone pointing this far down or more, at the plain floor.
+const STEEP_DOWN = -50 * Math.PI / 180;
 
 export class EngineTracking implements PhoneTracking {
   private running = false;
@@ -81,12 +87,23 @@ export class EngineTracking implements PhoneTracking {
   private latest: RoomPose | null = null;
   /** The engine's last status and reason, to report each change once. */
   private engineStatus = '';
+  /** Whether the engine is tracking normally now, and whether it has since it started. */
+  private normal = false;
+  private everNormal = false;
+  private reported: TrackingStatus = 'inactive';
 
   constructor(private readonly engine: Engine, private readonly canvas: HTMLCanvasElement, private readonly events: EngineEvents) {}
 
   get active(): boolean { return this.running; }
 
-  get status(): TrackingStatus { return this.running ? 'tracked' : 'inactive'; }
+  /**
+   * `inactive` until the engine first tracks normally, since its poses mean nothing while it works
+   * out scale; then `tracked`, or `lost` while it is limited, with the view held where it was.
+   */
+  get status(): TrackingStatus {
+    if (!this.running || !this.everNormal) return 'inactive';
+    return this.normal ? 'tracked' : 'lost';
+  }
 
   /**
    * Starts the engine. Call from a tap: iPhone grants motion permission only during the tap that
@@ -103,6 +120,8 @@ export class EngineTracking implements PhoneTracking {
     if (attempt !== this.attempts) return;
     this.latest = null;
     this.engineStatus = '';
+    this.normal = false;
+    this.everNormal = false;
     const { engine } = this;
     engine.XrController.configure({ scale: 'absolute' });
     engine.clearCameraPipelineModules();
@@ -124,13 +143,35 @@ export class EngineTracking implements PhoneTracking {
             this.engineStatus = engineStatus;
             this.events.tracking(reality.trackingStatus ?? 'unknown', reality.trackingReason ?? 'unknown');
           }
-          this.latest = { position: { x: p.x, y: p.y, z: p.z }, orientation: { x: r.x, y: r.y, z: r.z, w: r.w } };
-          this.events.moved(this.latest);
+          // Limited poses are guesses, metres or tens of metres off on the iPhone; hold the last good one.
+          this.normal = reality.trackingStatus !== 'LIMITED';
+          if (this.normal) {
+            this.everNormal = true;
+            this.latest = { position: { x: p.x, y: p.y, z: p.z }, orientation: { x: r.x, y: r.y, z: r.z, w: r.w } };
+          }
+          this.reportStatus();
+          if (this.normal) this.events.moved(this.latest!);
         },
       },
     ]);
-    engine.run({ canvas: this.canvas });
+    // Running and starting before the engine runs, so a frame it delivers at once finds them set.
     this.running = true;
+    this.reported = 'inactive';
+    this.events.status('inactive', STARTING_HINT);
+    engine.run({ canvas: this.canvas });
+  }
+
+  private reportStatus(): void {
+    const status = this.status;
+    if (status === this.reported) return;
+    this.reported = status;
+    this.events.status(status, status === 'tracked' ? '' : status === 'inactive' ? STARTING_HINT : this.lostHint());
+  }
+
+  private lostHint(): string {
+    const steep = this.latest !== null && pitchOf(this.latest.orientation) < STEEP_DOWN;
+    return steep ? 'Tracking lost · raise the phone from the plain floor toward something with detail' :
+      'Tracking lost · point at something with detail and move slower';
   }
 
   stop(): void {
