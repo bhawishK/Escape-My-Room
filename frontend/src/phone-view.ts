@@ -45,6 +45,15 @@ export function headingOf(orientation: THREE.Quaternion | Rotation): number {
   return Math.atan2(-forward.x, -forward.z);
 }
 
+/**
+ * The turn about the vertical, 0 facing the desk and positive to the left. Unlike `headingOf`, the
+ * forward vector's heading, it stays steady when the phone points almost straight down.
+ */
+export function yawOf(orientation: Rotation): number {
+  const q = new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w);
+  return new THREE.Euler().setFromQuaternion(q, 'YXZ').y;
+}
+
 /** How far a camera orientation looks above level, in radians: negative when it looks down. */
 export function pitchOf(orientation: Rotation): number {
   const q = new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w);

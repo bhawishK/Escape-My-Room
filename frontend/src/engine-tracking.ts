@@ -4,7 +4,7 @@
  */
 import * as THREE from 'three';
 import type { PhoneTracking } from './phone-tracking';
-import { PhoneLook, START_EYE, START_VIEW, pitchOf, type RoomPose } from './phone-view';
+import { PhoneLook, START_EYE, START_VIEW, pitchOf, yawOf, type RoomPose } from './phone-view';
 import type { Position, Rotation, TrackingStatus } from './protocol';
 
 /** One frame of the engine's world tracking. */
@@ -31,6 +31,9 @@ export interface Engine {
   clearCameraPipelineModules(): void;
   run(options: { canvas: HTMLCanvasElement }): void;
   stop(): void;
+  /** Releases the back camera and stops tracking until `resume`. */
+  pause(): void;
+  resume(): unknown;
   XrController: {
     configure(options: { scale: 'absolute' | 'responsive' }): void;
     updateCameraProjectionMatrix(options: { origin: Position; facing: Rotation }): void;
@@ -78,6 +81,8 @@ interface EngineEvents {
   /** After a loss, the room was lined up again with where the phone was; `detail` says by how much. */
   realigned: (detail: string) => void;
   error: (message: string) => void;
+  /** Every frame as the engine gives it, before it is held or lined up: for measuring camera switches. */
+  frame?: (status: string, reason: string, raw: RoomPose) => void;
 }
 
 const STARTING_HINT = 'Starting tracking · move the phone gently';
@@ -86,14 +91,6 @@ const UP = new THREE.Vector3(0, 1, 0);
 const RESTART_NEAR = 0.5;
 const RESTART_FACING = 30 * Math.PI / 180;
 
-/**
- * The turn about the vertical, 0 facing the desk and positive to the left. Unlike the forward
- * vector's heading it stays steady when the phone points almost straight down, as before a loss.
- */
-function yawOf(orientation: Rotation): number {
-  const q = new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w);
-  return new THREE.Euler().setFromQuaternion(q, 'YXZ').y;
-}
 // Every loss on the iPhone came with the phone pointing this far down or more, at the plain floor.
 const STEEP_DOWN = -50 * Math.PI / 180;
 
@@ -180,6 +177,8 @@ export class EngineTracking implements PhoneTracking {
           const reality = processCpuResult.reality;
           if (!reality) return;
           const { position: p, rotation: r } = reality;
+          const raw = { position: { x: p.x, y: p.y, z: p.z }, orientation: { x: r.x, y: r.y, z: r.z, w: r.w } };
+          this.events.frame?.(reality.trackingStatus ?? 'unknown', reality.trackingReason ?? 'unknown', raw);
           const engineStatus = `${reality.trackingStatus ?? 'unknown'} ${reality.trackingReason ?? 'unknown'}`;
           if (engineStatus !== this.engineStatus) {
             this.engineStatus = engineStatus;
@@ -194,7 +193,6 @@ export class EngineTracking implements PhoneTracking {
           }
           if (this.normal) {
             this.everNormal = true;
-            const raw = { position: { x: p.x, y: p.y, z: p.z }, orientation: { x: r.x, y: r.y, z: r.z, w: r.w } };
             if (this.lostFrom) this.recover(raw, this.lostFrom);
             this.latest = this.intoRoom(raw);
           }
@@ -229,6 +227,18 @@ export class EngineTracking implements PhoneTracking {
     if (!this.running) return;
     this.engine.stop();
     this.running = false;
+  }
+
+  /** Releases the back camera for a while; the view holds the last pose until `resume`. */
+  pause(): void {
+    if (this.running) this.engine.pause();
+  }
+
+  resume(): void {
+    if (!this.running) return;
+    void Promise.resolve(this.engine.resume()).catch(error => {
+      this.events.error(`resume failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
   }
 
   /** Makes where the phone is now the starting viewpoint facing the desk. */
