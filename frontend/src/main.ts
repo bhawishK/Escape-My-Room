@@ -7,6 +7,7 @@ import { GazeCursor } from './gaze-cursor';
 import { RoomPreparation } from './preparation';
 import { floorPoint } from './aim';
 import { MotionStats } from './motion-stats';
+import { CameraSwitch } from './camera-switch';
 import { EngineTracking, engineUnavailable, trackingEngine } from './engine-tracking';
 import { MovementLog, type TrackingMode } from './movement-log';
 import { StepTracking, type PhoneTracking } from './phone-tracking';
@@ -76,11 +77,20 @@ function chooseTracking(): void {
   if (engine) {
     measured ??= new EngineTracking(engine, element<HTMLCanvasElement>('engine-canvas'), {
       moved: () => { measuredUnsent = true; },
-      camera: status => movementLog.event('camera', status),
+      camera: status => {
+        movementLog.event('camera', status);
+        cameraSwitch.cameraStatus(status);
+      },
+      frame: (status, reason, raw) => {
+        // Only a pose the engine trusts is a fair `before` for measuring a switch.
+        if (status === 'NORMAL') lastRawPose = raw;
+        cameraSwitch.engineFrame(status, reason, raw);
+      },
       tracking: (status, reason) => movementLog.event('engine tracking', `${status} ${reason}`),
       status: (_, hint) => {
-        // Only a tracking hint is replaced on recovery; other messages are left alone.
-        if (hint) element('view-status').textContent = hint;
+        // Only a tracking hint is replaced on recovery; other messages are left alone. A camera
+        // switch reports its own stages and result instead.
+        if (cameraSwitch.running) { /* the switch says what is happening */ } else if (hint) element('view-status').textContent = hint;
         else if (trackingHint) element('view-status').textContent = viewInstruction();
         trackingHint = hint;
         // A loss during a hold is kept from Python, which would drop the object; the aim holds.
@@ -98,6 +108,23 @@ function chooseTracking(): void {
   if (mode !== loggedMode) movementLog.event('mode', mode);
   loggedMode = mode;
 }
+/** The engine's last pose as it gave it, for measuring a camera switch. */
+let lastRawPose: RoomPose | null = null;
+// `?switch-timeout-ms=` shortens the wait for tracking after a switch, for tests.
+const switchTimeout = Number(new URLSearchParams(location.search).get('switch-timeout-ms')) || undefined;
+/** The camera-switch experiment (#74): pause the engine, use the front camera, resume. */
+const cameraSwitch = new CameraSwitch({
+  pauseEngine: () => measured?.pause(),
+  resumeEngine: () => measured?.resume(),
+  openFrontCamera: () => navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false }),
+  rawPose: () => lastRawPose,
+  status: message => {
+    // A switch cancelled by closing the room view has nowhere to show its result.
+    if (roomViewOpen) element('view-status').textContent = message;
+    controls();
+  },
+  log: (name, detail, data) => movementLog.event(name, detail, data),
+}, switchTimeout);
 /** The mode last written to the movement log, so each change is logged once. */
 let loggedMode = '';
 /** What the status line says about tracking, or empty while tracking is fine. */
@@ -227,6 +254,8 @@ function controls(): void {
   element('phone-controls').hidden = role !== 'mobile_master';
   for (const id of ['walk-reset', 'walk-length']) element(id).hidden = tracking !== steps || !steps.active;
   element('recentre').hidden = tracking !== measured || !measured.active;
+  element('switch-cameras').hidden = tracking !== measured || !measured.active;
+  element<HTMLButtonElement>('switch-cameras').disabled = cameraSwitch.running;
   element('tracking-mode').textContent = tracking === measured ? 'Tracking · 8th Wall, measured' : 'Tracking · step counting';
   element('walk-length').textContent = `Step ${steps.stepLength.toFixed(1)} m`;
   depthButton.textContent = depth.getPhase() !== 'off' ? 'Cancel measuring' :
@@ -252,6 +281,8 @@ function setRoomView(open: boolean): void {
   document.documentElement.classList.toggle('room-view-open', open);
   if (!open) {
     if (selected !== null) requestSelection(null);
+    cameraSwitch.cancel();
+    lastRawPose = null;
     gaze.stop();
     depth.stop();
     // Height measurement may have started step turning alongside the engine; stop both. Closing an
@@ -464,6 +495,10 @@ function handleRoomTouches(sceneView: DiagnosticScene): void {
       press.timer = window.setTimeout(() => {
         const version = state?.room.room_version;
         if (!press || selected === null || version === null || version === undefined) return;
+        if (cameraSwitch.running) {
+          element('view-status').textContent = 'Wait for the camera switch to finish before picking it up';
+          return;
+        }
         // Python refuses a hold without a position; say why here instead.
         if (tracking.status !== 'tracked') {
           element('view-status').textContent = trackingHint || 'Wait for tracking before picking it up';
@@ -625,6 +660,14 @@ element('walk-reset').addEventListener('click', () => {
   endHold();
   publishPose(steps.reset());
   element('view-status').textContent = 'Back at the start';
+});
+element('switch-cameras').addEventListener('click', () => {
+  // Switching while carrying, or picking up, would leave the box with no aim to follow.
+  if (ownHold() !== null || holding) {
+    element('view-status').textContent = 'Let go of the box before switching cameras';
+    return;
+  }
+  void cameraSwitch.run().finally(controls);
 });
 element('recentre').addEventListener('click', () => {
   // Recentring must not carry a held object along with the room.

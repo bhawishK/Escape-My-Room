@@ -8,7 +8,7 @@ import type { TrackingStatus } from './protocol';
 export type TrackingMode = 'measured' | 'steps';
 
 type Entry =
-  | { t: number; kind: 'event'; name: string; detail: string }
+  | { t: number; kind: 'event'; name: string; detail: string; data?: Record<string, unknown> }
   | {
     t: number; kind: 'pose'; mode: TrackingMode; status: TrackingStatus;
     x: number; y: number; z: number; heading: number; pitch: number;
@@ -34,8 +34,9 @@ export class MovementLog {
     this.startedIso = new Date().toISOString();
   }
 
-  event(name: string, detail: string, now = performance.now()): void {
-    this.add({ t: this.time(now), kind: 'event', name, detail });
+  /** Records an event; `data` holds measurements to compare across events, such as camera switches. */
+  event(name: string, detail: string, data?: Record<string, unknown>, now = performance.now()): void {
+    this.add({ t: this.time(now), kind: 'event', name, detail, ...(data ? { data } : {}) });
   }
 
   /** Records where tracking says the phone is, at most ten times a second. */
