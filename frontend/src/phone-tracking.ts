@@ -9,7 +9,10 @@ import type { Floorplan } from './steps';
 
 export interface PhoneTracking {
   readonly active: boolean;
-  /** `tracked` while the source is running, otherwise `inactive`. */
+  /**
+   * Whether the pose can be trusted: `tracked`, `lost` (running, with the last good pose held), or
+   * `inactive` (stopped, or still starting). Running is `active`, not this.
+   */
   readonly status: TrackingStatus;
   /** Call from a tap: iPhone asks for sensor permission and only allows it during a gesture. */
   start(): Promise<void>;
