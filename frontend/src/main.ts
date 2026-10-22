@@ -108,6 +108,9 @@ function chooseTracking(): void {
   if (mode !== loggedMode) movementLog.event('mode', mode);
   loggedMode = mode;
 }
+/** The held, sensor-turned view last sent to Python, so an unchanged one is not sent again. */
+let lastHeldKey = '';
+const poseKey = (pose: RoomPose) => [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w].map(v => v.toFixed(3)).join();
 /** The engine's last pose as it gave it, for measuring a camera switch. */
 let lastRawPose: RoomPose | null = null;
 // `?switch-timeout-ms=` shortens the wait for tracking after a switch, for tests.
@@ -577,7 +580,10 @@ try {
           pose.position, headingOf(pose.orientation), pitchOf(pose.orientation), carryFloor, carryBounds, margin));
       }
       // Carrying sends the aim on time; measured tracking sends each new pose, at the same rate.
-      const newPose = tracking === measured && measuredUnsent;
+      // While the engine is away the view turns with the sensor; each new turn is sent at the same rate.
+      const heldTurned = tracking === measured && measured.viewHeld && poseKey(pose) !== lastHeldKey;
+      const newPose = tracking === measured && (measuredUnsent || heldTurned);
+      if (heldTurned) lastHeldKey = poseKey(pose);
       // A held pose is not sent as tracked: while tracking is lost, Python keeps the last aim.
       if ((mine || newPose) && tracking.status === 'tracked' && time - lastCarryPose >= CARRY_POSE_MS) {
         lastCarryPose = time;
