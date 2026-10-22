@@ -3,6 +3,7 @@
  * use the front camera briefly, and resume the engine, timing every stage. It answers how long the
  * phone is without the back camera and whether the engine keeps tracking or starts over.
  */
+import type { Correction } from './engine-tracking';
 import { yawOf, type RoomPose } from './phone-view';
 
 /**
@@ -16,6 +17,8 @@ const FRONT_FIRST_FRAME_LIMIT_MS = 1500;
 export interface CameraSwitchHooks {
   pauseEngine(): void;
   resumeEngine(): void;
+  /** The switch is over, whether or not tracking came back. */
+  switchEnded(): void;
   openFrontCamera(): Promise<MediaStream>;
   /** Starts anything the eye measurement needs, such as its model, as the switch begins. */
   prepareEyes(): void;
@@ -43,6 +46,7 @@ export class CameraSwitch {
   private after: RoomPose | null = null;
   /** Ends the current wait early: tracking is back, or the switch was cancelled. */
   private wake: (() => void) | null = null;
+  private correction: Correction | null = null;
   private cancelWait: (() => void) | null = null;
 
   /** `timeoutMs` is how long the engine has after resuming to track normally again. */
@@ -66,12 +70,19 @@ export class CameraSwitch {
       // A normal frame before this was not tracking coming back.
       this.normalAt = null;
       this.after = null;
+      this.correction = null;
     }
     if (status === 'NORMAL' && this.normalAt === null) {
       this.normalAt = this.since();
       this.after = raw;
       this.wake?.();
     }
+  }
+
+  /** How the room was lined up again when tracking came back, forwarded while a switch runs. */
+  corrected(correction: Correction): void {
+    // The latest wins: a restart after a stale normal frame lines up again.
+    if (this.switching && this.resumedAt !== null) this.correction = correction;
   }
 
   /** Ends a switch at once, for example when the room view closes; the front camera is closed. */
@@ -141,9 +152,10 @@ export class CameraSwitch {
     Object.assign(data, {
       outcome, initializing: this.initializing, resumed_ms: this.resumedAt, back_video_ms: this.backVideoAt,
       first_pose_ms: this.firstPoseAt, normal_ms: this.normalAt, no_back_camera_ms: withoutBack,
-      total_ms: this.since(), offset: this.offset(),
+      total_ms: this.since(), offset: this.offset(), correction: this.correction ?? { applied: false },
     });
     this.hooks.log('camera switch', outcome, data);
+    this.hooks.switchEnded();
     const gap = withoutBack === null ? '' : ` · ${(withoutBack / 1000).toFixed(1)} s without the back camera`;
     this.hooks.status(`Switched cameras${gap} · ${outcome}`);
     this.switching = false;
@@ -228,6 +240,7 @@ export class CameraSwitch {
     this.initializing = false;
     this.before = null;
     this.after = null;
+    this.correction = null;
   }
 
   private since(): number { return Math.round(performance.now() - this.startedAt); }

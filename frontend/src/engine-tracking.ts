@@ -79,7 +79,7 @@ interface EngineEvents {
   /** This source's status changed; `hint` says what to do about it, empty when tracked. */
   status: (status: TrackingStatus, hint: string) => void;
   /** After a loss, the room was lined up again with where the phone was; `detail` says by how much. */
-  realigned: (detail: string) => void;
+  realigned: (detail: string, correction: Correction) => void;
   error: (message: string) => void;
   /** Every frame as the engine gives it, before it is held or lined up: for measuring camera switches. */
   frame?: (status: string, reason: string, raw: RoomPose) => void;
@@ -93,6 +93,15 @@ const RESTART_FACING = 30 * Math.PI / 180;
 
 // Every loss on the iPhone came with the phone pointing this far down or more, at the plain floor.
 const STEEP_DOWN = -50 * Math.PI / 180;
+
+/** How the room is lined up with the engine after a recovery from a loss or a camera switch. */
+export interface Correction {
+  /** Whether this recovery changed the line-up; when false, the one before stays in effect. */
+  applied: boolean;
+  /** The turn about the vertical, and the shift, in effect on the engine's poses from now on. */
+  yaw_deg: number;
+  shift_m: { x: number; y: number; z: number };
+}
 
 export class EngineTracking implements PhoneTracking {
   private running = false;
@@ -118,6 +127,13 @@ export class EngineTracking implements PhoneTracking {
   private readonly scratchRaw = new THREE.Quaternion();
   /** The last good pose when tracking was lost, and the turn sensor's heading then. */
   private lostFrom: RoomPose | null = null;
+  /**
+   * Why the view is held: a loss, when the person may walk on, or a camera switch, made standing
+   * still. It is kept with the hold, so it ends when the hold does.
+   */
+  private lostFor: 'loss' | 'switch' = 'loss';
+  /** Whether a camera switch is under way: from `pause` until `endSwitch`. */
+  private switching = false;
   private turnAtLoss: number | null = null;
   /** The orientation sensor, which keeps measuring turns while the engine is lost. */
   private readonly look = new PhoneLook();
@@ -230,6 +246,8 @@ export class EngineTracking implements PhoneTracking {
   stop(): void {
     this.attempts++;
     this.heldFrom = null;
+    this.switching = false;
+    this.lostFor = 'loss';
     this.look.stop();
     if (!this.running) return;
     this.engine.stop();
@@ -245,8 +263,23 @@ export class EngineTracking implements PhoneTracking {
    */
   pause(): void {
     if (!this.running) return;
-    if (this.latest) this.hold(this.latest);
+    this.switching = true;
+    // Already lost, the person may have walked on: the switch holds from where the view is now.
+    if (this.heldFrom) {
+      const here = this.pose();
+      this.heldFrom = null;
+      this.hold(here);
+    } else if (this.latest) this.hold(this.latest);
     this.engine.pause();
+  }
+
+  /**
+   * A camera switch has finished. A hold still waiting for tracking becomes an ordinary loss: from
+   * here the person may walk, so a later recovery keeps where the engine finds itself.
+   */
+  endSwitch(): void {
+    this.switching = false;
+    this.lostFor = 'loss';
   }
 
   /**
@@ -259,6 +292,8 @@ export class EngineTracking implements PhoneTracking {
     this.heldTurn = this.turnFor(from, this.look.orientation());
     this.lostFrom = from;
     this.turnAtLoss = this.turnYaw();
+    // During a switch, even a loss after a stale normal frame is the switch's to line up.
+    this.lostFor = this.switching ? 'switch' : 'loss';
   }
 
   resume(): void {
@@ -277,6 +312,7 @@ export class EngineTracking implements PhoneTracking {
 
   /** Back to the engine's own world, as at the start. */
   private straighten(): void {
+    this.lostFor = 'loss';
     this.yaw = 0;
     this.turn.identity();
     this.shift.set(0, 0, 0);
@@ -292,12 +328,26 @@ export class EngineTracking implements PhoneTracking {
    */
   private recover(raw: RoomPose, from: RoomPose): void {
     this.lostFrom = null;
-    const away = Math.hypot(raw.position.x - START_EYE.x, raw.position.z - START_EYE.z);
-    if (away > RESTART_NEAR || Math.abs(yawOf(raw.orientation)) > RESTART_FACING) {
-      this.events.realigned(`kept: the engine found its place again, ${away.toFixed(2)} m from the start`);
+    // A camera switch is made standing still, so whatever the engine says, the phone is where it was.
+    if (this.lostFor === 'switch') {
+      this.lostFor = 'loss';
+      this.lineUp(raw, from, 'after a camera switch');
       return;
     }
-    this.lineUp(raw, from);
+    const away = Math.hypot(raw.position.x - START_EYE.x, raw.position.z - START_EYE.z);
+    if (away > RESTART_NEAR || Math.abs(yawOf(raw.orientation)) > RESTART_FACING) {
+      this.events.realigned(`kept: the engine found its place again, ${away.toFixed(2)} m from the start`, this.correction(false));
+      return;
+    }
+    this.lineUp(raw, from, 'engine restarted');
+  }
+
+  private correction(applied: boolean): Correction {
+    const round = (value: number) => Math.round(value * 1000) / 1000 + 0;
+    return {
+      applied, yaw_deg: Math.round(this.yaw * 180 / Math.PI * 10) / 10 + 0,
+      shift_m: { x: round(this.shift.x), y: round(this.shift.y), z: round(this.shift.z) },
+    };
   }
 
   /**
@@ -305,7 +355,7 @@ export class EngineTracking implements PhoneTracking {
    * was, facing as far round from then as the turn sensor says it turned. Height is kept too, since
    * the restarted engine's height was 0.9-2.8 m off on the iPhone.
    */
-  private lineUp(raw: RoomPose, from: RoomPose): void {
+  private lineUp(raw: RoomPose, from: RoomPose, why: string): void {
     const now = this.turnYaw();
     const turned = now !== null && this.turnAtLoss !== null ? now - this.turnAtLoss : 0;
     this.yaw = yawOf(from.orientation) + turned - yawOf(raw.orientation);
@@ -314,8 +364,8 @@ export class EngineTracking implements PhoneTracking {
     this.shift.set(from.position.x, from.position.y, from.position.z).sub(turnedRaw);
     this.turnAtLoss = null;
     const p = from.position;
-    this.events.realigned(`lined up: engine restarted at (${raw.position.x.toFixed(2)}, ${raw.position.y.toFixed(2)}, ${raw.position.z.toFixed(2)}); ` +
-      `kept the last good place (${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}), turned ${(turned * 180 / Math.PI).toFixed(0)}° while lost`);
+    this.events.realigned(`lined up, ${why}: engine at (${raw.position.x.toFixed(2)}, ${raw.position.y.toFixed(2)}, ${raw.position.z.toFixed(2)}); ` +
+      `kept the last good place (${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}), turned ${(turned * 180 / Math.PI).toFixed(0)}° meanwhile`, this.correction(true));
   }
 
   private intoRoom(raw: RoomPose): RoomPose {
