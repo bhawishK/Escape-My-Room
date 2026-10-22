@@ -7,6 +7,7 @@ export interface EngineCalls {
   modules: string[];
   runs: number;
   stops: number;
+  recenters: number;
   cameraFeed: boolean;
 }
 
@@ -22,7 +23,7 @@ function installFakeEngine(): void {
     onUpdate?: (args: unknown) => void;
   };
   let modules: Module[] = [];
-  const calls = { configure: [] as unknown[], origins: [] as unknown[], modules: [] as string[], runs: 0, stops: 0, cameraFeed: false };
+  const calls = { configure: [] as unknown[], origins: [] as unknown[], modules: [] as string[], runs: 0, stops: 0, recenters: 0, cameraFeed: false };
   const engine = {
     addCameraPipelineModule(module: Module) { modules.push(module); calls.modules.push(module.name); },
     addCameraPipelineModules(added: Module[]) { added.forEach(module => engine.addCameraPipelineModule(module)); },
@@ -37,7 +38,7 @@ function installFakeEngine(): void {
     XrController: {
       configure(options: unknown) { calls.configure.push(options); },
       updateCameraProjectionMatrix(options: unknown) { calls.origins.push(options); },
-      recenter() {},
+      recenter() { calls.recenters++; },
       pipelineModule: () => ({ name: 'reality' }),
     },
     XrDevice: { isDeviceBrowserCompatible: () => true, incompatibleReasons: () => [] },

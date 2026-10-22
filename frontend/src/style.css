@@ -34,6 +34,8 @@ html.room-view-open, html.room-view-open body { overflow: hidden; }
 #room-view-hud { position: fixed; inset: 0; z-index: 31; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); }
 #room-view-hud[hidden] { display: none; }
 .hud-status { pointer-events: auto; align-self: center; margin: 0; padding: 8px 14px; border-radius: 999px; background: #08111ee0; color: #e0eaf3; font-size: 14px; text-align: center; }
+.hud-top { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.hud-mode { margin: 0; color: #c3cfdb; font-size: 11px; text-shadow: 0 1px 2px #000; }
 .hud-buttons { pointer-events: auto; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 .hud-buttons button { flex: 1 1 140px; }
 .hud-buttons button[hidden] { display: none; }

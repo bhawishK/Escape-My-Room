@@ -2,8 +2,9 @@
  * Measured phone tracking from the 8th Wall engine: its back camera and motion sensors together
  * give where the phone is in metres and which way it faces. The camera image is never drawn.
  */
+import * as THREE from 'three';
 import type { PhoneTracking } from './phone-tracking';
-import { START_EYE, START_VIEW, pitchOf, type RoomPose } from './phone-view';
+import { PhoneLook, START_EYE, START_VIEW, pitchOf, type RoomPose } from './phone-view';
 import type { Position, Rotation, TrackingStatus } from './protocol';
 
 /** One frame of the engine's world tracking. */
@@ -33,6 +34,7 @@ export interface Engine {
   XrController: {
     configure(options: { scale: 'absolute' | 'responsive' }): void;
     updateCameraProjectionMatrix(options: { origin: Position; facing: Rotation }): void;
+    recenter(): void;
     pipelineModule(): PipelineModule;
   };
   XrDevice: {
@@ -73,10 +75,25 @@ interface EngineEvents {
   tracking: (status: string, reason: string) => void;
   /** This source's status changed; `hint` says what to do about it, empty when tracked. */
   status: (status: TrackingStatus, hint: string) => void;
+  /** After a loss, the room was lined up again with where the phone was; `detail` says by how much. */
+  realigned: (detail: string) => void;
   error: (message: string) => void;
 }
 
 const STARTING_HINT = 'Starting tracking · move the phone gently';
+const UP = new THREE.Vector3(0, 1, 0);
+// How near the start, and how close to facing the desk, a recovery must be to count as a restart.
+const RESTART_NEAR = 0.5;
+const RESTART_FACING = 30 * Math.PI / 180;
+
+/**
+ * The turn about the vertical, 0 facing the desk and positive to the left. Unlike the forward
+ * vector's heading it stays steady when the phone points almost straight down, as before a loss.
+ */
+function yawOf(orientation: Rotation): number {
+  const q = new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w);
+  return new THREE.Euler().setFromQuaternion(q, 'YXZ').y;
+}
 // Every loss on the iPhone came with the phone pointing this far down or more, at the plain floor.
 const STEEP_DOWN = -50 * Math.PI / 180;
 
@@ -91,6 +108,22 @@ export class EngineTracking implements PhoneTracking {
   private normal = false;
   private everNormal = false;
   private reported: TrackingStatus = 'inactive';
+  /**
+   * Turns (about the vertical) and then shifts the engine's poses into the room. After a loss the
+   * engine restarts at the starting viewpoint, wherever the phone really is, so this lines it up
+   * again with the last good pose.
+   */
+  private yaw = 0;
+  private readonly turn = new THREE.Quaternion();
+  private readonly shift = new THREE.Vector3();
+  private readonly scratch = new THREE.Vector3();
+  private readonly scratchTurn = new THREE.Quaternion();
+  private readonly scratchRaw = new THREE.Quaternion();
+  /** The last good pose when tracking was lost, and the turn sensor's heading then. */
+  private lostFrom: RoomPose | null = null;
+  private turnAtLoss: number | null = null;
+  /** The orientation sensor, which keeps measuring turns while the engine is lost. */
+  private readonly look = new PhoneLook();
 
   constructor(private readonly engine: Engine, private readonly canvas: HTMLCanvasElement, private readonly events: EngineEvents) {}
 
@@ -112,16 +145,25 @@ export class EngineTracking implements PhoneTracking {
   async start(): Promise<void> {
     if (this.running) return;
     const attempt = ++this.attempts;
-    await Promise.all([DeviceOrientationEvent, DeviceMotionEvent].map(event => {
-      const request = (event as unknown as { requestPermission?: () => Promise<string> }).requestPermission;
-      return typeof request === 'function' ? request.call(event).catch(() => 'denied') : 'granted';
-    }));
+    const motion = (DeviceMotionEvent as unknown as { requestPermission?: () => Promise<string> }).requestPermission;
+    await Promise.all([
+      // Without turn readings, a loss is lined up again as if the phone had not turned.
+      this.look.active ? undefined : this.look.start().catch(error => {
+        this.events.error(`orientation sensor unavailable, so turns while lost are not measured: ${error instanceof Error ? error.message : String(error)}`);
+      }),
+      typeof motion === 'function' ? motion.call(DeviceMotionEvent).catch(() => 'denied') : 'granted',
+    ]);
     // Stopped, or started again, while the person answered the permission prompt.
-    if (attempt !== this.attempts) return;
+    if (attempt !== this.attempts) {
+      // The turn sensor may have started after the stop; a later start starts it again.
+      if (!this.running) this.look.stop();
+      return;
+    }
     this.latest = null;
     this.engineStatus = '';
     this.normal = false;
     this.everNormal = false;
+    this.straighten();
     const { engine } = this;
     engine.XrController.configure({ scale: 'absolute' });
     engine.clearCameraPipelineModules();
@@ -144,10 +186,17 @@ export class EngineTracking implements PhoneTracking {
             this.events.tracking(reality.trackingStatus ?? 'unknown', reality.trackingReason ?? 'unknown');
           }
           // Limited poses are guesses, metres or tens of metres off on the iPhone; hold the last good one.
+          const wasNormal = this.normal;
           this.normal = reality.trackingStatus !== 'LIMITED';
+          if (wasNormal && !this.normal && this.latest) {
+            this.lostFrom = this.latest;
+            this.turnAtLoss = this.turnYaw();
+          }
           if (this.normal) {
             this.everNormal = true;
-            this.latest = { position: { x: p.x, y: p.y, z: p.z }, orientation: { x: r.x, y: r.y, z: r.z, w: r.w } };
+            const raw = { position: { x: p.x, y: p.y, z: p.z }, orientation: { x: r.x, y: r.y, z: r.z, w: r.w } };
+            if (this.lostFrom) this.recover(raw, this.lostFrom);
+            this.latest = this.intoRoom(raw);
           }
           this.reportStatus();
           if (this.normal) this.events.moved(this.latest!);
@@ -176,9 +225,71 @@ export class EngineTracking implements PhoneTracking {
 
   stop(): void {
     this.attempts++;
+    this.look.stop();
     if (!this.running) return;
     this.engine.stop();
     this.running = false;
+  }
+
+  /** Makes where the phone is now the starting viewpoint facing the desk. */
+  recenter(): void {
+    if (!this.running) return;
+    this.straighten();
+    this.engine.XrController.recenter();
+  }
+
+  /** Back to the engine's own world, as at the start. */
+  private straighten(): void {
+    this.yaw = 0;
+    this.turn.identity();
+    this.shift.set(0, 0, 0);
+    this.lostFrom = null;
+    this.turnAtLoss = null;
+  }
+
+  /**
+   * After a loss, the engine either finds its place again or restarts at the starting viewpoint
+   * facing the desk, wherever the phone really is. On the iPhone every restart came back within
+   * 0.1 m of the start and 15° of the desk. Only a restart is lined up again with the last good pose;
+   * a found place is kept, so movement during the loss is not thrown away.
+   */
+  private recover(raw: RoomPose, from: RoomPose): void {
+    this.lostFrom = null;
+    const away = Math.hypot(raw.position.x - START_EYE.x, raw.position.z - START_EYE.z);
+    if (away > RESTART_NEAR || Math.abs(yawOf(raw.orientation)) > RESTART_FACING) {
+      this.events.realigned(`kept: the engine found its place again, ${away.toFixed(2)} m from the start`);
+      return;
+    }
+    this.lineUp(raw, from);
+  }
+
+  /**
+   * Lines the engine's restarted world up with the last good pose: the phone is taken to be where it
+   * was, facing as far round from then as the turn sensor says it turned. Height is kept too, since
+   * the restarted engine's height was 0.9-2.8 m off on the iPhone.
+   */
+  private lineUp(raw: RoomPose, from: RoomPose): void {
+    const now = this.turnYaw();
+    const turned = now !== null && this.turnAtLoss !== null ? now - this.turnAtLoss : 0;
+    this.yaw = yawOf(from.orientation) + turned - yawOf(raw.orientation);
+    this.turn.setFromAxisAngle(UP, this.yaw);
+    const turnedRaw = this.scratch.set(raw.position.x, raw.position.y, raw.position.z).applyQuaternion(this.turn);
+    this.shift.set(from.position.x, from.position.y, from.position.z).sub(turnedRaw);
+    this.turnAtLoss = null;
+    const p = from.position;
+    this.events.realigned(`lined up: engine restarted at (${raw.position.x.toFixed(2)}, ${raw.position.y.toFixed(2)}, ${raw.position.z.toFixed(2)}); ` +
+      `kept the last good place (${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}), turned ${(turned * 180 / Math.PI).toFixed(0)}° while lost`);
+  }
+
+  private intoRoom(raw: RoomPose): RoomPose {
+    const p = this.scratch.set(raw.position.x, raw.position.y, raw.position.z).applyQuaternion(this.turn).add(this.shift);
+    const o = this.scratchTurn.copy(this.turn).multiply(this.scratchRaw.set(raw.orientation.x, raw.orientation.y, raw.orientation.z, raw.orientation.w));
+    return { position: { x: p.x, y: p.y, z: p.z }, orientation: { x: o.x, y: o.y, z: o.z, w: o.w } };
+  }
+
+  private turnYaw(): number | null {
+    const turned = this.look.orientation();
+    return turned ? yawOf(turned) : null;
   }
 
   pose(): RoomPose { return this.latest ?? START_VIEW; }

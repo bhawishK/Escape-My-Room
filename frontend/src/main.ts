@@ -86,6 +86,7 @@ function chooseTracking(): void {
         // A loss during a hold is kept from Python, which would drop the object; the aim holds.
         if (connected && ownHold() === null) publishTracking();
       },
+      realigned: detail => movementLog.event('realigned', detail),
       error: message => movementLog.event('engine error', message),
     });
     if (tracking !== measured) {
@@ -225,6 +226,8 @@ function controls(): void {
   element('vr-controls').hidden = role !== 'vr_solver';
   element('phone-controls').hidden = role !== 'mobile_master';
   for (const id of ['walk-reset', 'walk-length']) element(id).hidden = tracking !== steps || !steps.active;
+  element('recentre').hidden = tracking !== measured || !measured.active;
+  element('tracking-mode').textContent = tracking === measured ? 'Tracking · 8th Wall, measured' : 'Tracking · step counting';
   element('walk-length').textContent = `Step ${steps.stepLength.toFixed(1)} m`;
   depthButton.textContent = depth.getPhase() !== 'off' ? 'Cancel measuring' :
     measuredHeight === null ? 'Measure height' : 'Measure again';
@@ -622,6 +625,13 @@ element('walk-reset').addEventListener('click', () => {
   endHold();
   publishPose(steps.reset());
   element('view-status').textContent = 'Back at the start';
+});
+element('recentre').addEventListener('click', () => {
+  // Recentring must not carry a held object along with the room.
+  endHold();
+  measured?.recenter();
+  // While lost, the loss hint stays: it says what to do first.
+  if (tracking.status === 'tracked') element('view-status').textContent = 'Recentred · this is now the start, facing the desk';
 });
 element('walk-length').addEventListener('click', () => {
   steps.stepLength = STEP_LENGTHS[(STEP_LENGTHS.indexOf(steps.stepLength as typeof STEP_LENGTHS[number]) + 1) % STEP_LENGTHS.length];

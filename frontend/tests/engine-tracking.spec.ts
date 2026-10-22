@@ -110,6 +110,7 @@ test('a loss holds the view, tells the headset the phone is lost, and recovery t
   await expect(vr.getByTestId('tracking')).toHaveText('Lost · position unavailable');
   // The phone stops reporting where it is, so the headset marks it stale at the last good place.
   await expect(vr.getByTestId('presence-phone')).toHaveText('Phone · stale · 0.50, 1.50, 1.00 m · heading 0.00 rad', { timeout: 5000 });
+  // The engine finds its place again, away from the start, so its pose is kept as it is.
   await engineFrame(phone, { x: 0.6, y: 1.5, z: 0.9 });
   await expect(vr.getByTestId('tracking')).toHaveText('Tracked');
   await expect(vr.getByTestId('marker-position')).toHaveText('0.60, 1.50, 0.90 m');
@@ -156,6 +157,94 @@ test('a loss while carrying the box keeps the hold, and letting go then drops it
   await phone.mouse.up();
   await expect(phone.getByTestId('view-status')).toHaveText('Dropped box');
   await expect(vr.getByTestId('tracking')).toHaveText('Lost · position unavailable');
+  await phone.close();
+  await vr.close();
+});
+
+test('after a loss the engine restarts at the start, so the room is lined up again with where the phone was', async ({ browser }) => {
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const vr = await browser.newPage();
+  await useFakeEngine(phone);
+  await vr.goto('/');
+  await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
+  await phone.goto('/');
+  await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  // Standing beside the cabinet, facing a quarter left, when tracking is lost.
+  const quarterLeft = { x: 0, y: Math.sin(Math.PI / 4), z: 0, w: Math.cos(Math.PI / 4) };
+  await engineFrame(phone, { x: 1.4, y: 1.46, z: -0.6 }, quarterLeft);
+  await expect(vr.getByTestId('marker-position')).toHaveText('1.40, 1.46, -0.60 m');
+  await engineFrame(phone, { x: 9, y: 9, z: 9 }, quarterLeft, INITIALIZING);
+  // Recovered, the engine says the phone is back at the start facing the desk, 2.8 m higher, as on the iPhone.
+  await engineFrame(phone, { x: 0, y: 4.26, z: 1.5 });
+  await expect(vr.getByTestId('marker-position')).toHaveText('1.40, 1.46, -0.60 m');
+  await expect(vr.getByTestId('presence-phone')).toContainText('heading 1.57 rad');
+  // Half a metre forward in the engine's new world is half a metre where the phone faces: toward -x.
+  await engineFrame(phone, { x: 0, y: 4.26, z: 1.0 });
+  await expect(vr.getByTestId('marker-position')).toHaveText('0.90, 1.46, -0.60 m');
+  await phone.close();
+  await vr.close();
+});
+
+test('in measured mode, Recentre makes where the phone is the start again; tapping the room never recentres', async ({ browser }) => {
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const vr = await browser.newPage();
+  await useFakeEngine(phone);
+  await vr.goto('/');
+  await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
+  await phone.goto('/');
+  await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await expect(phone.getByTestId('tracking-mode')).toHaveText('Tracking · 8th Wall, measured');
+  await expect(phone.getByRole('button', { name: 'Back to start', exact: true })).toBeHidden();
+  await expect(phone.getByRole('button', { name: 'Step 0.6 m', exact: true })).toBeHidden();
+  // A loss lines the room up with where the phone was.
+  await engineFrame(phone, { x: 1, y: 1.5, z: 0 });
+  await engineFrame(phone, { x: 1, y: 1.5, z: 0 }, undefined, INITIALIZING);
+  await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 });
+  await expect(vr.getByTestId('marker-position')).toHaveText('1.00, 1.50, 0.00 m');
+  await phone.mouse.click(195, 300);
+  expect((await engineCalls(phone)).recenters).toBe(0);
+  // Standing on the start facing the desk, the person recentres: the engine's start is the room's again.
+  await phone.getByRole('button', { name: 'Recentre', exact: true }).click();
+  expect((await engineCalls(phone)).recenters).toBe(1);
+  await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 });
+  await expect(vr.getByTestId('marker-position')).toHaveText('0.00, 1.50, 1.60 m');
+  await phone.close();
+  await vr.close();
+});
+
+test('counting steps, the phone says so and shows Back to start and step length, not Recentre', async ({ page }) => {
+  await page.route('**/@8thwall/**', route => route.abort());
+  await page.addInitScript(() => {
+    for (const event of [DeviceOrientationEvent, DeviceMotionEvent]) Object.assign(event, { requestPermission: async () => 'granted' });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await expect(page.getByTestId('tracking-mode')).toHaveText('Tracking · step counting');
+  await expect(page.getByRole('button', { name: 'Back to start', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Step 0.6 m', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Recentre', exact: true })).toBeHidden();
+});
+
+test('turning while tracking is lost is measured by the orientation sensor and kept when the room is lined up again', async ({ browser }) => {
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const vr = await browser.newPage();
+  await useFakeEngine(phone);
+  await vr.goto('/');
+  await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
+  await phone.goto('/');
+  await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  const turnSensor = (alpha: number) => phone.evaluate(alpha => {
+    window.dispatchEvent(new DeviceOrientationEvent('deviceorientation', { alpha, beta: 90, gamma: 0 }));
+  }, alpha);
+  await turnSensor(0);
+  await engineFrame(phone, { x: 0, y: 1.5, z: 1 });
+  await expect(vr.getByTestId('presence-phone')).toContainText('heading 0.00 rad');
+  await engineFrame(phone, { x: 0, y: 1.5, z: 1 }, undefined, INITIALIZING);
+  // Lost, the person turns a quarter to the left.
+  await turnSensor(90);
+  await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 });
+  await expect(vr.getByTestId('marker-position')).toHaveText('0.00, 1.50, 1.00 m');
+  await expect(vr.getByTestId('presence-phone')).toContainText('heading 1.57 rad');
   await phone.close();
   await vr.close();
 });

@@ -97,8 +97,12 @@
       </section>
     </main>
     <div id="room-view-hud" hidden>
-      <p id="view-status" data-testid="view-status" class="hud-status" role="status">Turning off</p>
+      <div class="hud-top">
+        <p id="view-status" data-testid="view-status" class="hud-status" role="status">Turning off</p>
+        <p id="tracking-mode" data-testid="tracking-mode" class="hud-mode"></p>
+      </div>
       <div class="hud-buttons">
+        <button id="recentre" class="secondary" hidden>Recentre</button>
         <button id="walk-reset" class="secondary" hidden>Back to start</button>
         <button id="walk-length" class="secondary" hidden>Step 0.6 m</button>
         <button id="gaze-toggle">Gaze cursor</button>
