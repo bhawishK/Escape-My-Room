@@ -4,16 +4,13 @@
  * Camera frames stay on the phone; only the face model is downloaded.
  */
 import type { FaceLandmarker } from '@mediapipe/tasks-vision';
-import wasmLoaderPath from '@mediapipe/tasks-vision/vision_wasm_internal.js?url';
-import wasmBinaryPath from '@mediapipe/tasks-vision/vision_wasm_internal.wasm?url';
 import { cameraError } from './camera';
+import { loadFaceModel } from './face-model';
 import {
   CALIBRATION_POINTS, TEST_POINTS, faceFeatures, fitMapping, meanFeatures, predict,
   type CalibrationSample, type CursorMode, type FaceFeatures, type Mapping, type ScreenPoint,
 } from './gaze';
 
-const FACE_MODEL_URL =
-  'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
 /** A tap uses the frames from just before it, while the person was looking at the dot. */
 const TAP_WINDOW_MS = 400;
 const MIN_TAP_FRAMES = 3;
@@ -54,17 +51,6 @@ export interface GazeElements {
   layer: HTMLElement;
   dot: HTMLElement;
   prompt: HTMLElement;
-}
-
-async function createLandmarker(): Promise<FaceLandmarker> {
-  const { FaceLandmarker } = await import('@mediapipe/tasks-vision');
-  const create = (delegate: 'GPU' | 'CPU') => FaceLandmarker.createFromOptions({ wasmLoaderPath, wasmBinaryPath }, {
-    baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate },
-    runningMode: 'VIDEO',
-    numFaces: 1,
-    outputFacialTransformationMatrixes: true,
-  });
-  return create('GPU').catch(() => create('CPU'));
 }
 
 export class GazeCursor {
@@ -139,8 +125,7 @@ export class GazeCursor {
       this.elements.video.srcObject = stream;
       this.elements.video.hidden = false;
       this.events.status('Loading face tracking…');
-      this.landmarker ??= createLandmarker().catch((error: unknown) => {
-        this.landmarker = null;
+      this.landmarker = loadFaceModel({ retryFailed: true }).catch((error: unknown) => {
         throw new Error(`Face tracking could not load. Check the internet connection, then try again. (${
           error instanceof Error ? error.message : 'unknown error'})`);
       });
