@@ -98,7 +98,10 @@ function chooseTracking(): void {
         // A loss during a hold is kept from Python, which would drop the object; the aim holds.
         if (connected && ownHold() === null) publishTracking();
       },
-      realigned: detail => movementLog.event('realigned', detail),
+      realigned: (detail, correction) => {
+        movementLog.event('realigned', detail, { ...correction });
+        cameraSwitch.corrected(correction);
+      },
       error: message => movementLog.event('engine error', message),
     });
     if (tracking !== measured) {
@@ -121,6 +124,7 @@ const switchTimeout = Number(new URLSearchParams(location.search).get('switch-ti
 const cameraSwitch = new CameraSwitch({
   pauseEngine: () => measured?.pause(),
   resumeEngine: () => measured?.resume(),
+  switchEnded: () => measured?.endSwitch(),
   openFrontCamera: () => navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false }),
   // Each switch may try a model that failed to load before; within a switch it is tried once.
   prepareEyes: () => { void loadFaceModel({ retryFailed: true }).catch(() => undefined); },
