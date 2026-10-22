@@ -20,7 +20,7 @@ export function fakeCameras(): void {
     const stream = canvas.captureStream(10);
     opened.push({ facing, stream, canvas });
     return stream;
-  } });
+  }, configurable: true, writable: true });
 }
 
 /** Which cameras are still running: "front", "back", or both. */

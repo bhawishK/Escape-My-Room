@@ -5,20 +5,22 @@
  */
 import { yawOf, type RoomPose } from './phone-view';
 
-/** How long the front camera stays on after its first picture, before eye measurement exists. */
-const FRONT_MS = 500;
 /**
  * How long tracking must stay normal after a switch before it counts as back: a resumed engine can
  * send one normal frame and then start initialising.
  */
 const SETTLE_MS = 1000;
 /** How long to wait for the front camera's first picture before giving up on it. */
-const FRONT_FIRST_FRAME_LIMIT_MS = 3000;
+const FRONT_FIRST_FRAME_LIMIT_MS = 1500;
 
 export interface CameraSwitchHooks {
   pauseEngine(): void;
   resumeEngine(): void;
   openFrontCamera(): Promise<MediaStream>;
+  /** Starts anything the eye measurement needs, such as its model, as the switch begins. */
+  prepareEyes(): void;
+  /** Measures the eyes from `video`, which shows the front camera; `cancelled` says to stop early. */
+  measureEyes(video: HTMLVideoElement, cancelled: () => boolean): Promise<Record<string, unknown>>;
   /** The engine's last pose as it gave it, before any lining up, or null before it has one. */
   rawPose(): RoomPose | null;
   status(message: string): void;
@@ -88,18 +90,38 @@ export class CameraSwitch {
     this.before = this.hooks.rawPose();
     this.hooks.log('camera switch start', 'pausing the engine for the front camera');
     this.hooks.status('Switching cameras · front camera');
+    this.hooks.prepareEyes();
     this.hooks.pauseEngine();
     const data: Record<string, unknown> = {};
+    // On the page but out of sight: a phone may stop decoding a video that is not on the page.
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.setAttribute('aria-hidden', 'true');
+    video.style.cssText = 'position: fixed; width: 1px; height: 1px; opacity: 0; pointer-events: none;';
+    document.body.append(video);
+    const why = (error: unknown) => (error instanceof Error ? error.message : String(error));
     try {
       this.front = await this.hooks.openFrontCamera();
-      // Cancelled while the camera was opening: close it at once.
-      if (this.cancelled) this.closeFront();
-      else data.front_first_frame_ms = await this.firstFrame(this.front);
       data.front_camera = 'opened';
-      if (!this.cancelled) await this.wait(FRONT_MS);
     } catch (error) {
-      data.front_camera = `not opened: ${error instanceof Error ? error.message : String(error)}`;
+      data.front_camera = `not opened: ${why(error)}`;
     }
+    // Cancelled while the camera was opening: it closes below at once.
+    if (this.front && !this.cancelled) {
+      video.srcObject = this.front;
+      try {
+        data.front_first_frame_ms = await this.firstFrame(video);
+        this.hooks.status('Switching cameras · measuring your eyes, look at the screen');
+        data.eyes = await this.hooks.measureEyes(video, () => this.cancelled);
+        data.eyes_ms = this.since();
+      } catch (error) {
+        data.eyes = { found: false, reason: why(error), frames: 0 };
+      }
+    }
+    data.eyes ??= { found: false, reason: this.cancelled ? 'cancelled' : 'front camera not opened', frames: 0 };
+    video.srcObject = null;
+    video.remove();
     this.closeFront();
     data.front_closed_ms = this.since();
     if (!this.cancelled) {
@@ -167,12 +189,8 @@ export class CameraSwitch {
     };
   }
 
-  /** Waits for the camera's first picture and says when it came, in milliseconds since the switch began. */
-  private async firstFrame(stream: MediaStream): Promise<number> {
-    const video = document.createElement('video');
-    video.muted = true;
-    video.playsInline = true;
-    video.srcObject = stream;
+  /** Waits for the camera's first picture in `video`, and says when it came since the switch began. */
+  private async firstFrame(video: HTMLVideoElement): Promise<number> {
     let timer = 0;
     try {
       await Promise.race([
@@ -182,13 +200,17 @@ export class CameraSwitch {
           void video.play().catch(() => undefined);
         }),
         new Promise<void>((_, reject) => {
-          timer = window.setTimeout(() => reject(new Error('no picture from the front camera')), FRONT_FIRST_FRAME_LIMIT_MS);
+          const started = performance.now();
+          // Checked often, so a cancel ends the wait at once.
+          timer = window.setInterval(() => {
+            if (this.cancelled) reject(new Error('cancelled'));
+            else if (performance.now() - started > FRONT_FIRST_FRAME_LIMIT_MS) reject(new Error('no picture from the front camera'));
+          }, 30);
         }),
       ]);
       return this.since();
     } finally {
-      clearTimeout(timer);
-      video.srcObject = null;
+      clearInterval(timer);
     }
   }
 
