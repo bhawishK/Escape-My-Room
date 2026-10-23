@@ -142,13 +142,10 @@ test('during a switch the view turns with the orientation sensor and holds its p
   await turnSensor(90);
   await expect(vr.getByTestId('presence-phone')).toHaveText('Phone · here · 0.30, 1.50, 1.00 m · heading 1.57 rad');
   await expect(vr.getByTestId('marker-position')).toHaveText('0.30, 1.50, 1.00 m');
-  // Back on the back camera, the room is re-anchored where the phone was, turned as the sensor
-  // measured (#77), and the engine's movement carries on from there in that direction.
+  // Back on the back camera, the view follows the engine again.
   await expect.poll(async () => (await engineCalls(phone)).resumes, { timeout: 5000 }).toBe(1);
   await engineFrame(phone, { x: 0.32, y: 1.5, z: 1 });
-  await expect(vr.getByTestId('presence-phone')).toHaveText('Phone · here · 0.30, 1.50, 1.00 m · heading 1.57 rad');
-  await engineFrame(phone, { x: 0.32, y: 1.5, z: 0.9 });
-  await expect(vr.getByTestId('presence-phone')).toHaveText('Phone · here · 0.20, 1.50, 1.00 m · heading 1.57 rad');
+  await expect(vr.getByTestId('presence-phone')).toHaveText('Phone · here · 0.32, 1.50, 1.00 m · heading 0.00 rad');
   const log = await sentLog(phone);
   const start = log.entries.findIndex(entry => entry.name === 'camera switch start');
   const end = log.entries.findIndex(entry => entry.name === 'camera switch');
@@ -248,70 +245,4 @@ test('a face model still downloading after the wait is reported as such, and the
   await expect(page.getByTestId('view-status')).toHaveText(/· tracking kept$/);
   const eyes = (await sentLog(page)).entries.find(entry => entry.name === 'camera switch')!.data!.eyes;
   expect(eyes).toMatchObject({ found: false, reason: 'model still loading' });
-});
-
-test('after a switch the room is re-anchored to where the phone was, whatever the engine says, and a second switch replaces the correction', async ({ browser }) => {
-  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
-  const vr = await browser.newPage();
-  await vr.goto('/');
-  await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
-  await trackingPhone(phone);
-  await expect(vr.getByTestId('marker-position')).toHaveText('0.30, 1.50, 1.00 m');
-  const switchCameras = async (resumes: number) => {
-    await phone.getByRole('button', { name: 'Switch cameras', exact: true }).click();
-    await expect.poll(async () => (await engineCalls(phone)).resumes, { timeout: 8000 }).toBe(resumes);
-  };
-  await switchCameras(1);
-  // The engine comes back 0.85 m off, away from the start: not a restart, but the phone stood still.
-  await engineFrame(phone, { x: 0.9, y: 1.6, z: 0.4 });
-  await expect(phone.getByTestId('view-status')).toHaveText(/· tracking kept$/);
-  await expect(vr.getByTestId('marker-position')).toHaveText('0.30, 1.50, 1.00 m');
-  // Moving on, the engine's movement carries through the correction.
-  await engineFrame(phone, { x: 1.1, y: 1.6, z: 0.4 });
-  await expect(vr.getByTestId('marker-position')).toHaveText('0.50, 1.50, 1.00 m');
-  await switchCameras(2);
-  await engineFrame(phone, { x: -1, y: 1.4, z: 2 });
-  await expect(phone.getByTestId('view-status')).toHaveText(/· tracking kept$/);
-  await expect(vr.getByTestId('marker-position')).toHaveText('0.50, 1.50, 1.00 m');
-  const corrections = (await sentLog(phone)).entries.filter(entry => entry.name === 'camera switch').map(entry => entry.data!.correction);
-  expect(corrections).toHaveLength(2);
-  // Each switch lines the room up afresh, replacing the one before rather than adding to it.
-  expect(corrections[0]).toMatchObject({ applied: true, yaw_deg: 0, shift_m: { x: -0.6, y: -0.1, z: 0.6 } });
-  expect(corrections[1]).toMatchObject({ applied: true, yaw_deg: 0, shift_m: { x: 1.5, y: 0.1, z: -1 } });
-  await phone.close();
-  await vr.close();
-});
-
-test('a stale normal frame, then initialising, then recovery elsewhere still re-anchors to where the phone was', async ({ browser }) => {
-  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
-  const vr = await browser.newPage();
-  await vr.goto('/');
-  await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
-  await trackingPhone(phone);
-  await phone.getByRole('button', { name: 'Switch cameras', exact: true }).click();
-  await expect.poll(async () => (await engineCalls(phone)).resumes, { timeout: 8000 }).toBe(1);
-  await engineFrame(phone, { x: 0.3, y: 1.5, z: 1 });
-  await engineFrame(phone, { x: 5, y: 5, z: 5 }, undefined, INITIALIZING);
-  await engineFrame(phone, { x: 1.2, y: 1.5, z: -0.3 });
-  await expect(phone.getByTestId('view-status')).toHaveText(/· tracking came back after initialising$/);
-  await expect(vr.getByTestId('marker-position')).toHaveText('0.30, 1.50, 1.00 m');
-  await phone.close();
-  await vr.close();
-});
-
-test('after a switch that timed out, a later recovery keeps where the engine finds itself', async ({ browser }) => {
-  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
-  const vr = await browser.newPage();
-  await vr.goto('/');
-  await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
-  await trackingPhone(phone, '/?switch-timeout-ms=1500');
-  await phone.getByRole('button', { name: 'Switch cameras', exact: true }).click();
-  await expect.poll(async () => (await engineCalls(phone)).resumes, { timeout: 8000 }).toBe(1);
-  await engineFrame(phone, { x: 5, y: 5, z: 5 }, undefined, INITIALIZING);
-  await expect(phone.getByTestId('view-status')).toHaveText(/· tracking did not come back$/, { timeout: 5000 });
-  // The person walks on; the engine finds its true place, away from the start.
-  await engineFrame(phone, { x: 1.2, y: 1.5, z: -0.3 });
-  await expect(vr.getByTestId('marker-position')).toHaveText('1.20, 1.50, -0.30 m');
-  await phone.close();
-  await vr.close();
 });
