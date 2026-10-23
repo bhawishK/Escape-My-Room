@@ -139,16 +139,22 @@ test('a loss while carrying the box keeps the hold, and letting go then drops it
   await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
   await expect(phone.getByTestId('room-status')).toHaveAttribute('data-available', 'true');
-  // Straight above the box, looking down, so it fills the middle of the screen.
-  const lookingDown = { x: Math.sin(-Math.PI / 4), y: 0, z: 0, w: Math.cos(-Math.PI / 4) };
-  await engineFrame(phone, { x: -0.5, y: 1.2, z: -0.4 }, lookingDown);
+  // 1.2 m back and up, tilted 45° down: the screen centre meets the floor at the box, which fills the
+  // middle of the screen, and holding it aims at its own place, so dropping it leaves it there. Its
+  // place comes from Python, since tests share one room.
+  const room = await (await phone.request.get('/api/room')).json() as { entities: { id: string; position: { x: number; z: number } }[] };
+  const box = room.entities.find(entity => entity.id === 'box')!.position;
+  const tilted = { x: Math.sin(-Math.PI / 8), y: 0, z: 0, w: Math.cos(-Math.PI / 8) };
+  await engineFrame(phone, { x: box.x, y: 1.2, z: box.z + 1.2 }, tilted);
   await expect(vr.getByTestId('tracking')).toHaveText('Tracked');
+  // The view moves to the new pose on its next drawn frame.
+  await phone.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await phone.mouse.click(195, 422);
   await expect(phone.getByTestId('view-status')).toHaveText('Box selected · press and hold it to pick it up');
   await phone.mouse.move(195, 422);
   await phone.mouse.down();
   await expect(phone.getByTestId('view-status')).toHaveText(/^Carrying box/);
-  await engineFrame(phone, { x: 9, y: 7, z: -12 }, lookingDown, INITIALIZING);
+  await engineFrame(phone, { x: 9, y: 7, z: -12 }, tilted, INITIALIZING);
   await expect(phone.getByTestId('view-status')).toHaveText(/^Tracking lost/);
   // Python would drop the box at a pose without a position, so none is sent while it is held.
   await phone.waitForTimeout(800);
