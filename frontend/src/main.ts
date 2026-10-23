@@ -7,10 +7,6 @@ import { GazeCursor } from './gaze-cursor';
 import { RoomPreparation } from './preparation';
 import { floorPoint } from './aim';
 import { MotionStats } from './motion-stats';
-import { AutoSwitchScheduler } from './auto-switch';
-import { CameraSwitch } from './camera-switch';
-import { measureEyes } from './eye-measure';
-import { loadFaceModel } from './face-model';
 import { EngineTracking, engineUnavailable, trackingEngine } from './engine-tracking';
 import { MovementLog, type TrackingMode } from './movement-log';
 import { StepTracking, type PhoneTracking } from './phone-tracking';
@@ -80,29 +76,17 @@ function chooseTracking(): void {
   if (engine) {
     measured ??= new EngineTracking(engine, element<HTMLCanvasElement>('engine-canvas'), {
       moved: () => { measuredUnsent = true; },
-      camera: status => {
-        movementLog.event('camera', status);
-        cameraSwitch.cameraStatus(status);
-      },
-      frame: (status, reason, raw) => {
-        // Only a pose the engine trusts is a fair `before` for measuring a switch.
-        if (status === 'NORMAL') lastRawPose = raw;
-        cameraSwitch.engineFrame(status, reason, raw);
-      },
+      camera: status => movementLog.event('camera', status),
       tracking: (status, reason) => movementLog.event('engine tracking', `${status} ${reason}`),
       status: (_, hint) => {
-        // Only a tracking hint is replaced on recovery; other messages are left alone. A camera
-        // switch reports its own stages and result instead.
-        if (cameraSwitch.running) { /* the switch says what is happening */ } else if (hint) element('view-status').textContent = hint;
+        // Only a tracking hint is replaced on recovery; other messages are left alone.
+        if (hint) element('view-status').textContent = hint;
         else if (trackingHint) element('view-status').textContent = viewInstruction();
         trackingHint = hint;
         // A loss during a hold is kept from Python, which would drop the object; the aim holds.
         if (connected && ownHold() === null) publishTracking();
       },
-      realigned: (detail, correction) => {
-        movementLog.event('realigned', detail, { ...correction });
-        cameraSwitch.corrected(correction);
-      },
+      realigned: detail => movementLog.event('realigned', detail),
       error: message => movementLog.event('engine error', message),
     });
     if (tracking !== measured) {
@@ -113,58 +97,6 @@ function chooseTracking(): void {
   const mode = engine ? 'measured' : `steps · ${engineUnavailable()}`;
   if (mode !== loggedMode) movementLog.event('mode', mode);
   loggedMode = mode;
-}
-/** The held, sensor-turned view last sent to Python, so an unchanged one is not sent again. */
-let lastHeldKey = '';
-const poseKey = (pose: RoomPose) => [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w].map(v => v.toFixed(3)).join();
-/** The engine's last pose as it gave it, for measuring a camera switch. */
-let lastRawPose: RoomPose | null = null;
-// `?switch-timeout-ms=` shortens the wait for tracking after a switch, for tests.
-const switchTimeout = Number(new URLSearchParams(location.search).get('switch-timeout-ms')) || undefined;
-/** The camera-switch experiment (#74): pause the engine, use the front camera, resume. */
-const cameraSwitch = new CameraSwitch({
-  pauseEngine: () => measured?.pause(),
-  resumeEngine: () => measured?.resume(),
-  switchEnded: () => measured?.endSwitch(),
-  openFrontCamera: () => navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false }),
-  // Each switch may try a model that failed to load before; within a switch it is tried once.
-  prepareEyes: () => { void loadFaceModel({ retryFailed: true }).catch(() => undefined); },
-  measureEyes: (video, cancelled) => measureEyes(video, cancelled),
-  rawPose: () => lastRawPose,
-  status: message => {
-    // A switch cancelled by closing the room view has nowhere to show its result.
-    if (roomViewOpen) element('view-status').textContent = message;
-    controls();
-  },
-  log: (name, detail, data) => movementLog.event(name, detail, data),
-}, switchTimeout);
-// `?auto-switch=off` stops automatic switches; `?auto-switch-scale=` shortens their timings, for tests.
-const switchParams = new URLSearchParams(location.search);
-const autoSwitchOn = switchParams.get('auto-switch') !== 'off';
-/** When the phone switches cameras by itself to measure the eyes (#86). */
-const scale = Number(switchParams.get('auto-switch-scale'));
-const autoSwitch = new AutoSwitchScheduler(scale > 0 ? Math.min(10, Math.max(0.01, scale)) : 1);
-/**
- * Whether a camera switch may start: tracking normal, the view not held for a loss or a switch. On
- * the iPhone, switches started otherwise never came back. Shared by the button and the scheduler.
- */
-const switchAllowed = () => tracking === measured && tracking.status === 'tracked' && !measured.viewHeld;
-/** Runs a camera switch and tells the scheduler how it went, so the next waits accordingly. */
-function switchCameras(trigger: 'manual' | 'automatic'): void {
-  if (cameraSwitch.running) return;
-  void cameraSwitch.run(trigger).then(summary => {
-    if (!summary) return;
-    const eyes = summary.eyes as { found?: boolean } | undefined;
-    autoSwitch.finished(performance.now(), {
-      worked: summary.outcome !== 'tracking did not come back' && summary.outcome !== 'cancelled' &&
-        summary.front_camera === 'opened',
-      eyesFound: eyes?.found === true,
-    });
-  }, (error: unknown) => {
-    // A switch that broke counts as failed, so the next waits long.
-    autoSwitch.finished(performance.now(), { worked: false, eyesFound: false });
-    movementLog.event('camera switch failed', error instanceof Error ? error.message : String(error));
-  }).finally(controls);
 }
 /** The mode last written to the movement log, so each change is logged once. */
 let loggedMode = '';
@@ -295,8 +227,6 @@ function controls(): void {
   element('phone-controls').hidden = role !== 'mobile_master';
   for (const id of ['walk-reset', 'walk-length']) element(id).hidden = tracking !== steps || !steps.active;
   element('recentre').hidden = tracking !== measured || !measured.active;
-  element('switch-cameras').hidden = tracking !== measured || !measured.active;
-  element<HTMLButtonElement>('switch-cameras').disabled = cameraSwitch.running;
   element('tracking-mode').textContent = tracking === measured ? 'Tracking · 8th Wall, measured' : 'Tracking · step counting';
   element('walk-length').textContent = `Step ${steps.stepLength.toFixed(1)} m`;
   depthButton.textContent = depth.getPhase() !== 'off' ? 'Cancel measuring' :
@@ -322,8 +252,6 @@ function setRoomView(open: boolean): void {
   document.documentElement.classList.toggle('room-view-open', open);
   if (!open) {
     if (selected !== null) requestSelection(null);
-    cameraSwitch.cancel();
-    lastRawPose = null;
     gaze.stop();
     depth.stop();
     // Height measurement may have started step turning alongside the engine; stop both. Closing an
@@ -536,10 +464,6 @@ function handleRoomTouches(sceneView: DiagnosticScene): void {
       press.timer = window.setTimeout(() => {
         const version = state?.room.room_version;
         if (!press || selected === null || version === null || version === undefined) return;
-        if (cameraSwitch.running) {
-          element('view-status').textContent = 'Wait for the camera switch to finish before picking it up';
-          return;
-        }
         // Python refuses a hold without a position; say why here instead.
         if (tracking.status !== 'tracked') {
           element('view-status').textContent = trackingHint || 'Wait for tracking before picking it up';
@@ -609,14 +533,6 @@ try {
       const pose = tracking.pose();
       sceneView.follow(pose);
       movementLog.pose(trackingMode(), tracking.status, pose);
-      if (tracking === measured) {
-        const now = performance.now();
-        autoSwitch.observe(now, switchAllowed(), pose);
-        // Nothing else may need the cameras, the box or the view; a selected box is about to be picked up.
-        const free = measured.active && !cameraSwitch.running && ownHold() === null && !holding &&
-          selected === null && gaze.getPhase() === 'off' && depth.getPhase() === 'off';
-        if (autoSwitchOn && autoSwitch.due(now, free)) switchCameras('automatic');
-      }
       const mine = ownHold();
       if (mine && carryFloor !== null) {
         // Drawn where the screen centre meets the floor now; Python confirms it a moment later.
@@ -626,10 +542,7 @@ try {
           pose.position, headingOf(pose.orientation), pitchOf(pose.orientation), carryFloor, carryBounds, margin));
       }
       // Carrying sends the aim on time; measured tracking sends each new pose, at the same rate.
-      // While the engine is away the view turns with the sensor; each new turn is sent at the same rate.
-      const heldTurned = tracking === measured && measured.viewHeld && poseKey(pose) !== lastHeldKey;
-      const newPose = tracking === measured && (measuredUnsent || heldTurned);
-      if (heldTurned) lastHeldKey = poseKey(pose);
+      const newPose = tracking === measured && measuredUnsent;
       // A held pose is not sent as tracked: while tracking is lost, Python keeps the last aim.
       if ((mine || newPose) && tracking.status === 'tracked' && time - lastCarryPose >= CARRY_POSE_MS) {
         lastCarryPose = time;
@@ -712,19 +625,6 @@ element('walk-reset').addEventListener('click', () => {
   endHold();
   publishPose(steps.reset());
   element('view-status').textContent = 'Back at the start';
-});
-element('switch-cameras').addEventListener('click', () => {
-  // Switching while carrying, or picking up, would leave the box with no aim to follow.
-  if (ownHold() !== null || holding) {
-    element('view-status').textContent = 'Let go of the box before switching cameras';
-    return;
-  }
-  // On the iPhone, switches started while tracking was lost or starting never came back.
-  if (!switchAllowed()) {
-    element('view-status').textContent = 'Wait for tracking before switching cameras';
-    return;
-  }
-  switchCameras('manual');
 });
 element('recentre').addEventListener('click', () => {
   // Recentring must not carry a held object along with the room.
