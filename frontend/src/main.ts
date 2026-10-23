@@ -8,8 +8,6 @@ import { RoomPreparation } from './preparation';
 import { floorPoint } from './aim';
 import { MotionStats } from './motion-stats';
 import { CameraSwitch } from './camera-switch';
-import { measureEyes } from './eye-measure';
-import { loadFaceModel } from './face-model';
 import { EngineTracking, engineUnavailable, trackingEngine } from './engine-tracking';
 import { MovementLog, type TrackingMode } from './movement-log';
 import { StepTracking, type PhoneTracking } from './phone-tracking';
@@ -122,9 +120,6 @@ const cameraSwitch = new CameraSwitch({
   pauseEngine: () => measured?.pause(),
   resumeEngine: () => measured?.resume(),
   openFrontCamera: () => navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false }),
-  // Each switch may try a model that failed to load before; within a switch it is tried once.
-  prepareEyes: () => { void loadFaceModel({ retryFailed: true }).catch(() => undefined); },
-  measureEyes: (video, cancelled) => measureEyes(video, cancelled),
   rawPose: () => lastRawPose,
   status: message => {
     // A switch cancelled by closing the room view has nowhere to show its result.

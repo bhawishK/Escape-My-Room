@@ -4,14 +4,8 @@ import { join } from 'node:path';
 import { cameraOverlaps, fakeCameras, liveCameras } from './fixtures/fake-cameras';
 import { INITIALIZING, engineCalls, engineFrame, useFakeEngine, aimAtBox } from './fixtures/fake-engine';
 
-const FACE_MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
-
-/**
- * Opens the phone's room view with the fake engine and fake cameras, tracking normally. The face
- * model is not downloaded unless `faceModel`: eye measurement then ends with "model failed to load".
- */
-async function trackingPhone(page: Page, path = '/', faceModel = false): Promise<void> {
-  if (!faceModel) await page.route('**/face_landmarker.task', route => route.abort());
+/** Opens the phone's room view with the fake engine and fake cameras, tracking normally. */
+async function trackingPhone(page: Page, path = '/'): Promise<void> {
   await useFakeEngine(page);
   await page.addInitScript(fakeCameras);
   await page.goto(path);
@@ -177,72 +171,4 @@ test('a turn made during a switch survives the engine restarting at the start af
   await expect(vr.getByTestId('presence-phone')).toHaveText('Phone · here · 0.30, 1.50, 1.00 m · heading 1.57 rad');
   await phone.close();
   await vr.close();
-});
-
-test('with the face model blocked, the eye step says so and the engine still resumes', async ({ page }) => {
-  // trackingPhone blocks the face model.
-  await trackingPhone(page);
-  await page.getByRole('button', { name: 'Switch cameras', exact: true }).click();
-  await expect(page.getByTestId('view-status')).toHaveText('Switching cameras · measuring your eyes, look at the screen');
-  await expect.poll(async () => (await engineCalls(page)).resumes, { timeout: 8000 }).toBe(1);
-  await expect(page.getByTestId('view-status')).not.toHaveText(/measuring your eyes/);
-  await engineFrame(page, { x: 0.3, y: 1.5, z: 1 });
-  await expect(page.getByTestId('view-status')).toHaveText(/· tracking kept$/);
-  const summary = (await sentLog(page)).entries.find(entry => entry.name === 'camera switch')!.data!;
-  expect(summary.eyes).toMatchObject({ found: false });
-  expect(String((summary.eyes as { reason: string }).reason)).toMatch(/^model failed to load/);
-});
-
-test('a refused front camera ends the switch cleanly with that reason, and the engine resumes', async ({ page }) => {
-  await useFakeEngine(page);
-  await page.addInitScript(fakeCameras);
-  // Only the front camera is refused.
-  await page.addInitScript(() => {
-    const open = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-    Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { value: async (constraints: MediaStreamConstraints) => {
-      if (JSON.stringify(constraints.video).includes('user')) throw new DOMException('Denied for test', 'NotAllowedError');
-      return open(constraints);
-    } });
-  });
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
-  await engineFrame(page, { x: 0.3, y: 1.5, z: 1 });
-  await page.getByRole('button', { name: 'Switch cameras', exact: true }).click();
-  await expect.poll(async () => (await engineCalls(page)).resumes, { timeout: 5000 }).toBe(1);
-  await engineFrame(page, { x: 0.3, y: 1.5, z: 1 });
-  await expect(page.getByTestId('view-status')).toHaveText(/· tracking kept$/);
-  const summary = (await sentLog(page)).entries.find(entry => entry.name === 'camera switch')!.data!;
-  expect(String(summary.front_camera)).toMatch(/^not opened: Denied for test/);
-  expect(summary.eyes).toMatchObject({ found: false, reason: 'front camera not opened' });
-});
-
-test('with the face model loaded and no face in view, the eye step ends with "no face found"', async ({ page, request }) => {
-  test.setTimeout(90000);
-  const reachable = await request.head(FACE_MODEL).then(response => response.ok(), () => false);
-  test.skip(!reachable, 'The face model is downloaded from Google model storage, which this machine cannot reach.');
-  await trackingPhone(page, '/', true);
-  // The first switch starts the download; the model then stays loaded for later switches.
-  for (let done = 1; done <= 2; done++) {
-    await page.getByRole('button', { name: 'Switch cameras', exact: true }).click();
-    await expect.poll(async () => (await engineCalls(page)).resumes, { timeout: 20000 }).toBe(done);
-    await engineFrame(page, { x: 0.3, y: 1.5, z: 1 });
-    await expect(page.getByTestId('view-status')).toHaveText(/· tracking kept$/, { timeout: 10000 });
-    if (done === 1) await page.waitForTimeout(5000);
-  }
-  const switches = (await sentLog(page)).entries.filter(entry => entry.name === 'camera switch');
-  const second = switches[1].data!.eyes as { found: boolean; reason: string; frames: number };
-  expect(second).toMatchObject({ found: false, reason: 'no face found' });
-  expect(second.frames).toBeGreaterThan(0);
-});
-
-test('a face model still downloading after the wait is reported as such, and the engine resumes', async ({ page }) => {
-  // The download never finishes.
-  await page.route('**/face_landmarker.task', () => undefined);
-  await trackingPhone(page, '/', true);
-  await page.getByRole('button', { name: 'Switch cameras', exact: true }).click();
-  await expect.poll(async () => (await engineCalls(page)).resumes, { timeout: 8000 }).toBe(1);
-  await engineFrame(page, { x: 0.3, y: 1.5, z: 1 });
-  await expect(page.getByTestId('view-status')).toHaveText(/· tracking kept$/);
-  const eyes = (await sentLog(page)).entries.find(entry => entry.name === 'camera switch')!.data!.eyes;
-  expect(eyes).toMatchObject({ found: false, reason: 'model still loading' });
 });
