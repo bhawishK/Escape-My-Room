@@ -5,7 +5,7 @@ import { INITIALIZING, engineCalls, engineFrame, useFakeEngine, aimAtBox } from 
 
 test('the phone sends its movement log to Python, which saves it for reading after a device check', async ({ page }) => {
   await useFakeEngine(page);
-  await page.goto('/?auto-switch=off');
+  await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
   await expect(page.locator('#scene')).toHaveAttribute('data-view', 'phone');
   // Tracking starts, then the person walks a metre toward the desk over a second.
@@ -43,7 +43,7 @@ test('8th Wall poses move the phone, and the headset sees where it really is', a
   await useFakeEngine(phone);
   await vr.goto('/');
   await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
-  await phone.goto('/?auto-switch=off');
+  await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
   await expect(phone.locator('#scene')).toHaveAttribute('data-view', 'phone');
   // The person stands 1.62 m tall at the phone, a step to the right and toward the desk, turned a quarter left.
@@ -57,7 +57,7 @@ test('8th Wall poses move the phone, and the headset sees where it really is', a
 
 test('the engine starts in metres at the room view’s starting place, facing the desk, with the camera hidden', async ({ page }) => {
   await useFakeEngine(page);
-  await page.goto('/?auto-switch=off');
+  await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
   await expect(page.locator('#scene')).toHaveAttribute('data-view', 'phone');
   const calls = await engineCalls(page);
@@ -79,7 +79,7 @@ test('while the engine starts, the phone asks for gentle movement and the headse
   await useFakeEngine(phone);
   await vr.goto('/');
   await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
-  await phone.goto('/?auto-switch=off');
+  await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
   // Working out scale, the engine reports poses that mean nothing yet.
   await engineFrame(phone, { x: 3, y: 0.4, z: -2 }, undefined, INITIALIZING);
@@ -99,7 +99,7 @@ test('a loss holds the view, tells the headset the phone is lost, and recovery t
   await useFakeEngine(phone);
   await vr.goto('/');
   await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
-  await phone.goto('/?auto-switch=off');
+  await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
   await engineFrame(phone, { x: 0.5, y: 1.5, z: 1 });
   await expect(vr.getByTestId('marker-position')).toHaveText('0.50, 1.50, 1.00 m');
@@ -121,7 +121,7 @@ test('a loss holds the view, tells the headset the phone is lost, and recovery t
 
 test('lost while pointing steeply at the floor, the hint says to raise the phone', async ({ page }) => {
   await useFakeEngine(page);
-  await page.goto('/?auto-switch=off');
+  await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
   // Tilted 60° down, as before every loss on the iPhone.
   const down = { x: Math.sin(-Math.PI / 6), y: 0, z: 0, w: Math.cos(-Math.PI / 6) };
@@ -136,7 +136,7 @@ test('a loss while carrying the box keeps the hold, and letting go then drops it
   await useFakeEngine(phone);
   await vr.goto('/');
   await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
-  await phone.goto('/?auto-switch=off');
+  await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
   await expect(phone.getByTestId('room-status')).toHaveAttribute('data-available', 'true');
   await aimAtBox(phone);
@@ -165,7 +165,7 @@ test('after a loss the engine restarts at the start, so the room is lined up aga
   await useFakeEngine(phone);
   await vr.goto('/');
   await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
-  await phone.goto('/?auto-switch=off');
+  await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
   // Standing beside the cabinet, facing a quarter left, when tracking is lost.
   const quarterLeft = { x: 0, y: Math.sin(Math.PI / 4), z: 0, w: Math.cos(Math.PI / 4) };
@@ -189,7 +189,7 @@ test('in measured mode, Recentre makes where the phone is the start again; tappi
   await useFakeEngine(phone);
   await vr.goto('/');
   await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
-  await phone.goto('/?auto-switch=off');
+  await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
   await expect(phone.getByTestId('tracking-mode')).toHaveText('Tracking · 8th Wall, measured');
   await expect(phone.getByRole('button', { name: 'Back to start', exact: true })).toBeHidden();
@@ -215,7 +215,7 @@ test('counting steps, the phone says so and shows Back to start and step length,
   await page.addInitScript(() => {
     for (const event of [DeviceOrientationEvent, DeviceMotionEvent]) Object.assign(event, { requestPermission: async () => 'granted' });
   });
-  await page.goto('/?auto-switch=off');
+  await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
   await expect(page.getByTestId('tracking-mode')).toHaveText('Tracking · step counting');
   await expect(page.getByRole('button', { name: 'Back to start', exact: true })).toBeVisible();
@@ -229,7 +229,7 @@ test('turning while tracking is lost is measured by the orientation sensor and k
   await useFakeEngine(phone);
   await vr.goto('/');
   await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
-  await phone.goto('/?auto-switch=off');
+  await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
   const turnSensor = (alpha: number) => phone.evaluate(alpha => {
     window.dispatchEvent(new DeviceOrientationEvent('deviceorientation', { alpha, beta: 90, gamma: 0 }));
