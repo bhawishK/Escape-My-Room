@@ -7,6 +7,7 @@ import { GazeCursor } from './gaze-cursor';
 import { RoomPreparation } from './preparation';
 import { floorPoint } from './aim';
 import { MotionStats } from './motion-stats';
+import { AutoSwitchScheduler } from './auto-switch';
 import { CameraSwitch } from './camera-switch';
 import { measureEyes } from './eye-measure';
 import { loadFaceModel } from './face-model';
@@ -137,6 +138,34 @@ const cameraSwitch = new CameraSwitch({
   },
   log: (name, detail, data) => movementLog.event(name, detail, data),
 }, switchTimeout);
+// `?auto-switch=off` stops automatic switches; `?auto-switch-scale=` shortens their timings, for tests.
+const switchParams = new URLSearchParams(location.search);
+const autoSwitchOn = switchParams.get('auto-switch') !== 'off';
+/** When the phone switches cameras by itself to measure the eyes (#86). */
+const scale = Number(switchParams.get('auto-switch-scale'));
+const autoSwitch = new AutoSwitchScheduler(scale > 0 ? Math.min(10, Math.max(0.01, scale)) : 1);
+/**
+ * Whether a camera switch may start: tracking normal, the view not held for a loss or a switch. On
+ * the iPhone, switches started otherwise never came back. Shared by the button and the scheduler.
+ */
+const switchAllowed = () => tracking === measured && tracking.status === 'tracked' && !measured.viewHeld;
+/** Runs a camera switch and tells the scheduler how it went, so the next waits accordingly. */
+function switchCameras(trigger: 'manual' | 'automatic'): void {
+  if (cameraSwitch.running) return;
+  void cameraSwitch.run(trigger).then(summary => {
+    if (!summary) return;
+    const eyes = summary.eyes as { found?: boolean } | undefined;
+    autoSwitch.finished(performance.now(), {
+      worked: summary.outcome !== 'tracking did not come back' && summary.outcome !== 'cancelled' &&
+        summary.front_camera === 'opened',
+      eyesFound: eyes?.found === true,
+    });
+  }, (error: unknown) => {
+    // A switch that broke counts as failed, so the next waits long.
+    autoSwitch.finished(performance.now(), { worked: false, eyesFound: false });
+    movementLog.event('camera switch failed', error instanceof Error ? error.message : String(error));
+  }).finally(controls);
+}
 /** The mode last written to the movement log, so each change is logged once. */
 let loggedMode = '';
 /** What the status line says about tracking, or empty while tracking is fine. */
@@ -580,6 +609,14 @@ try {
       const pose = tracking.pose();
       sceneView.follow(pose);
       movementLog.pose(trackingMode(), tracking.status, pose);
+      if (tracking === measured) {
+        const now = performance.now();
+        autoSwitch.observe(now, switchAllowed(), pose);
+        // Nothing else may need the cameras, the box or the view; a selected box is about to be picked up.
+        const free = measured.active && !cameraSwitch.running && ownHold() === null && !holding &&
+          selected === null && gaze.getPhase() === 'off' && depth.getPhase() === 'off';
+        if (autoSwitchOn && autoSwitch.due(now, free)) switchCameras('automatic');
+      }
       const mine = ownHold();
       if (mine && carryFloor !== null) {
         // Drawn where the screen centre meets the floor now; Python confirms it a moment later.
@@ -682,7 +719,12 @@ element('switch-cameras').addEventListener('click', () => {
     element('view-status').textContent = 'Let go of the box before switching cameras';
     return;
   }
-  void cameraSwitch.run().finally(controls);
+  // On the iPhone, switches started while tracking was lost or starting never came back.
+  if (!switchAllowed()) {
+    element('view-status').textContent = 'Wait for tracking before switching cameras';
+    return;
+  }
+  switchCameras('manual');
 });
 element('recentre').addEventListener('click', () => {
   // Recentring must not carry a held object along with the room.

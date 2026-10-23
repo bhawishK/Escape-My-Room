@@ -93,8 +93,9 @@ export class CameraSwitch {
     this.cancelWait?.();
   }
 
-  async run(): Promise<void> {
-    if (this.switching) return;
+  /** Runs one switch, started by the button or automatically, and returns its logged summary. */
+  async run(trigger: 'manual' | 'automatic' = 'manual'): Promise<Record<string, unknown> | null> {
+    if (this.switching) return null;
     this.reset();
     this.switching = true;
     this.startedAt = performance.now();
@@ -103,7 +104,7 @@ export class CameraSwitch {
     this.hooks.status('Switching cameras · front camera');
     this.hooks.prepareEyes();
     this.hooks.pauseEngine();
-    const data: Record<string, unknown> = {};
+    const data: Record<string, unknown> = { trigger };
     // On the page but out of sight: a phone may stop decoding a video that is not on the page.
     const video = document.createElement('video');
     video.muted = true;
@@ -142,6 +143,7 @@ export class CameraSwitch {
       await this.untilSettled();
     }
     this.finish(data);
+    return data;
   }
 
   private finish(data: Record<string, unknown>): void {
