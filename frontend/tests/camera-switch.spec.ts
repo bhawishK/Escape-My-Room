@@ -14,7 +14,8 @@ async function trackingPhone(page: Page, path = '/', faceModel = false): Promise
   if (!faceModel) await page.route('**/face_landmarker.task', route => route.abort());
   await useFakeEngine(page);
   await page.addInitScript(fakeCameras);
-  await page.goto(path);
+  // Automatic switching is off unless a test asks for it, so it cannot start a switch of its own.
+  await page.goto(path.includes('auto-switch') ? path : `${path}${path.includes('?') ? '&' : '?'}auto-switch=off`);
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
   await engineFrame(page, { x: 0.3, y: 1.5, z: 1 });
   await expect(page.getByTestId('tracking-mode')).toHaveText('Tracking · 8th Wall, measured');
@@ -46,7 +47,7 @@ test('a camera switch pauses the engine, uses the front camera alone, resumes, a
   const switches = (await sentLog(page)).entries.filter(entry => entry.name === 'camera switch');
   expect(switches).toHaveLength(1);
   const summary = switches[0].data!;
-  expect(summary).toMatchObject({ outcome: 'tracking came back after initialising', initializing: true, front_camera: 'opened' });
+  expect(summary).toMatchObject({ outcome: 'tracking came back after initialising', initializing: true, front_camera: 'opened', trigger: 'manual' });
   for (const field of ['front_first_frame_ms', 'front_closed_ms', 'resumed_ms', 'back_video_ms', 'first_pose_ms', 'normal_ms', 'no_back_camera_ms']) {
     expect(typeof summary[field], field).toBe('number');
   }
@@ -207,7 +208,7 @@ test('a refused front camera ends the switch cleanly with that reason, and the e
       return open(constraints);
     } });
   });
-  await page.goto('/');
+  await page.goto('/?auto-switch=off');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
   await engineFrame(page, { x: 0.3, y: 1.5, z: 1 });
   await page.getByRole('button', { name: 'Switch cameras', exact: true }).click();
@@ -314,4 +315,43 @@ test('after a switch that timed out, a later recovery keeps where the engine fin
   await expect(vr.getByTestId('marker-position')).toHaveText('1.20, 1.50, -0.30 m');
   await phone.close();
   await vr.close();
+});
+
+test('with tracking steady and the phone still, the phone switches cameras by itself', async ({ page }) => {
+  await trackingPhone(page, '/?auto-switch-scale=0.1');
+  await expect.poll(async () => (await engineCalls(page)).resumes, { timeout: 8000 }).toBe(1);
+  await engineFrame(page, { x: 0.3, y: 1.5, z: 1 });
+  await expect(page.getByTestId('view-status')).toHaveText(/· tracking kept$/);
+  const summary = (await sentLog(page)).entries.find(entry => entry.name === 'camera switch')!.data!;
+  expect(summary).toMatchObject({ trigger: 'automatic', outcome: 'tracking kept' });
+});
+
+test('no automatic switch while tracking is lost, and the button is refused then too', async ({ page }) => {
+  await trackingPhone(page, '/?auto-switch-scale=0.1');
+  await engineFrame(page, { x: 0.3, y: 1.5, z: 1 }, undefined, INITIALIZING);
+  await page.waitForTimeout(1500);
+  expect((await engineCalls(page)).pauses).toBe(0);
+  await page.getByRole('button', { name: 'Switch cameras', exact: true }).click();
+  await expect(page.getByTestId('view-status')).toHaveText('Wait for tracking before switching cameras');
+  expect((await engineCalls(page)).pauses).toBe(0);
+});
+
+test('no automatic switch while carrying the box', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route('**/face_landmarker.task', route => route.abort());
+  await useFakeEngine(page);
+  await page.addInitScript(fakeCameras);
+  await page.goto('/?auto-switch=on');
+  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  // The room loads before tracking starts, so the 3 s of steady tracking a switch needs starts with the aim.
+  await expect(page.getByTestId('room-status')).toHaveAttribute('data-available', 'true');
+  await aimAtBox(page);
+  await page.mouse.click(195, 422);
+  await expect(page.getByTestId('view-status')).toHaveText('Box selected · press and hold it to pick it up');
+  await page.mouse.move(195, 422);
+  await page.mouse.down();
+  await expect(page.getByTestId('view-status')).toHaveText(/^Carrying box/);
+  await page.waitForTimeout(5000);
+  expect((await engineCalls(page)).pauses).toBe(0);
+  await page.mouse.up();
 });
