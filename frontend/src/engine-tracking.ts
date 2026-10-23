@@ -121,14 +121,6 @@ export class EngineTracking implements PhoneTracking {
   private turnAtLoss: number | null = null;
   /** The orientation sensor, which keeps measuring turns while the engine is lost. */
   private readonly look = new PhoneLook();
-  /**
-   * While the engine cannot be used, lost or paused for a camera switch, the view holds its place
-   * and turns with the orientation sensor; `heldTurn` lines the sensor's rotation up with the held
-   * orientation. A pause counts as the start of a loss, so recovering from either lines up the same way.
-   */
-  private heldFrom: RoomPose | null = null;
-  private heldTurn: THREE.Quaternion | null = null;
-  private readonly scratchHeld = new THREE.Quaternion();
 
   constructor(private readonly engine: Engine, private readonly canvas: HTMLCanvasElement, private readonly events: EngineEvents) {}
 
@@ -195,12 +187,14 @@ export class EngineTracking implements PhoneTracking {
           // Limited poses are guesses, metres or tens of metres off on the iPhone; hold the last good one.
           const wasNormal = this.normal;
           this.normal = reality.trackingStatus !== 'LIMITED';
-          if (wasNormal && !this.normal && this.latest) this.hold(this.latest);
+          if (wasNormal && !this.normal && this.latest) {
+            this.lostFrom = this.latest;
+            this.turnAtLoss = this.turnYaw();
+          }
           if (this.normal) {
             this.everNormal = true;
             if (this.lostFrom) this.recover(raw, this.lostFrom);
             this.latest = this.intoRoom(raw);
-            this.heldFrom = null;
           }
           this.reportStatus();
           if (this.normal) this.events.moved(this.latest!);
@@ -229,36 +223,15 @@ export class EngineTracking implements PhoneTracking {
 
   stop(): void {
     this.attempts++;
-    this.heldFrom = null;
     this.look.stop();
     if (!this.running) return;
     this.engine.stop();
     this.running = false;
   }
 
-  /** Whether the view is held in place and turning with the orientation sensor, the engine away. */
-  get viewHeld(): boolean { return this.heldFrom !== null; }
-
-  /**
-   * Releases the back camera for a while. Like a loss, the view holds its place and turns with the
-   * orientation sensor until the engine tracks normally again.
-   */
+  /** Releases the back camera for a while; the view holds the last pose until `resume`. */
   pause(): void {
-    if (!this.running) return;
-    if (this.latest) this.hold(this.latest);
-    this.engine.pause();
-  }
-
-  /**
-   * Holds the view at `from`, turning with the sensor, and remembers it as where the loss began.
-   * A hold already under way, such as a pause followed by a loss, keeps its start and turn.
-   */
-  private hold(from: RoomPose): void {
-    if (this.heldFrom) return;
-    this.heldFrom = from;
-    this.heldTurn = this.turnFor(from, this.look.orientation());
-    this.lostFrom = from;
-    this.turnAtLoss = this.turnYaw();
+    if (this.running) this.engine.pause();
   }
 
   resume(): void {
@@ -329,24 +302,9 @@ export class EngineTracking implements PhoneTracking {
     return turned ? yawOf(turned) : null;
   }
 
-  pose(): RoomPose {
-    if (!this.heldFrom) return this.latest ?? START_VIEW;
-    const sensed = this.look.orientation();
-    if (!sensed) return this.heldFrom;
-    // No sensor reading when the hold began: the first one counts as facing as the engine last did.
-    this.heldTurn ??= this.turnFor(this.heldFrom, sensed);
-    const turned = this.scratchHeld.copy(this.heldTurn!).multiply(sensed);
-    return { position: this.heldFrom.position, orientation: { x: turned.x, y: turned.y, z: turned.z, w: turned.w } };
-  }
-
-  /** The rotation that takes `sensed` onto `pose`'s orientation, or null without a reading. */
-  private turnFor(pose: RoomPose, sensed: THREE.Quaternion | null): THREE.Quaternion | null {
-    if (!sensed) return null;
-    const o = pose.orientation;
-    return new THREE.Quaternion(o.x, o.y, o.z, o.w).multiply(sensed.clone().invert());
-  }
+  pose(): RoomPose { return this.latest ?? START_VIEW; }
 
   reportedPose(): RoomPose { return this.pose(); }
 
-  orientation(): Rotation | null { return this.heldFrom ? this.pose().orientation : this.latest?.orientation ?? null; }
+  orientation(): Rotation | null { return this.latest?.orientation ?? null; }
 }
