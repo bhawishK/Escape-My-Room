@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { INITIALIZING, engineCalls, engineFrame, useFakeEngine, aimAtBox } from './fixtures/fake-engine';
+import { INITIALIZING, engineCalls, engineFrame, useFakeEngine } from './fixtures/fake-engine';
 
 test('the phone sends its movement log to Python, which saves it for reading after a device check', async ({ page }) => {
   await useFakeEngine(page);
@@ -139,14 +139,16 @@ test('a loss while carrying the box keeps the hold, and letting go then drops it
   await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
   await expect(phone.getByTestId('room-status')).toHaveAttribute('data-available', 'true');
-  await aimAtBox(phone);
+  // Straight above the box, looking down, so it fills the middle of the screen.
+  const lookingDown = { x: Math.sin(-Math.PI / 4), y: 0, z: 0, w: Math.cos(-Math.PI / 4) };
+  await engineFrame(phone, { x: -0.5, y: 1.2, z: -0.4 }, lookingDown);
   await expect(vr.getByTestId('tracking')).toHaveText('Tracked');
   await phone.mouse.click(195, 422);
   await expect(phone.getByTestId('view-status')).toHaveText('Box selected · press and hold it to pick it up');
   await phone.mouse.move(195, 422);
   await phone.mouse.down();
   await expect(phone.getByTestId('view-status')).toHaveText(/^Carrying box/);
-  await engineFrame(phone, { x: 9, y: 7, z: -12 }, undefined, INITIALIZING);
+  await engineFrame(phone, { x: 9, y: 7, z: -12 }, lookingDown, INITIALIZING);
   await expect(phone.getByTestId('view-status')).toHaveText(/^Tracking lost/);
   // Python would drop the box at a pose without a position, so none is sent while it is held.
   await phone.waitForTimeout(800);
