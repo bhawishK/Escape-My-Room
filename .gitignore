@@ -19,3 +19,7 @@
 
 # Local settings and API keys; .env.example is the committed template
 /.env
+
+# Locally installed Claude Code skills (npx skills add)
+/.claude/skills/
+/skills-lock.json
