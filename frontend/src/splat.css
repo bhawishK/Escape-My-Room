@@ -24,6 +24,8 @@
 #splat-stats dt { color: var(--label-2); font-size: .6875rem; }
 #splat-stats dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; }
 #splat-status { font-size: .8125rem; }
+.splat-room-pick { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.splat-room-pick select { flex: 1; min-height: 44px; font-size: 1rem; }
 .splat-viewpoints { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .splat-viewpoints[hidden] { display: none; }
 .splat-viewpoints button { width: auto; min-height: 44px; padding: 10px 16px; font-size: .875rem; }

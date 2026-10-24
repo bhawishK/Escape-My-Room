@@ -11,6 +11,13 @@
     <div id="splat-view"></div>
     <section class="splat-hud" aria-label="Room splat">
       <p id="splat-status" class="splat-panel" role="status">Loading the room…</p>
+      <label class="splat-panel splat-room-pick">Room
+        <select id="room-pick">
+          <option value="/spike/sample-room/room.ply">Published living room (400k splats)</option>
+          <option value="/spike/room.ply">Our video 1 (99k splats)</option>
+          <option value="/spike/run2/room.ply">Our video 2 (39k splats)</option>
+        </select>
+      </label>
       <dl id="splat-stats" class="splat-panel" aria-label="Performance">
         <div><dt>Frame rate</dt><dd id="stat-fps">–</dd></div>
         <div><dt>Splats</dt><dd id="stat-splats">–</dd></div>

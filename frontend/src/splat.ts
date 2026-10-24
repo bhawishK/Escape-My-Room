@@ -82,7 +82,7 @@ window.addEventListener('resize', () => {
 // be taken instead. Tapping the real floor and measuring a known length correct both; the
 // corrections are remembered per file in this browser. `floor` is in the file's own units.
 
-let source = new URLSearchParams(window.location.search).get('src') ?? '/spike/room.ply';
+let source = new URLSearchParams(window.location.search).get('src') ?? '/spike/sample-room/room.ply';
 let room: SplatMesh | undefined;
 let correction = { scale: 1, floor: 0 };
 
@@ -355,6 +355,14 @@ renderer.setAnimationLoop(() => {
     frames = 0;
     since = now;
   }
+});
+
+// Switching rooms reloads the page, so each room starts clean at its own viewpoints.
+const roomPick = element<HTMLSelectElement>('room-pick');
+if (![...roomPick.options].some(option => option.value === source)) roomPick.add(new Option(source, source));
+roomPick.value = source;
+roomPick.addEventListener('change', () => {
+  window.location.search = `?src=${encodeURIComponent(roomPick.value)}`;
 });
 
 loadUrl(source).catch((error: unknown) => {
