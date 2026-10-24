@@ -1,10 +1,8 @@
 import './style.css';
 import { roomHeading, roomPoint } from './alignment';
-import { RoomPhotos } from './capture';
 import { element } from './dom';
 import { FloorDepth } from './floor-depth';
 import { GazeCursor } from './gaze-cursor';
-import { RoomPreparation } from './preparation';
 import { floorPoint } from './aim';
 import { MotionStats } from './motion-stats';
 import { EngineTracking, engineUnavailable, trackingEngine } from './engine-tracking';
@@ -712,7 +710,3 @@ element('download-report').addEventListener('click', () => {
 window.addEventListener('pagehide', () => client.leave());
 window.setInterval(() => { element('motion-stats').textContent = motion.summary(); }, 1000);
 controls();
-
-const roomPreparation = new RoomPreparation();
-const roomPhotos = new RoomPhotos(capture => { void roomPreparation.showCapture(capture); });
-void roomPhotos.showLatest().catch(() => undefined);

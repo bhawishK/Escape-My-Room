@@ -19,7 +19,7 @@ No new application code was added for #25. The capture flow, storage, orientatio
 
 ## Real iPhone Chrome check
 
-Use the HTTPS tunnel from the [startup guide](diagnostic-startup.md). Open the tunnel link in **Chrome** on the iPhone, not Safari, and scroll to **Room photos**.
+Use the HTTPS tunnel from the [startup guide](diagnostic-startup.md). Open the tunnel link in **Chrome** on the iPhone, not Safari, and tap **Room photos** in the navigation bar.
 
 1. **Versions.** In iPhone Settings → General → About, note the model and iOS version. In Chrome, open `chrome://version` and note the Chrome version.
 2. **Several camera shots.** Tap **Take photo**, take a photo, and confirm it appears under the buttons. Repeat for at least three views of the room, including one with the phone held in portrait and one in landscape.

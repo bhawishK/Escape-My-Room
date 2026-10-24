@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 const photo = (name: string) => fileURLToPath(new URL(`./fixtures/photos/${name}`, import.meta.url));
 
 async function saveCapture(page: Page, origin = '') {
-  await page.goto(`${origin}/`);
+  await page.goto(`${origin}/photos.html`);
   const photos = page.getByRole('region', { name: 'Room photos' });
   await photos.getByLabel('Choose photos').setInputFiles([photo('overview.png'), photo('desk.jpg')]);
   await photos.getByRole('button', { name: 'Save photos' }).click();
