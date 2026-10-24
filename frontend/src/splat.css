@@ -1,0 +1,44 @@
+/* Spike #92 room splat viewer: a full-screen canvas under small glass panels. */
+.splat-page { margin: 0; overflow: hidden; background: #1d1d1f; }
+#splat-view, #splat-view canvas { position: fixed; inset: 0; display: block; width: 100%; height: 100%; touch-action: none; }
+.splat-hud {
+  position: fixed;
+  inset: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) auto max(12px, env(safe-area-inset-left));
+  display: grid;
+  gap: 8px;
+  max-width: 22rem;
+  pointer-events: none;
+}
+.splat-panel {
+  pointer-events: auto;
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .82);
+  color: var(--label);
+  font-size: .875rem;
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+}
+#splat-stats { display: grid; grid-template-columns: repeat(4, auto); gap: 4px 14px; }
+#splat-stats dt { color: var(--label-2); font-size: .6875rem; }
+#splat-stats dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; }
+#splat-status { font-size: .8125rem; }
+.splat-room-pick { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.splat-room-pick select { flex: 1; min-height: 44px; font-size: 1rem; }
+.splat-viewpoints { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.splat-viewpoints[hidden] { display: none; }
+.splat-viewpoints button { width: auto; min-height: 44px; padding: 10px 16px; font-size: .875rem; }
+.splat-tools summary { min-height: 28px; font-weight: 600; cursor: pointer; }
+.splat-tools[open] summary { margin-bottom: 8px; }
+.splat-tool-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.splat-tools button, .splat-tools .file-button { flex: 0 1 auto; width: auto; min-height: 44px; padding: 10px 16px; font-size: .875rem; }
+.splat-tools button.secondary[aria-pressed="true"] { background: var(--blue); color: #fff; }
+.splat-tools p { margin: 8px 0 0; }
+#scale-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+#scale-form[hidden], .splat-tools p[hidden] { display: none; }
+#real-length { width: 6em; }
+#scale-note { color: var(--label-2); font-size: .75rem; }
+@media (prefers-reduced-transparency: reduce) {
+  .splat-panel { background: #fff; backdrop-filter: none; -webkit-backdrop-filter: none; }
+}

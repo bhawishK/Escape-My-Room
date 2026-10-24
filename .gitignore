@@ -23,3 +23,6 @@
 # Locally installed Claude Code skills (npx skills add)
 /.claude/skills/
 /skills-lock.json
+
+# Spike #92: trained room splats are large and personal; never commit them
+/frontend/public/spike/

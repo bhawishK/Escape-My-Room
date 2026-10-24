@@ -1,13 +1,16 @@
+import type { SplatMesh } from '@sparkjsdev/spark';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { STANDING_EYE_HEIGHT } from './alignment';
 import type { RoomPose } from './phone-view';
-import type { AlignmentState, Position, PresenceState, Role, SessionState } from './protocol';
+import type {
+  AlignmentState, Position, PresenceState, Role, RoomEntity, SessionState,
+} from './protocol';
 import { applyPlacement, placeEntities } from './room';
 
 const emptyRoom = (): SessionState['room'] => ({
   available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
-  entities: [], loaded_by: { mobile_master: null, vr_solver: null },
+  entities: [], splat_url: null, splat_placement: null, loaded_by: { mobile_master: null, vr_solver: null },
 });
 
 const OVERVIEW_FOV = 60;
@@ -25,6 +28,9 @@ export class DiagnosticScene {
   private readonly container: HTMLElement;
   private readonly roomAnchor = new THREE.Group();
   private roomGroup: THREE.Group | null = null;
+  /** The room's splat, when it has one; Spark is loaded only for such rooms. */
+  private splat: SplatMesh | null = null;
+  private sparkReady: Promise<typeof import('@sparkjsdev/spark')> | null = null;
   private presenting = false;
   /** The pose this phone's full-screen room view looks from. */
   private following: RoomPose | null = null;
@@ -299,19 +305,34 @@ export class DiagnosticScene {
       // Load every asset before showing any, so a failure never leaves a partial room.
       const urls = [...new Set(room.entities.map(entity => entity.asset_url))];
       let roots: Map<string, THREE.Object3D>;
+      let splat: SplatMesh | null;
       try {
-        const scenes = await Promise.all(urls.map(url => this.loader.loadAsync(url).then(
+        const loading = Promise.all(urls.map(url => this.loader.loadAsync(url).then(
           gltf => [url, gltf.scene] as const,
           () => { throw new Error(`The prepared room asset ${url.split('/').pop()} could not be loaded.`); },
         )));
-        if (token !== this.loadToken) return null;
+        const [scenes, loadedSplat] = await Promise.all([
+          loading,
+          room.splat_url ? this.loadSplat(room.splat_url) : null,
+        ]);
+        splat = loadedSplat;
+        if (token !== this.loadToken) {
+          splat?.dispose();
+          return null;
+        }
         roots = placeEntities(new Map(scenes), room.entities);
       } catch (error) {
         if (token !== this.loadToken) return null;
         this.clearRoom();
         throw error;
       }
-      this.attach(roots);
+      if (splat && room.splat_placement) {
+        const { position, rotation, scale } = room.splat_placement;
+        splat.position.set(position.x, position.y, position.z);
+        splat.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+        splat.scale.setScalar(scale);
+      }
+      this.attach(roots, splat, room.entities);
       this.loadedVersion = version;
       this.loadingVersion = null;
       return { version, acknowledge: true };
@@ -344,6 +365,9 @@ export class DiagnosticScene {
     this.loadingVersion = null;
     this.roomGroup?.removeFromParent();
     this.roomGroup = null;
+    this.splat?.dispose();
+    this.splat = null;
+    this.container.dataset.splat = '';
     this.entityRoots = new Map();
     this.pointAt(null);
     this.predicted = null;
@@ -378,6 +402,11 @@ export class DiagnosticScene {
     if (!this.presenting && !this.following && aligned) {
       this.camera.position.set(0, STANDING_EYE_HEIGHT, 0);
       this.camera.lookAt(0, STANDING_EYE_HEIGHT, -1.2);
+    } else if (!this.presenting && !this.following && this.splat) {
+      // A splat room looks right only near where it was filmed: its origin, facing the way the
+      // video mostly faced. From the stand-in room's corner view it is mostly gaps and smears.
+      this.camera.position.set(0, STANDING_EYE_HEIGHT, 0);
+      this.camera.lookAt(0, STANDING_EYE_HEIGHT - 0.4, -1.2);
     } else if (!this.presenting && !this.following) {
       this.camera.position.set(0, 1.6, 2.4);
       this.camera.lookAt(0, 0.6, -1.2);
@@ -403,14 +432,55 @@ export class DiagnosticScene {
     this.statusTexture.needsUpdate = true;
   }
 
-  private attach(roots: Map<string, THREE.Object3D>): void {
+  /** Downloads and prepares a room splat, loading Spark the first time one is needed. */
+  private async loadSplat(url: string): Promise<SplatMesh> {
+    const failed = new Error(`The prepared room splat ${url.split('/').pop()} could not be loaded.`);
+    this.sparkReady ??= import('@sparkjsdev/spark').then(spark => {
+      this.scene.add(new spark.SparkRenderer({ renderer: this.renderer }));
+      return spark;
+    });
+    try {
+      const [spark, response] = await Promise.all([this.sparkReady, fetch(url)]);
+      if (!response.ok) throw failed;
+      const mesh = new spark.SplatMesh({
+        fileBytes: await response.arrayBuffer(),
+        fileName: url.split('/').pop(),
+        // Aiming hits the entities, not hundreds of thousands of splats.
+        raycastable: false,
+      });
+      await mesh.initialized;
+      return mesh;
+    } catch {
+      throw failed;
+    }
+  }
+
+  private attach(
+    roots: Map<string, THREE.Object3D>,
+    splat: SplatMesh | null = null,
+    entities: readonly RoomEntity[] = [],
+  ): void {
     this.roomGroup?.removeFromParent();
+    this.splat?.dispose();
     const group = new THREE.Group();
     group.name = 'prepared-room';
     group.add(...roots.values());
+    if (splat) {
+      // The splat shows the room. Static entities stay, unseen, so aiming still stops at
+      // furniture and walking still keeps to the floor; movable ones are drawn over it.
+      group.add(splat);
+      for (const entity of entities) {
+        const root = roots.get(entity.id);
+        if (root && entity.kind === 'static') root.visible = false;
+      }
+    }
+    this.splat = splat;
+    this.container.dataset.splat = splat ? 'shown' : '';
     this.roomGroup = group;
     this.entityRoots = roots;
     this.roomAnchor.add(group);
     this.grid.visible = false;
+    // A splat room changes where the overview looks from.
+    this.applyView(this.alignment);
   }
 }

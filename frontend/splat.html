@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light" />
+    <title>Escape My Room — room splat (spike)</title>
+  </head>
+  <body class="splat-page">
+    <!-- Spike #92: view a trained room splat on the phone, the Quest and the desktop. Throwaway. -->
+    <div id="splat-view"></div>
+    <section class="splat-hud" aria-label="Room splat">
+      <p id="splat-status" class="splat-panel" role="status">Loading the room…</p>
+      <label class="splat-panel splat-room-pick">Room
+        <select id="room-pick">
+          <option value="/spike/sample-room/room.ply">Published living room (400k splats)</option>
+          <option value="/spike/room.ply">Our video 1 (99k splats)</option>
+          <option value="/spike/run2/room.ply">Our video 2 (39k splats)</option>
+        </select>
+      </label>
+      <dl id="splat-stats" class="splat-panel" aria-label="Performance">
+        <div><dt>Frame rate</dt><dd id="stat-fps">–</dd></div>
+        <div><dt>Splats</dt><dd id="stat-splats">–</dd></div>
+        <div><dt>Download</dt><dd id="stat-size">–</dd></div>
+        <div><dt>Loaded in</dt><dd id="stat-load">–</dd></div>
+      </dl>
+      <div id="viewpoints" class="splat-panel splat-viewpoints" hidden>
+        <span id="viewpoint-label"></span>
+        <button id="next-viewpoint" class="secondary" type="button">Next viewpoint</button>
+      </div>
+      <details class="splat-panel splat-tools">
+        <summary>Measure and scale</summary>
+        <div class="splat-tool-row">
+          <button id="measure" class="secondary" type="button" aria-pressed="false">Measure</button>
+          <button id="set-floor" class="secondary" type="button" aria-pressed="false">Set floor</button>
+          <button id="grid" class="secondary" type="button" aria-pressed="true">Floor grid</button>
+          <label class="file-button secondary">Open file<input id="splat-file" type="file" accept=".ply,.spz,.splat,.ksplat" /></label>
+        </div>
+        <p id="measure-result" hidden></p>
+        <form id="scale-form" hidden>
+          <label for="real-length">Real length (m)</label>
+          <input id="real-length" type="number" inputmode="decimal" min="0.05" step="0.01" required />
+          <button type="submit">Set scale</button>
+        </form>
+        <p id="scale-note"></p>
+      </details>
+    </section>
+    <script type="module" src="/src/splat.ts"></script>
+  </body>
+</html>

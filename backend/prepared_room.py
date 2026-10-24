@@ -4,6 +4,10 @@ Two manifest forms are accepted. The original stand-in room names one .gltf for 
 has exactly one movable entity. Schema 2 gives each entity its own .glb, a rotation, and any number
 of movable entities. Both become the same shared entity records.
 
+A schema 2 room may also name a Gaussian splat (.ply or .spz) in the same frame. Devices then draw
+the splat as the room's look, while the entities keep their roles: static ones bound walking and
+hide what is behind them, movable ones are drawn and can be picked up.
+
 Frame for both: meters, right-handed, +Y up, +Z toward the viewer. An entity's position and
 rotation place the center of its bottom face in the room. Rotations are unit quaternions in
 (x, y, z, w) order. The referenced node's own transform and its ancestors' transforms are
@@ -76,9 +80,19 @@ class SceneEntity(WireModel):
     rotation: Rotation
 
 
+class SplatPlacement(WireModel):
+    """Where the splat sits in the room: scaled, then rotated, then moved."""
+
+    position: Position = Field(default_factory=lambda: Position(x=0.0, y=0.0, z=0.0))
+    rotation: Rotation = Field(default_factory=Rotation)
+    scale: float = Field(default=1.0, gt=0, le=100)
+
+
 class LoadedRoom(BaseModel):
     room_version: int
     entities: list[SceneEntity]
+    splat_url: str | None = None
+    splat_placement: SplatPlacement | None = None
 
 
 class _Entity(Protocol):
@@ -142,8 +156,18 @@ class AssetEntity(WireModel):
     rotation: Rotation
 
 
+class SplatAsset(SplatPlacement):
+    """The splat file, and its placement when it was trained tilted or at another scale."""
+
+    asset: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}\.(ply|spz)$")
+
+
+# How each splat format's file starts: PLY's text header, and SPZ's gzip wrapper.
+SPLAT_MAGIC = {".ply": (b"ply\n", "PLY"), ".spz": (b"\x1f\x8b", "SPZ")}
+
+
 class PreparedScene(WireModel):
-    """Schema 2: one GLB per entity and any number of movable entities."""
+    """Schema 2: one GLB per entity and any number of movable entities, and perhaps a splat."""
 
     schema_version: Literal[2]
     room_version: int = Field(ge=1)
@@ -152,6 +176,7 @@ class PreparedScene(WireModel):
     pivot: Literal["bottom_center"]
     quaternion_order: Literal["xyzw"]
     entities: list[AssetEntity] = Field(min_length=1, max_length=64)
+    splat: SplatAsset | None = None
 
     @model_validator(mode="after")
     def check_entities(self) -> Self:
@@ -242,8 +267,14 @@ def _load_scene(directory: Path, scene: PreparedScene) -> LoadedRoom:
                 )
             nodes[entity.id] = index
         _check_nodes(asset, nodes, {entity.id: entity.size for entity in entities})
+    if scene.splat is not None:
+        _check_splat(directory, scene.splat.asset)
     return LoadedRoom(
         room_version=scene.room_version,
+        splat_url=None if scene.splat is None else f"{ASSET_URL_PREFIX}/{scene.splat.asset}",
+        splat_placement=None
+        if scene.splat is None
+        else SplatPlacement.model_validate(scene.splat.model_dump(exclude={"asset"})),
         entities=[
             SceneEntity(
                 id=entity.id,
@@ -259,6 +290,16 @@ def _load_scene(directory: Path, scene: PreparedScene) -> LoadedRoom:
             for entity in scene.entities
         ],
     )
+
+
+def _check_splat(directory: Path, name: str) -> None:
+    path = directory / name
+    if not path.is_file():
+        raise PreparedRoomError(f"Prepared room splat {name} is missing.")
+    magic, kind = SPLAT_MAGIC[path.suffix]
+    with path.open("rb") as file:
+        if file.read(len(magic)) != magic:
+            raise PreparedRoomError(f"Prepared room splat {name} is not a {kind} splat.")
 
 
 def _read(directory: Path, name: str) -> GltfDocument:
