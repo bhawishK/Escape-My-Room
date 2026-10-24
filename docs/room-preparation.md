@@ -2,7 +2,7 @@
 
 Issue 26 turns a saved [room-photo capture](room-photos.md) into a **candidate room** through an asynchronous preparation job. The job runs in the background, reports each stage as it happens, and ends **awaiting review** or **failed**. The candidate is only shown for inspection; it never replaces the room the phone and headset are using.
 
-No AI runs yet. The only worker is a deterministic **fixture worker** for development and tests. It copies the [multi-asset fixture room](prepared-room.md#multi-asset-rooms-issue-23), and everything it produces is labelled **“Fixture output, not AI inference”**. Real models (#22) will run behind the same worker boundary later.
+There are two workers. The deterministic **fixture worker** is for development and tests: it copies the [multi-asset fixture room](prepared-room.md#multi-asset-rooms-issue-23), and everything it produces is labelled **“Fixture output, not AI inference”**. The **OpenRouter worker** (#28) asks Qwen through OpenRouter which objects the overview shows, and ends with that object list for review; see [Qwen through OpenRouter](#qwen-through-openrouter-issue-28). Segmentation, geometry and stabilization (#29–#34) are not built yet and wait on a decision about where they run.
 
 ## Try it
 
@@ -25,7 +25,7 @@ Save some room photos, then select **Prepare room** under **Saved photos**. The 
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| `ESCAPE_ROOM_PREPARATION_WORKER` | unset | `fixture` enables the fixture worker; unset means preparation is not configured |
+| `ESCAPE_ROOM_PREPARATION_WORKER` | unset | `fixture` enables the fixture worker, `openrouter` the OpenRouter worker; unset means preparation is not configured |
 | `ESCAPE_ROOM_FIXTURE_STAGE_SECONDS` | `1.0` | how long each fixture stage waits |
 | `ESCAPE_ROOM_FIXTURE_FAIL_STAGE` | unset | `scene_understanding`, `geometry`, `stabilization` or `export` makes that stage fail, to see a failure |
 
@@ -91,3 +91,77 @@ Desktop Chromium tests:
 - A server configured to fail at geometry shows the failed stage and its reason.
 
 These checks use the fixture worker. They do not measure AI inference, GPU behaviour or real preparation times.
+
+## Qwen through OpenRouter (issue #28)
+
+The OpenRouter worker runs one stage, **scene understanding**. It sends the overview photo, scaled so its longer side is at most 1280 pixels, with [REST3D's object-list prompt](../backend/prompts/list_objects.txt) and the room instructions, to `qwen/qwen3-vl-8b-instruct` through [OpenRouter](https://openrouter.ai). The answer must be one object name per line. A job that gets one ends **awaiting review** with an **inventory**: each object's label and a stable ID made from it (`blue mug on desk` → `blue_mug_on_desk`, repeats get `_2`). Nothing is segmented, built or published yet, and the active room never changes.
+
+The OpenRouter key has a **$1 spending limit** for testing; the teacher can raise it if needed. On 24 October 2026 OpenRouter listed this model at $0.25 per million input and $0.75 per million output tokens, so one object list costs well under a cent.
+
+### Turn it on
+
+Set the key on the server only. It never reaches the page, a job record, a log or a stored file.
+
+Linux or macOS:
+
+```bash
+OPENROUTER_API_KEY=sk-or-... ESCAPE_ROOM_PREPARATION_WORKER=openrouter .venv/bin/python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --workers 1 --ws-max-size 16384
+```
+
+Windows Command Prompt:
+
+```bat
+set OPENROUTER_API_KEY=sk-or-...
+set ESCAPE_ROOM_PREPARATION_WORKER=openrouter
+.venv\Scripts\python.exe -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --workers 1 --ws-max-size 16384
+```
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `OPENROUTER_API_KEY` | unset | the key; without it the stage fails with kind `configuration` |
+| `ESCAPE_ROOM_OPENROUTER_MODEL` | `qwen/qwen3-vl-8b-instruct` | the model; other models are not assumed to be better or compatible |
+| `ESCAPE_ROOM_OPENROUTER_URL` | `https://openrouter.ai/api/v1` | the API address; tests point it at a fake |
+| `ESCAPE_ROOM_OPENROUTER_MAX_IMAGE_SIDE` | `1280` | longest side, in pixels, of each image sent |
+| `ESCAPE_ROOM_OPENROUTER_MAX_IMAGES` | `7` | most images one request may carry; REST3D's support question uses seven |
+| `ESCAPE_ROOM_OPENROUTER_MAX_OUTPUT_TOKENS` | `2048` | longest answer |
+| `ESCAPE_ROOM_OPENROUTER_MAX_REPAIRS` | `2` | how many times a badly formatted answer is asked for again |
+| `ESCAPE_ROOM_OPENROUTER_TIMEOUT_SECONDS` | `120` | how long one request may take |
+
+The job records these settings, never the key. No other model or provider is used as a fallback.
+
+### What is recorded
+
+Every request is a **model call** on the job: the model and the upstream provider OpenRouter chose, token counts, the cost OpenRouter reported, the time it took, whether the answer was accepted and why not, and the answer itself as `artifacts/scene_understanding/answer-<n>.txt`. The job's `cost_usd` adds up every call, including refused answers and failed jobs, because those cost money too. The photos page shows the objects, then a line such as `qwen/qwen3-vl-8b-instruct via <provider> · 1 request · 1,240 tokens · $0.0004 · 2.1 s · Raw answer`.
+
+### Answers that do not fit
+
+An answer is refused when it lists no objects, is cut off, repeats an object, or has a line that is not an object name: 100 characters or more, ending in a colon, or ending like a sentence. The worker then asks again, adding the refused answer and REST3D's reminder (“Output ONLY a plain list, one object per line…”). After the repair limit, the stage fails with kind `inference` and the last reason.
+
+The adapter in `backend/openrouter.py` also reads the other three answer formats REST3D and SAM 3 use, for the later segmentation and support stages (#29, #30): a `<tool>` JSON call, an `Accept`/`Reject` `<verdict>`, and a support line `object -> parent | relation | type`. Unlike REST3D, a support line naming an unknown parent is refused instead of quietly becoming the floor.
+
+### Failures
+
+A request that fails is never retried in a loop. The stage fails, the job keeps what it recorded, and the active room is untouched.
+
+| OpenRouter says | Kind | Message |
+| --- | --- | --- |
+| no key on the server | `configuration` | The server has no OpenRouter key. Set OPENROUTER_API_KEY and restart the service. |
+| 401 | `configuration` | OpenRouter refused the server's key. Check OPENROUTER_API_KEY. |
+| 402 | `resource` | The OpenRouter key has reached its spending limit. Ask for the limit to be raised, then submit again. |
+| 429 | `provider` | OpenRouter is limiting requests right now. Wait a minute, then submit again. |
+| 408, 502, 503, 504 | `provider` | The model is unavailable right now (…). Try again later. |
+| no connection | `provider` | OpenRouter could not be reached (…). Try again later. |
+
+### Checking the real service
+
+The tests never call OpenRouter. They run the service against a local fake (`tests/fake_openrouter.py`) that replays scripted answers, and cover the inventory, the request's image and text order, cost and answer records, repairs, the repair limit, each failure above, and that the key appears in no response or stored file.
+
+To see what the real model does, run the one-off check with a room photo. It sends five requests, the four formats plus an answer asked for in prose to exercise a repair, and costs a few cents at most:
+
+```bash
+OPENROUTER_API_KEY=sk-or-... .venv/bin/python -m backend.openrouter_check path/to/room.jpg
+```
+
+It prints and saves a report under `data/openrouter-checks/` with every answer, token count and cost. The support request carries seven images, REST3D's largest. No real run has been recorded yet.
+
+Prompt sources and their licence are in [`backend/prompts/NOTICE.md`](../backend/prompts/NOTICE.md).

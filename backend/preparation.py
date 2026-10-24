@@ -5,8 +5,10 @@ change. One background thread runs queued jobs in order, so request handlers and
 lock never wait for a worker. A worker runs named stages and then yields a candidate prepared
 room; the candidate is inspected here and never replaces the active room.
 
-The only worker so far is the deterministic fixture worker. It is a test configuration chosen by
-server settings, and everything it produces is labelled as fixture output, not AI inference.
+Server settings choose the worker. The deterministic fixture worker is a test configuration, and
+everything it produces is labelled as fixture output, not AI inference. The OpenRouter worker asks
+Qwen through OpenRouter for the overview's objects and ends with that inventory for review; every
+model request is recorded on the job with its tokens, cost and answer.
 """
 
 import hashlib
@@ -18,18 +20,30 @@ import secrets
 import threading
 import time
 from pathlib import Path, PurePosixPath
-from typing import Literal, Protocol, Self
+from typing import Annotated, Literal, Protocol, Self
 
 from pydantic import Field
 
 from backend.captures import CaptureStore
 from backend.errors import Refusal
+from backend.openrouter import (
+    OBJECT_LIST,
+    PROMPTS,
+    OpenRouterClient,
+    OpenRouterConfig,
+    Picture,
+    ProviderFailure,
+    Reply,
+    ask,
+    say,
+)
 from backend.prepared_room import LoadedRoom, PreparedRoomError, load_prepared_room
 from backend.protocol import WireModel
 from backend.records import RecordFolder, StoredRecord, now, seconds_between
 
 JOB_ID = re.compile(r"^job_[0-9a-f]{32}$")
 FIXTURE_LABEL = "Fixture output, not AI inference"
+OPENROUTER_LABEL = "Qwen through OpenRouter"
 
 type StageName = Literal["scene_understanding", "geometry", "stabilization", "export"]
 type JobState = Literal["queued", "running", "awaiting_review", "failed"]
@@ -45,7 +59,7 @@ type ErrorKind = Literal[
     "worker",
     "interrupted",
 ]
-type ArtifactMediaType = Literal["application/json", "model/gltf-binary"]
+type ArtifactMediaType = Literal["application/json", "model/gltf-binary", "text/plain"]
 
 
 def stage_title(stage: StageName) -> str:
@@ -95,11 +109,14 @@ class JobInput(JobRequest):
     instructions_sha256: str
 
 
-class WorkerConfig(WireModel):
+class FixtureConfig(WireModel):
     worker: Literal["fixture"]
     version: str
     stage_seconds: float
     fail_stage: StageName | None = None
+
+
+type WorkerConfig = Annotated[FixtureConfig | OpenRouterConfig, Field(discriminator="worker")]
 
 
 class CandidateEntity(WireModel):
@@ -143,6 +160,42 @@ class Candidate(WireModel):
         )
 
 
+class InventoryObject(WireModel):
+    id: str
+    label: str
+
+
+class Inventory(WireModel):
+    """The objects a model found in the overview, before any segmentation or geometry."""
+
+    source: Literal["openrouter"]
+    label: str
+    overview_image_id: str
+    objects: list[InventoryObject]
+    # The accepted answer, relative to the job folder.
+    answer: str
+
+
+class ModelCall(WireModel):
+    """One model request: what it cost, and whether its answer was accepted."""
+
+    stage: StageName
+    purpose: str
+    model: str | None
+    provider: str | None
+    generation_id: str | None
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    cost_usd: float | None
+    latency_seconds: float
+    finish_reason: str | None
+    accepted: bool
+    # Why the answer was refused, when it was.
+    problem: str | None
+    # The answer as received, relative to the job folder.
+    answer: str
+
+
 class PreparationJob(StoredRecord):
     id: str = Field(pattern=JOB_ID.pattern)
     updated_at: str
@@ -156,6 +209,10 @@ class PreparationJob(StoredRecord):
     stages: list[Stage]
     error: JobError | None = None
     candidate: Candidate | None = None
+    inventory: Inventory | None = None
+    model_calls: list[ModelCall] = Field(default_factory=lambda: list[ModelCall]())
+    # The sum of the costs OpenRouter reported, in US dollars; None when no model was asked.
+    cost_usd: float | None = None
 
     @property
     def active(self) -> bool:
@@ -185,6 +242,8 @@ class Workspace:
 
     def __init__(self, folder: Path) -> None:
         self.folder = folder
+        # Model requests made since the service last collected them.
+        self.calls: list[ModelCall] = []
 
     def write(
         self, relative: str, data: bytes, media_type: ArtifactMediaType, description: str
@@ -198,17 +257,20 @@ class Workspace:
 
 
 class PreparationWorker(Protocol):
-    """Turns one capture into a candidate room through named stages."""
+    """Turns one capture into something to review through named stages."""
 
-    config: WorkerConfig
-    stages: tuple[StageName, ...]
+    @property
+    def config(self) -> FixtureConfig | OpenRouterConfig: ...
+
+    @property
+    def stages(self) -> tuple[StageName, ...]: ...
 
     def run_stage(self, stage: StageName, job: JobInput, workspace: Workspace) -> list[Artifact]:
         """Run one stage, returning its artifacts or raising StageFailure."""
         ...
 
-    def candidate(self, workspace: Workspace) -> Candidate:
-        """Describe the candidate room the finished stages produced."""
+    def outcome(self, workspace: Workspace) -> "Candidate | Inventory":
+        """Describe what the finished stages produced for review."""
         ...
 
 
@@ -217,7 +279,7 @@ class FixtureWorker:
 
     stages: tuple[StageName, ...] = ("scene_understanding", "geometry", "stabilization", "export")
 
-    def __init__(self, fixture_room: Path, config: WorkerConfig) -> None:
+    def __init__(self, fixture_room: Path, config: FixtureConfig) -> None:
         self.fixture_room = fixture_room
         self.config = config
 
@@ -250,7 +312,7 @@ class FixtureWorker:
                     )
         return artifacts
 
-    def candidate(self, workspace: Workspace) -> Candidate:
+    def outcome(self, workspace: Workspace) -> Candidate:
         try:
             room = load_prepared_room(workspace.folder / "candidate")
         except PreparedRoomError as exc:
@@ -258,11 +320,115 @@ class FixtureWorker:
         return Candidate.from_room(room, "fixture", FIXTURE_LABEL, "candidate/manifest.json")
 
 
-def worker_from_environment(repository: Path) -> PreparationWorker | None:
+LIST_OBJECTS_PROMPT = (PROMPTS / "list_objects.txt").read_text(encoding="utf-8").strip()
+
+
+def instructions_note(instructions: str) -> str:
+    return (
+        "The person who took this photo describes the room and the objects that matter. "
+        "Use it to decide which objects to list, and still follow the rules and output format "
+        f"above:\n{instructions}"
+    )
+
+
+def entity_ids(labels: list[str]) -> list[str]:
+    """Stable IDs for the labels in order: lowercase words joined by underscores, made unique."""
+    ids: list[str] = []
+    for label in labels:
+        base = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_") or "object"
+        candidate, number = base, 2
+        while candidate in ids:
+            candidate, number = f"{base}_{number}", number + 1
+        ids.append(candidate)
+    return ids
+
+
+class OpenRouterWorker:
+    """Asks Qwen through OpenRouter which objects the overview shows."""
+
+    stages: tuple[StageName, ...] = ("scene_understanding",)
+
+    def __init__(self, captures: CaptureStore, config: OpenRouterConfig, api_key: str | None):
+        self.captures = captures
+        self.config = config
+        self.client = OpenRouterClient(config, api_key)
+
+    def run_stage(self, stage: StageName, job: JobInput, workspace: Workspace) -> list[Artifact]:
+        capture = self.captures.get(job.capture_id)
+        path, _ = self.captures.photo_file(capture.id, job.overview_image_id, "processed")
+        overview = Picture.from_file(path, self.config.max_image_side)
+        parts: list[Picture | str] = [overview, LIST_OBJECTS_PROMPT]
+        if capture.instructions.strip():
+            parts.append(instructions_note(capture.instructions.strip()))
+        artifacts: list[Artifact] = []
+
+        def record(reply: Reply, problem: str | None) -> None:
+            number = len(workspace.calls) + 1
+            answer = workspace.write(
+                f"artifacts/{stage}/answer-{number}.txt",
+                reply.text.encode(),
+                "text/plain",
+                f"{OPENROUTER_LABEL}: object list answer {number}",
+            )
+            artifacts.append(answer)
+            workspace.calls.append(
+                ModelCall(
+                    stage=stage,
+                    purpose="object list",
+                    model=reply.model,
+                    provider=reply.provider,
+                    generation_id=reply.generation_id,
+                    prompt_tokens=reply.prompt_tokens,
+                    completion_tokens=reply.completion_tokens,
+                    cost_usd=reply.cost_usd,
+                    latency_seconds=reply.latency_seconds,
+                    finish_reason=reply.finish_reason,
+                    accepted=problem is None,
+                    problem=problem,
+                    answer=answer.path,
+                )
+            )
+
+        try:
+            labels = ask(self.client, [say("user", *parts)], OBJECT_LIST, record)
+        except ProviderFailure as exc:
+            raise StageFailure(exc.kind, str(exc)) from exc
+        inventory = Inventory(
+            source="openrouter",
+            label=OPENROUTER_LABEL,
+            overview_image_id=job.overview_image_id,
+            objects=[
+                InventoryObject(id=id, label=label)
+                for id, label in zip(entity_ids(labels), labels, strict=True)
+            ],
+            answer=workspace.calls[-1].answer,
+        )
+        artifacts.append(
+            workspace.write(
+                f"artifacts/{stage}/inventory.json",
+                inventory.model_dump_json(indent=2).encode(),
+                "application/json",
+                f"{OPENROUTER_LABEL}: object inventory",
+            )
+        )
+        return artifacts
+
+    def outcome(self, workspace: Workspace) -> Inventory:
+        return Inventory.model_validate_json(
+            (workspace.folder / "artifacts" / "scene_understanding" / "inventory.json").read_bytes()
+        )
+
+
+def worker_from_environment(repository: Path, captures: CaptureStore) -> PreparationWorker | None:
     """The worker chosen by server settings, or None when preparation is not configured."""
-    if os.environ.get("ESCAPE_ROOM_PREPARATION_WORKER") != "fixture":
+    worker = os.environ.get("ESCAPE_ROOM_PREPARATION_WORKER")
+    if worker == "openrouter":
+        return OpenRouterWorker(
+            captures, OpenRouterConfig.from_environment(), os.environ.get("OPENROUTER_API_KEY")
+        )
+    if worker != "fixture":
         return None
-    config = WorkerConfig.model_validate(
+    config = FixtureConfig.model_validate(
         {
             "worker": "fixture",
             "version": "fixture-1",
@@ -376,7 +542,11 @@ class PreparationService:
             try:
                 stage.artifacts = worker.run_stage(stage.name, job.input, workspace)
                 if stage is job.stages[-1]:
-                    job.candidate = worker.candidate(workspace)
+                    outcome = worker.outcome(workspace)
+                    if isinstance(outcome, Inventory):
+                        job.inventory = outcome
+                    else:
+                        job.candidate = outcome
             except StageFailure as exc:
                 error = JobError(stage=stage.name, kind=exc.kind, message=str(exc))
             except Exception as exc:  # noqa: BLE001 - one bad job must not stop the worker thread
@@ -384,6 +554,7 @@ class PreparationService:
                 error = JobError(stage=stage.name, kind="worker", message=message)
             else:
                 error = None
+            self._collect_calls(job, workspace)
             stage.elapsed_seconds = round(time.monotonic() - started, 3)
             stage.finished_at = now()
             stage.status = "done" if error is None else "failed"
@@ -393,6 +564,15 @@ class PreparationService:
                 return
             self._update(job)
         self._finish(job, "awaiting_review")
+
+    def _collect_calls(self, job: PreparationJob, workspace: Workspace) -> None:
+        """Move the stage's model requests onto the job, failed stages included: they cost money."""
+        if not workspace.calls:
+            return
+        job.model_calls += workspace.calls
+        workspace.calls = []
+        costs = [call.cost_usd for call in job.model_calls if call.cost_usd is not None]
+        job.cost_usd = round(sum(costs), 6) if costs else None
 
     def _finish(self, job: PreparationJob, state: JobState) -> None:
         job.finished_at = now()
