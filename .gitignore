@@ -16,3 +16,6 @@
 /.certs/
 /data/
 *.egg-info/
+
+# Local settings and API keys; .env.example is the committed template
+/.env

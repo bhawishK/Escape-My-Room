@@ -100,21 +100,22 @@ The OpenRouter key has a **$1 spending limit** for testing; the teacher can rais
 
 ### Turn it on
 
-Set the key on the server only. It never reaches the page, a job record, a log or a stored file.
-
-Linux or macOS:
+Put the key in a `.env` file at the repository root. Python reads it when the service starts, and git ignores it. Copy the template and fill in the key:
 
 ```bash
-OPENROUTER_API_KEY=sk-or-... ESCAPE_ROOM_PREPARATION_WORKER=openrouter .venv/bin/python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --workers 1 --ws-max-size 16384
+cp .env.example .env
 ```
-
-Windows Command Prompt:
 
 ```bat
-set OPENROUTER_API_KEY=sk-or-...
-set ESCAPE_ROOM_PREPARATION_WORKER=openrouter
-.venv\Scripts\python.exe -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --workers 1 --ws-max-size 16384
+copy .env.example .env
 ```
+
+```ini
+OPENROUTER_API_KEY=sk-or-...
+ESCAPE_ROOM_PREPARATION_WORKER=openrouter
+```
+
+Then start Python as usual. The key stays on the server: it never reaches the page, a job record, a log or a stored file. Any setting on this page can go in `.env` too. A variable already set in the shell wins over the file, so `set ESCAPE_ROOM_PREPARATION_WORKER=fixture` still switches workers for one run. `ESCAPE_ROOM_ENV_FILE` names a different file, or none when empty; the tests set it empty so they never read your key.
 
 | Setting | Default | Effect |
 | --- | --- | --- |
@@ -156,10 +157,10 @@ A request that fails is never retried in a loop. The stage fails, the job keeps 
 
 The tests never call OpenRouter. They run the service against a local fake (`tests/fake_openrouter.py`) that replays scripted answers, and cover the inventory, the request's image and text order, cost and answer records, repairs, the repair limit, each failure above, and that the key appears in no response or stored file.
 
-To see what the real model does, run the one-off check with a room photo. It sends five requests, the four formats plus an answer asked for in prose to exercise a repair, and costs a few cents at most:
+To see what the real model does, run the one-off check with a room photo; it reads the key from `.env` like the service. It sends five requests, the four formats plus an answer asked for in prose to exercise a repair, and costs a few cents at most:
 
 ```bash
-OPENROUTER_API_KEY=sk-or-... .venv/bin/python -m backend.openrouter_check path/to/room.jpg
+.venv/bin/python -m backend.openrouter_check path/to/room.jpg
 ```
 
 It prints and saves a report under `data/openrouter-checks/` with every answer, token count and cost. The support request carries seven images, REST3D's largest. No real run has been recorded yet.

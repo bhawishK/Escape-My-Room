@@ -29,6 +29,7 @@ from backend.captures import (
     Upload,
 )
 from backend.delivery import Outbox
+from backend.env_file import load_env_file
 from backend.errors import Refusal
 from backend.preparation import JobRequest, PreparationService, worker_from_environment
 from backend.prepared_room import ASSET_URL_PREFIX, PreparedRoomError, load_prepared_room
@@ -403,4 +404,5 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     return app
 
 
+load_env_file()
 app = create_app()
