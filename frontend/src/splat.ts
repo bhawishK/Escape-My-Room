@@ -51,8 +51,14 @@ if (start.has('at')) {
 }
 scene.add(new SparkRenderer({ renderer }));
 
-const grid = new THREE.GridHelper(10, 20, 0xff9500, 0xaeaeb2);
+// Splats don't hide what is behind them, so a large grid shows through the walls. Keep it room
+// sized and faint: it is only there to check that the floor lies at height 0.
+const grid = new THREE.GridHelper(4, 8, 0xff9500, 0xaeaeb2);
 grid.position.y = 0.002;
+for (const material of [grid.material].flat()) {
+  material.transparent = true;
+  material.opacity = 0.45;
+}
 scene.add(grid);
 
 const controls = new SparkControls({ canvas: renderer.domElement });

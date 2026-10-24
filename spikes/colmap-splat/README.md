@@ -91,6 +91,18 @@ The notebook's CPU steps on Mip-NeRF 360 `room` (120 of its 312 photos, 1280 px)
 | Neighbours only | 60 / 120 | 4,752 | 0.18% / 0.92% | 46 s |
 | Every pair | **120 / 120** | **14,396** | **0.08% / 0.26%** | 79 s |
 
+Then the whole notebook in Colab (T4, `QUICK = True`, `SAMPLE_SCENE = "room"`):
+
+| | |
+| --- | --- |
+| Frames | 120 of 312 photos, fetched in 2 min |
+| COLMAP | 120/120 placed; 14,393 points; 7.7 min (all-pairs matching 5.5 min on Colab's 2 CPUs) |
+| Training | 17 min; 400,000 splats (the cap); 41.6 MB |
+| Quality on 12 held-out photos | PSNR 29.3 dB. The published 3DGS result on this scene is about 31.6 dB, with 30,000 steps at higher resolution. |
+| Levelling | The grid lies on the real floorboards |
+
+In the viewer the whole living room is recognisable from the filmed viewpoints. Walls and corners with fewer overlapping photos are blurrier. This is what a well-captured room gives through this pipeline.
+
 Matching only neighbours suits a single continuous video, but misses a corner seen again later in the walk. That is probably also why the second real video placed only 77 of its 120 frames. Hence `EXHAUSTIVE_UP_TO`.
 
 ## Checking the CPU steps without a GPU
