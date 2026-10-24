@@ -74,12 +74,12 @@ export class DiagnosticScene {
     this.renderer.xr.enabled = true;
     this.camera.position.set(0, 1.6, 2.4);
     this.camera.lookAt(0, 0.6, -1.2);
-    this.scene.background = new THREE.Color('#0c1828');
+    this.scene.background = new THREE.Color('#141518');
     this.scene.add(new THREE.HemisphereLight(0xdff7ff, 0x344156, 2));
     const light = new THREE.DirectionalLight(0xffffff, 2);
     light.position.set(2, 4, 1);
     this.scene.add(light);
-    this.grid = new THREE.GridHelper(10, 20, 0x537a91, 0x23394f);
+    this.grid = new THREE.GridHelper(10, 20, 0x6b7078, 0x2c2f35);
     this.scene.add(this.grid);
     this.roomAnchor.name = 'room-anchor';
     this.scene.add(this.roomAnchor);
