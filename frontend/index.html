@@ -2,104 +2,98 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Escape My Room — connection diagnostic</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light" />
+    <title>Escape My Room — shared room</title>
     <!-- The 8th Wall engine tracks the phone with its camera and motion sensors; pinned to one version. -->
     <script src="https://cdn.jsdelivr.net/npm/@8thwall/engine-binary@1.0.0/dist/xr.js" async crossorigin="anonymous" data-preload-chunks="slam"></script>
   </head>
   <body>
-    <main id="app">
-      <header>
-        <p class="eyebrow">ESCAPE MY ROOM / FIRST CONNECTION SLICE</p>
-        <h1>Connect your phone and VR.</h1>
-        <p>Open this page on both devices and choose which device you are using.</p>
-      </header>
-      <div class="layout">
-        <section class="panel" aria-labelledby="connect-heading">
-          <h2 id="connect-heading">Connect your devices</h2>
-          <div class="device-buttons">
-            <button id="connect-phone">Connect phone</button>
-            <button id="connect-vr" class="secondary">Connect VR headset</button>
-          </div>
-          <p class="hint">Both devices connect to the same prototype automatically.</p>
-          <p id="connection" data-testid="connection" role="status">Not connected</p>
-          <p id="vr-status" data-testid="vr-status" class="device-status" role="status">Connect to see VR device status</p>
-          <p id="room-status" data-testid="room-status" class="device-status" role="status">Room not loaded</p>
-          <p id="control-status" data-testid="control-status" class="device-status" role="status">No object is being moved</p>
-          <p id="alignment-status" data-testid="alignment-status" class="device-status" role="status">Not aligned</p>
-          <div id="vr-controls" hidden>
-            <button id="confirm-alignment" disabled>Confirm alignment</button>
-            <p class="hint">Stand at the floor center and face the desk, then confirm. In the headset, press the A button when you see the words Press A. Without tracking, the page button records the origin.</p>
-            <div class="button-row">
-              <button id="start-xr" disabled>Enter VR</button>
-              <button id="end-xr" disabled class="secondary">End VR</button>
-            </div>
-            <p id="xr-support" class="notice" role="status">Checking VR support…</p>
-          </div>
-          <div id="phone-controls" hidden>
-            <button id="open-room-view">Open room view</button>
-            <p class="hint">The room fills the screen and follows you: it turns as the phone turns and moves a step at a time as you walk, roughly, by counting steps. Tap the box to select it; it is outlined in pink and only you see the selection. Press and hold the box to pick it up: it comes in front of you while you walk and turn, and drops to the floor where you let go. Tap anywhere else to deselect. <strong>Gaze cursor</strong> points at objects with your eyes or head through the front camera, after a short calibration. <strong>Measure height</strong> sets the view to how high the phone is, measured once from the back camera with an AI depth model; it downloads 76 MB the first time.</p>
-          </div>
-          <p class="hint">iPhone 16 Chrome shows the room full screen and turns it with the phone. Meta Quest 3 uses the immersive VR view.</p>
-          <button id="disconnect" class="secondary" disabled>Disconnect</button>
-          <p id="error" class="error-message" role="alert" hidden></p>
-        </section>
-        <section class="panel scene-panel" aria-labelledby="scene-heading">
-          <div class="scene-heading"><h2 id="scene-heading">VR preview</h2></div>
-          <div id="scene" aria-label="Three-dimensional diagnostic scene"></div>
-          <p class="hint">Both devices show the same prepared room. Objects marked movable move independently; the rest stay fixed.</p>
-          <details><summary>Device smoke-test diagnostics</summary>
-            <p id="tracking" data-testid="tracking">Inactive</p>
-            <p id="marker-position" data-testid="marker-position">No accepted position</p>
-            <p id="motion-stats" data-testid="motion-stats">No motion yet</p>
-            <p id="presence-phone" data-testid="presence-phone">Phone · not here</p>
-            <p id="presence-headset" data-testid="presence-headset">Headset · not here</p>
-            <p>Positions are room meters. The phone does not send a position yet. On the headset, Confirm alignment places it at the floor center, facing the desk. The furniture positions stay fixed.</p>
-            <p>This report records browser observations. It does not certify a completed hardware test.</p>
-            <pre id="device-report"></pre>
-            <button id="download-report" class="secondary">Download diagnostic report</button>
-          </details>
-        </section>
+    <nav class="global-nav" aria-label="Pages">
+      <a class="brand" href="/">Escape My Room</a>
+      <div class="nav-links">
+        <a href="/" aria-current="page">Shared room</a>
+        <a href="/photos.html">Room photos</a>
       </div>
-      <section id="room-photos" class="panel photos-panel" aria-labelledby="photos-heading">
-        <h2 id="photos-heading">Room photos</h2>
-        <p class="hint">Take photos of your room or choose saved ones (JPEG or PNG). Mark the photo that shows the most of the room as the overview.</p>
-        <div class="button-row">
-          <label class="file-button">Take photo<input id="camera-input" type="file" accept="image/jpeg,image/png" capture="environment" /></label>
-          <label class="file-button secondary">Choose photos<input id="photo-input" type="file" accept="image/jpeg,image/png" multiple /></label>
+    </nav>
+    <main id="app">
+      <section class="hero" aria-labelledby="scene-heading">
+        <div class="content hero-heading">
+          <h1 id="scene-heading">Shared room</h1>
+          <ul class="legend" aria-label="Who is in the room">
+            <li><span class="device-dot phone" aria-hidden="true"></span>Phone</li>
+            <li><span class="device-dot headset" aria-hidden="true"></span>Headset</li>
+          </ul>
         </div>
-        <ul id="pending-photos" class="photo-grid" aria-label="Photos to save"></ul>
-        <label for="instructions">Room instructions</label>
-        <textarea id="instructions" rows="3" placeholder="Describe the room and the objects that matter."></textarea>
-        <button id="save-capture" disabled>Save photos</button>
-        <p id="capture-error" data-testid="capture-error" class="error-message" role="alert" hidden></p>
-        <div id="saved-capture" data-testid="saved-capture" class="divided" hidden>
-          <h3>Saved photos</h3>
-          <p id="saved-time" class="hint"></p>
-          <p id="saved-instructions" data-testid="saved-instructions"></p>
-          <ul id="saved-photos" class="photo-grid" aria-label="Saved photos"></ul>
-          <p id="overview-status" data-testid="overview-status" class="hint" role="status"></p>
-          <section id="room-preparation" class="divided" aria-labelledby="preparation-heading">
-            <h3 id="preparation-heading">Room preparation</h3>
-            <p class="hint">Turn these photos into a candidate room for review. The active room is not changed.</p>
-            <button id="prepare-room">Prepare room</button>
-            <p id="preparation-state" data-testid="preparation-state" role="status" hidden></p>
-            <p id="preparation-elapsed" data-testid="preparation-elapsed" class="hint" hidden></p>
-            <ol id="preparation-stages" class="preparation-stages" aria-label="Preparation stages"></ol>
-            <p id="preparation-error" data-testid="preparation-error" class="error-message" role="alert" hidden></p>
-            <div id="candidate" data-testid="candidate" class="candidate" hidden>
-              <p id="candidate-label" data-testid="candidate-label" class="fixture-label"></p>
-              <img id="candidate-overview" alt="" />
-              <ul id="candidate-objects" aria-label="Candidate objects"></ul>
+        <div id="scene" aria-label="Three-dimensional view of the shared room"></div>
+        <p class="content hint">Both devices see this same room. Movable objects can be picked up; everything else stays fixed.</p>
+      </section>
+      <section class="content connect" aria-labelledby="connect-heading">
+        <div class="section-heading">
+          <h2 id="connect-heading">Connect</h2>
+          <p id="connection" data-testid="connection" class="chip" role="status">Not connected</p>
+        </div>
+        <p class="lede">Open this page on both devices, then choose the device you’re holding. Both join the same room automatically.</p>
+        <div class="connect-grid">
+          <div class="card connect-actions">
+            <div class="device-buttons">
+              <button id="connect-phone"><span class="device-dot phone" aria-hidden="true"></span>Connect phone</button>
+              <button id="connect-vr" class="secondary"><span class="device-dot headset" aria-hidden="true"></span>Connect VR headset</button>
             </div>
-          </section>
+            <div id="vr-controls" hidden>
+              <button id="confirm-alignment" disabled>Confirm alignment</button>
+              <p class="hint">Stand at the floor center and face the desk, then confirm. In the headset, press the A button when you see the words Press A. Without tracking, the page button records the origin.</p>
+              <div class="button-row">
+                <button id="start-xr" disabled>Enter VR</button>
+                <button id="end-xr" disabled class="secondary">End VR</button>
+              </div>
+              <p id="xr-support" class="notice" role="status">Checking VR support…</p>
+            </div>
+            <div id="phone-controls" hidden>
+              <button id="open-room-view">Open room view</button>
+              <p class="hint">The room fills the screen and follows you. It turns as the phone turns and, roughly, moves a step at a time as you walk.</p>
+              <ul class="how-to">
+                <li><strong>Tap</strong> the box to select it. It’s outlined in pink, and only you see the selection.</li>
+                <li><strong>Press and hold</strong> to pick it up. It stays in front of you as you walk and turn.</li>
+                <li><strong>Let go</strong> to drop it on the floor. Tap anywhere else to deselect.</li>
+                <li><strong>Gaze cursor</strong> points at objects with your eyes or head through the front camera, after a short calibration.</li>
+                <li><strong>Measure height</strong> measures once how high the phone is, from the back camera. It downloads 76 MB the first time.</li>
+              </ul>
+            </div>
+            <button id="disconnect" class="secondary" disabled>Disconnect</button>
+            <p id="error" class="error-message" role="alert" hidden></p>
+          </div>
+          <div class="card">
+            <h3 class="card-title">Status</h3>
+            <dl class="status-list">
+              <div><dt>Headset</dt><dd><p id="vr-status" data-testid="vr-status" class="device-status" role="status">Connect to see VR device status</p></dd></div>
+              <div><dt>Room</dt><dd><p id="room-status" data-testid="room-status" class="device-status" role="status">Room not loaded</p></dd></div>
+              <div><dt>Object</dt><dd><p id="control-status" data-testid="control-status" class="device-status" role="status">No object is being moved</p></dd></div>
+              <div><dt>Alignment</dt><dd><p id="alignment-status" data-testid="alignment-status" class="device-status" role="status">Not aligned</p></dd></div>
+            </dl>
+          </div>
         </div>
+        <p class="footnote">Tested on iPhone 16 with Chrome, which shows the room full screen, and Meta Quest 3, which uses the immersive VR view.</p>
+        <details class="card diagnostics"><summary>Device smoke-test diagnostics</summary>
+          <p id="tracking" data-testid="tracking">Inactive</p>
+          <p id="marker-position" data-testid="marker-position">No accepted position</p>
+          <p id="motion-stats" data-testid="motion-stats">No motion yet</p>
+          <p id="presence-phone" data-testid="presence-phone">Phone · not here</p>
+          <p id="presence-headset" data-testid="presence-headset">Headset · not here</p>
+          <p>Positions are room meters. The phone does not send a position yet. On the headset, Confirm alignment places it at the floor center, facing the desk. The furniture positions stay fixed.</p>
+          <p>This report records browser observations. It does not certify a completed hardware test.</p>
+          <pre id="device-report"></pre>
+          <button id="download-report" class="secondary">Download diagnostic report</button>
+        </details>
       </section>
     </main>
     <div id="room-view-hud" hidden>
       <div class="hud-top">
+        <div class="hud-bar">
+          <button id="close-room-view">Close</button>
+          <p id="tracking-mode" data-testid="tracking-mode" class="hud-mode"></p>
+        </div>
         <p id="view-status" data-testid="view-status" class="hud-status" role="status">Turning off</p>
-        <p id="tracking-mode" data-testid="tracking-mode" class="hud-mode"></p>
       </div>
       <div class="hud-buttons">
         <button id="recentre" class="secondary" hidden>Recentre</button>
@@ -112,7 +106,6 @@
         <button id="gaze-calibrate" class="secondary" hidden>Calibrate</button>
         <button id="gaze-test" class="secondary" hidden>Test accuracy</button>
         <button id="send-log" class="secondary">Send log</button>
-        <button id="close-room-view" class="secondary">Close</button>
         <p id="engine-credits" data-testid="engine-credits" class="hud-credits">
           Phone tracking by the 8th Wall Engine, created by Niantic Spatial, Inc. © 2026 Niantic Spatial, Inc.
           All rights reserved. Licensed under the

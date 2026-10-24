@@ -39,20 +39,20 @@ export class DiagnosticScene {
   private statusText = '';
   private readonly raycaster = new THREE.Raycaster();
   /** Outlines the object the phone's gaze cursor is over. */
-  private readonly highlight = new THREE.BoxHelper(new THREE.Object3D(), 0xffd399);
+  private readonly highlight = new THREE.BoxHelper(new THREE.Object3D(), 0xffcc00);
   private highlighted: string | null = null;
   /** Outlines the object this phone has selected, in a colour apart from the gaze outline. */
-  private readonly selection = new THREE.BoxHelper(new THREE.Object3D(), 0xff5fa2);
+  private readonly selection = new THREE.BoxHelper(new THREE.Object3D(), 0xff2d55);
   /** A halo around the selected object: only its far faces are drawn, so the object keeps its colour. */
   private readonly selectionShell = new THREE.Mesh(
     new THREE.BoxGeometry(1, 1, 1),
     new THREE.MeshBasicMaterial({
-      color: 0xff5fa2, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.BackSide,
+      color: 0xff2d55, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.BackSide,
     }),
   );
   private selected: string | null = null;
   /** Outlines the object someone is holding, on both devices. */
-  private readonly control = new THREE.BoxHelper(new THREE.Object3D(), 0xffa64d);
+  private readonly control = new THREE.BoxHelper(new THREE.Object3D(), 0xff9500);
   private controlled: string | null = null;
   private predicted: { id: string; position: THREE.Vector3 } | null = null;
   /**
@@ -74,25 +74,25 @@ export class DiagnosticScene {
     this.renderer.xr.enabled = true;
     this.camera.position.set(0, 1.6, 2.4);
     this.camera.lookAt(0, 0.6, -1.2);
-    this.scene.background = new THREE.Color('#0c1828');
+    this.scene.background = new THREE.Color('#f5f5f7');
     this.scene.add(new THREE.HemisphereLight(0xdff7ff, 0x344156, 2));
     const light = new THREE.DirectionalLight(0xffffff, 2);
     light.position.set(2, 4, 1);
     this.scene.add(light);
-    this.grid = new THREE.GridHelper(10, 20, 0x537a91, 0x23394f);
+    this.grid = new THREE.GridHelper(10, 20, 0xaeaeb2, 0xd8d8dc);
     this.scene.add(this.grid);
     this.roomAnchor.name = 'room-anchor';
     this.scene.add(this.roomAnchor);
     // The phone's accepted position, in room meters like the furniture.
     this.marker = new THREE.Mesh(
       new THREE.SphereGeometry(0.08, 24, 16),
-      new THREE.MeshStandardMaterial({ color: 0x66e6cf, emissive: 0x154b43 }),
+      new THREE.MeshStandardMaterial({ color: 0x30b0c7, emissive: 0x0b3a42 }),
     );
     this.marker.name = 'phone-marker';
     this.marker.visible = false;
     this.roomAnchor.add(this.marker);
-    this.people.set('mobile_master', this.person(0x66e6cf, 'presence-phone'));
-    this.people.set('vr_solver', this.person(0xf0b429, 'presence-headset'));
+    this.people.set('mobile_master', this.person(0x30b0c7, 'presence-phone'));
+    this.people.set('vr_solver', this.person(0xff9500, 'presence-headset'));
     this.statusCanvas.width = 512;
     this.statusCanvas.height = 160;
     this.statusTexture = new THREE.CanvasTexture(this.statusCanvas);

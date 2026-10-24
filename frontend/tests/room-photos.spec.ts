@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 const photo = (name: string) => fileURLToPath(new URL(`./fixtures/photos/${name}`, import.meta.url));
 
 async function openPhotos(page: Page) {
-  await page.goto('/');
+  await page.goto('/photos.html');
   return page.getByRole('region', { name: 'Room photos' });
 }
 

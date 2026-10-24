@@ -50,7 +50,7 @@ Open `https://192.168.1.10:8443` using the IP you substituted. Allow incoming po
 2. Open the same URL on Quest and select **Connect VR headset**. The phone should show **VR device connected**. Both pages should show room version 1 with the floor, desk, cabinet, and movable box. Select **Enter VR** on Quest to look around that room. This separate click provides the browser gesture required to start immersive XR.
 3. End VR using **End VR** when the overlay is available, or a controller select action when it is not. Select **Disconnect** to leave the shared room. The phone returns to **Waiting for VR device** after the VR page disconnects. Connected status means the headset page is connected; it does not prove immersive mode or positional tracking.
 4. After a dropped connection, use the role button to connect again. There is no session ID to copy or reservation to clear. Opening a second tab in the same role replaces the first.
-5. Optional diagnostics are collapsed below the preview. Download the browser report and fill in the hardware record. The report is capability/pose telemetry, not proof of a passed device test. The phone's report adds a `tracking` section with the video and processing sizes, frames per second and detection time.
+5. Optional diagnostics are collapsed below **Connect**. Download the browser report and fill in the hardware record. The report is capability/pose telemetry, not proof of a passed device test. The phone's report adds a `tracking` section with the video and processing sizes, frames per second and detection time.
 
 ## Try a slow network
 

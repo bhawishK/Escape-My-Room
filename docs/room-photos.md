@@ -4,7 +4,7 @@ Issue 24 lets the mobile master save the photographs and instructions that later
 
 ## Using it
 
-The **Room photos** panel sits below the connection panels.
+**Room photos** has its own page, `/photos.html`, reached from the navigation bar at the top of the shared room page.
 
 - **Take photo** opens the device camera. On iPhone and Android it uses the browser's native camera picker (`<input capture="environment">`); each tap adds one photo. On desktop it opens a file chooser.
 - **Choose photos** adds existing JPEG or PNG photos, several at once.
