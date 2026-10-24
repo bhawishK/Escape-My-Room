@@ -1,4 +1,7 @@
-/** Room preparation: start a job for the saved capture and follow its stages to a candidate. */
+/**
+ * Room preparation: start a job for the saved capture and follow its stages to what it produced,
+ * a candidate room or the objects a model found, with what any model requests cost.
+ */
 import type { CaptureSummary } from './capture';
 import { errorMessage } from './api';
 import { element } from './dom';
@@ -27,6 +30,18 @@ type ErrorKind =
 /** What the browser asks to prepare. */
 interface JobRequest { capture_id: string; overview_image_id: string }
 
+interface ModelCall {
+  model: string | null;
+  provider: string | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  cost_usd: number | null;
+  latency_seconds: number;
+  accepted: boolean;
+  // The answer as received, relative to the job folder.
+  answer: string;
+}
+
 export interface PreparationJob {
   id: string;
   state: 'queued' | 'running' | 'awaiting_review' | 'failed';
@@ -36,6 +51,10 @@ export interface PreparationJob {
   stages: Stage[];
   error: { stage: StageName | null; kind: ErrorKind; message: string } | null;
   candidate: { label: string; entities: CandidateEntity[] } | null;
+  inventory: { label: string; objects: { id: string; label: string }[]; answer: string } | null;
+  model_calls: ModelCall[];
+  // The sum of the costs OpenRouter reported; null when no model was asked.
+  cost_usd: number | null;
 }
 
 const isActive = (job: PreparationJob) => job.state === 'queued' || job.state === 'running';
@@ -155,6 +174,64 @@ export class RoomPreparation {
       this.error.hidden = true;
     }
     this.showCandidate(job);
+    this.showInventory(job);
+    this.showModelUsage(job);
+  }
+
+  private showOverview(job: PreparationJob, id: string): void {
+    const overview = this.capture?.images.find(image => image.id === job.input.overview_image_id);
+    const picture = element<HTMLImageElement>(id);
+    picture.hidden = !overview;
+    if (overview) {
+      picture.src = overview.processed_url;
+      picture.alt = `Overview: ${overview.original_filename}`;
+    }
+  }
+
+  private showInventory(job: PreparationJob): void {
+    const box = element('inventory');
+    box.hidden = job.inventory === null;
+    if (!job.inventory) return;
+    const count = job.inventory.objects.length;
+    element('inventory-label').textContent =
+      `${job.inventory.label} · ${count} ${count === 1 ? 'object' : 'objects'} found`;
+    this.showOverview(job, 'inventory-overview');
+    element('inventory-objects').replaceChildren(...job.inventory.objects.map(object => {
+      const item = document.createElement('li');
+      item.textContent = object.label;
+      return item;
+    }));
+  }
+
+  /** What the model requests cost, shown on failed jobs too: a refused answer still costs money. */
+  private showModelUsage(job: PreparationJob): void {
+    const usage = element('model-usage');
+    const calls = job.model_calls;
+    usage.hidden = calls.length === 0;
+    if (calls.length === 0) return;
+    const last = calls[calls.length - 1];
+    const tokens = calls.reduce((sum, call) => sum + (call.prompt_tokens ?? 0) + (call.completion_tokens ?? 0), 0);
+    const seconds = calls.reduce((sum, call) => sum + call.latency_seconds, 0);
+    // A total that leaves out requests OpenRouter reported no cost for would understate the spend.
+    const unpriced = calls.filter(call => call.cost_usd === null).length;
+    const total = job.cost_usd === null ? 'cost not reported' : `$${job.cost_usd.toFixed(4)}`;
+    const cost = unpriced && job.cost_usd !== null ? `${total} + ${unpriced} without a reported cost` : total;
+    const parts = [
+      [last.model ?? 'unknown model', last.provider].filter(Boolean).join(' via '),
+      `${calls.length} ${calls.length === 1 ? 'request' : 'requests'}`,
+      `${tokens.toLocaleString()} tokens`,
+      cost,
+      `${seconds.toFixed(1)} s`,
+    ];
+    // Every answer, refused ones included, so a repair can be traced.
+    const links = calls.flatMap((call, index) => {
+      const link = document.createElement('a');
+      link.href = `/api/preparations/${job.id}/files/${call.answer}`;
+      link.target = '_blank';
+      link.textContent = calls.length === 1 ? 'Raw answer' : `answer ${index + 1}${call.accepted ? '' : ' (refused)'}`;
+      return index === 0 ? [link] : [', ', link];
+    });
+    usage.replaceChildren(`${parts.join(' · ')} · `, ...(calls.length === 1 ? [] : ['Raw answers: ']), ...links);
   }
 
   private showCandidate(job: PreparationJob): void {
@@ -162,13 +239,7 @@ export class RoomPreparation {
     box.hidden = job.candidate === null;
     if (!job.candidate) return;
     element('candidate-label').textContent = job.candidate.label;
-    const overview = this.capture?.images.find(image => image.id === job.input.overview_image_id);
-    const picture = element<HTMLImageElement>('candidate-overview');
-    picture.hidden = !overview;
-    if (overview) {
-      picture.src = overview.processed_url;
-      picture.alt = `Overview: ${overview.original_filename}`;
-    }
+    this.showOverview(job, 'candidate-overview');
     element('candidate-objects').replaceChildren(...job.candidate.entities.map(entity => {
       const item = document.createElement('li');
       const size = [entity.width, entity.height, entity.depth].map(value => value.toFixed(2)).join(' × ');
@@ -183,6 +254,8 @@ export class RoomPreparation {
     element('preparation-elapsed').hidden = true;
     element('preparation-stages').replaceChildren();
     element('candidate').hidden = true;
+    element('inventory').hidden = true;
+    element('model-usage').hidden = true;
     this.button.disabled = false;
   }
 

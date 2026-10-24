@@ -21,7 +21,7 @@ def seconds_between(start: str, end: str) -> float:
 def write_json(path: Path, record: BaseModel) -> None:
     """Replace the file in one step, so a reader never sees a half-written record."""
     pending = path.with_suffix(".json.tmp")
-    pending.write_text(record.model_dump_json(indent=2))
+    pending.write_text(record.model_dump_json(indent=2), encoding="utf-8")
     pending.replace(path)
 
 

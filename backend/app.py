@@ -107,7 +107,7 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     data = data_dir or Path(os.environ.get("ESCAPE_ROOM_DATA_DIR") or repository / "data")
     captures = CaptureStore(data / "captures", CaptureLimits.from_environment())
     preparations = PreparationService(
-        data / "jobs", captures, worker_from_environment(repository)
+        data / "jobs", captures, worker_from_environment(repository, captures)
     )
     default = repository / "assets" / "prepared-room"
     directory = prepared_dir or Path(os.environ.get("ESCAPE_ROOM_PREPARED_DIR") or default)

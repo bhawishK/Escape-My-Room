@@ -212,7 +212,10 @@ textarea::placeholder { color: var(--label-2); }
 #preparation-state { font-weight: 600; }
 .candidate { display: grid; gap: 8px; padding: 14px; border: 1px dashed var(--orange-text); border-radius: 14px; background: #ffffff; }
 .fixture-label { color: var(--orange-text); font-weight: 600; font-size: .9375rem; }
-#candidate-overview { width: 100%; max-height: 220px; object-fit: contain; border-radius: 10px; background: var(--fill); }
+.inventory { display: grid; gap: 8px; padding: 14px; border-radius: 14px; background: #ffffff; }
+.inventory-label { font-weight: 600; font-size: .9375rem; }
+#inventory-objects { margin: 0; padding-left: 18px; font-size: .9375rem; display: grid; gap: 2px; }
+#candidate-overview, #inventory-overview { width: 100%; max-height: 220px; object-fit: contain; border-radius: 10px; background: var(--fill); }
 #candidate-objects { margin: 0; padding-left: 18px; font-size: .9375rem; }
 
 [hidden] { display: none !important; }
