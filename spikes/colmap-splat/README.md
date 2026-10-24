@@ -32,6 +32,10 @@ the iPhone and the Quest? Nothing here is used by the app.
 3. **Runtime → Run all**. The upload cell asks for the video.
 4. Wait, keeping the tab open. The download of `room-splat.zip` starts at the end.
 
+**No video yet?** Set `SAMPLE_SCENE = "room"` in the settings cell, then Run all. Nothing is uploaded: the notebook reads one published indoor scene's photos straight out of its zip. The scenes are `room`, `kitchen` and `counter` from [Mip-NeRF 360](https://jonbarron.info/mipnerf360/) (80–100 MB each), and `playroom` from Deep Blending, as packaged with the 3D Gaussian Splatting paper (136 MB). Their authors state no licence, so use them for testing only and don't redistribute them.
+
+Up to `EXHAUSTIVE_UP_TO = 150` frames, every frame is matched with every other. Above that, only each frame's 15 neighbours in time are matched.
+
 The settings cell has two switches for speed:
 - `QUICK = True` (the default): at most 120 frames at 1280 px and 10,000 training steps, about 20–30 minutes in total. `False` gives 240 frames at 1600 px and 20,000 steps, a little sharper, about 45–75 minutes.
 - `MAPPER = "incremental"` (the default) uses COLMAP's classic mapper; `"global"` uses GLOMAP, which places all cameras at once. On the 90-frame synthetic room both were equally accurate and incremental was faster (84 s against 134 s on 12 CPU threads); global mapping usually pays off only with many hundreds of frames. If the chosen mapper places fewer than 80% of the frames, the notebook tries the other one too and keeps whichever placed more. `report.json` records which one was used and how long each took.
@@ -77,6 +81,17 @@ Findings:
 - **Few points meant few splats.** MCMC grows the splat count by 5% per refinement, so starting from 2,202 points it reached only 98,585. The notebook now starts from at least 50,000 jittered copies of the points.
 - **The floor was probably wrong**, and so was the scale that depends on it. The viewer now has **Set floor**, and the filming guide asks for the floor to be in shot.
 - `report.json` now records each camera's direction, so the viewer can face the way the video did.
+
+## Published room, 2026-10-25
+
+The notebook's CPU steps on Mip-NeRF 360 `room` (120 of its 312 photos, 1280 px), compared with the camera positions the dataset's authors published:
+
+| Matching | Frames placed | Points | Camera error vs published (median / max, % of the camera circle) | COLMAP time |
+| --- | --- | --- | --- | --- |
+| Neighbours only | 60 / 120 | 4,752 | 0.18% / 0.92% | 46 s |
+| Every pair | **120 / 120** | **14,396** | **0.08% / 0.26%** | 79 s |
+
+Matching only neighbours suits a single continuous video, but misses a corner seen again later in the walk. That is probably also why the second real video placed only 77 of its 120 frames. Hence `EXHAUSTIVE_UP_TO`.
 
 ## Checking the CPU steps without a GPU
 

@@ -17,12 +17,14 @@
 
 # %%
 # Settings. The defaults suit a 1–2 minute walk around a room.
+SAMPLE_SCENE = None  # or a name from SAMPLE_SCENES below, to try the pipeline without a video
 QUICK = True  # about half the time, a little less sharp: fewer, smaller frames, less training
 MAPPER = "incremental"  # COLMAP's classic mapper, or "global" (GLOMAP) for many hundreds of frames
 FRAMES_PER_SECOND = 2.0  # frames kept per second of video
 MAX_FRAMES = 120 if QUICK else 240  # COLMAP time grows quickly with more
 LONG_SIDE = 1280 if QUICK else 1600  # pixels; larger is sharper but slower to train
-SEQUENTIAL_OVERLAP = 15  # each frame is matched with this many neighbours
+EXHAUSTIVE_UP_TO = 150  # up to this many frames, every frame is matched with every other
+SEQUENTIAL_OVERLAP = 15  # above it, each frame is matched with this many neighbours
 TRAIN_STEPS = 10_000 if QUICK else 20_000  # 30_000 is the usual full training
 MAX_SPLATS = 400_000  # caps file size: about 30 MB at SH_DEGREE 1
 SH_DEGREE = 1  # view-dependent colour detail; 3 is the usual, 4x larger files
@@ -33,7 +35,7 @@ MIN_START_SPLATS = 50_000  # training starts from at least this many, copying CO
 # %%
 # Install. pycolmap is CPU-only here; gsplat compiles its GPU code on first use (5–10 min).
 # !nvidia-smi --query-gpu=name,memory.total --format=csv
-# !pip -q install pycolmap==4.2.1 gsplat==1.5.3 opencv-python-headless
+# !pip -q install pycolmap==4.2.1 gsplat==1.5.3 opencv-python-headless remotezip==0.12.6
 
 # %%
 # Helpers: frames, COLMAP, levelling, and the splat file. No GPU needed here.
@@ -44,6 +46,52 @@ import time
 from pathlib import Path
 
 import numpy as np
+
+# Published indoor scenes: photos in capture order, read straight out of the published zip
+# without downloading all of it. For testing only; their authors state no licence.
+SAMPLE_SCENES = {
+    # Mip-NeRF 360 (Barron et al., CVPR 2022): a living room photographed in a full circle.
+    "room": ("http://storage.googleapis.com/gresearch/refraw360/360_v2.zip", "room/images_4/"),
+    "kitchen": (
+        "http://storage.googleapis.com/gresearch/refraw360/360_v2.zip",
+        "kitchen/images_4/",
+    ),
+    "counter": (
+        "http://storage.googleapis.com/gresearch/refraw360/360_v2.zip",
+        "counter/images_4/",
+    ),
+    # Deep Blending (Hedman et al., 2018), as packaged with the 3D Gaussian Splatting paper.
+    "playroom": (
+        "https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/datasets/input/tandt_db.zip",
+        "db/playroom/images/",
+    ),
+}
+
+
+def fetch_sample(scene: str, out: Path, long_side: int, max_frames: int) -> int:
+    """A published scene's photos as frames, evenly thinned to `max_frames` and resized."""
+    from PIL import Image
+    from remotezip import RemoteZip
+
+    url, folder = SAMPLE_SCENES[scene]
+    shutil.rmtree(out, ignore_errors=True)
+    out.mkdir(parents=True)
+    with RemoteZip(url) as archive:
+        names = sorted(
+            name
+            for name in archive.namelist()
+            if name.startswith(folder) and name.lower().endswith((".jpg", ".jpeg", ".png"))
+        )
+        if len(names) > max_frames:
+            names = [
+                names[i] for i in np.linspace(0, len(names) - 1, max_frames).round().astype(int)
+            ]
+        for number, name in enumerate(names):
+            with archive.open(name) as file:
+                image = Image.open(file).convert("RGB")
+            image.thumbnail((long_side, long_side))
+            image.save(out / f"frame_{number:04d}.jpg", quality=95)
+    return len(names)
 
 
 def extract_frames(video: Path, out: Path, fps: float, long_side: int, max_frames: int) -> int:
@@ -86,7 +134,9 @@ def extract_frames(video: Path, out: Path, fps: float, long_side: int, max_frame
     return len(picked)
 
 
-def reconstruct(images: Path, work: Path, overlap: int, mapper: str) -> dict:
+def reconstruct(
+    images: Path, work: Path, overlap: int, mapper: str, exhaustive_up_to: int = 150
+) -> dict:
     """COLMAP: features, matching between nearby frames, mapping, then undistorted images.
 
     "incremental" adds cameras one at a time; "global" (GLOMAP) solves them all at once, which
@@ -107,12 +157,21 @@ def reconstruct(images: Path, work: Path, overlap: int, mapper: str) -> dict:
     pycolmap.extract_features(
         database, images, camera_mode=pycolmap.CameraMode.SINGLE, reader_options=reader
     )
-    pairing = pycolmap.SequentialPairingOptions()
-    pairing.overlap = overlap
-    pairing.quadratic_overlap = True
-    pycolmap.match_sequential(database, pairing_options=pairing)
+    # Matching only neighbours in time misses a corner seen again later in the walk, and placed
+    # only half of a published scene's photos; matching all pairs placed them all.
     total = len(list(images.glob("*.jpg")))
-    timings = {}
+    started = time.time()
+    if total <= exhaustive_up_to:
+        pycolmap.match_exhaustive(database)
+        matching = "exhaustive"
+    else:
+        pairing = pycolmap.SequentialPairingOptions()
+        pairing.overlap = overlap
+        pairing.quadratic_overlap = True
+        pycolmap.match_sequential(database, pairing_options=pairing)
+        matching = "sequential"
+    matching_seconds = round(time.time() - started, 1)
+    timings = {"matching": matching, "matching_seconds": matching_seconds}
     best, used = None, None
     for name in [mapper, "global" if mapper == "incremental" else "incremental"]:
         started = time.time()
@@ -305,16 +364,17 @@ def write_ply(path: Path, means, scales, quats, opacities, sh0, sh_rest) -> None
 
 
 # %%
-# Upload the video (or set VIDEO to a path, for example in mounted Google Drive).
+# Upload the video (or set VIDEO to a path, for example in mounted Google Drive). Skipped when
+# SAMPLE_SCENE is set.
 WORK = Path("/content/room")
 VIDEO = None
-if VIDEO is None:
+if VIDEO is None and SAMPLE_SCENE is None:
     from google.colab import files
 
     uploaded = files.upload()
     VIDEO = Path(next(iter(uploaded)))
 report: dict = {
-    "video": Path(VIDEO).name,
+    "video": f"sample: {SAMPLE_SCENE}" if SAMPLE_SCENE else Path(VIDEO).name,
     "settings": {
         "quick": QUICK,
         "mapper": MAPPER,
@@ -330,14 +390,19 @@ report: dict = {
 # %%
 # 1. Frames.
 started = time.time()
-count = extract_frames(Path(VIDEO), WORK / "frames", FRAMES_PER_SECOND, LONG_SIDE, MAX_FRAMES)
+if SAMPLE_SCENE:
+    count = fetch_sample(SAMPLE_SCENE, WORK / "frames", LONG_SIDE, MAX_FRAMES)
+else:
+    count = extract_frames(Path(VIDEO), WORK / "frames", FRAMES_PER_SECOND, LONG_SIDE, MAX_FRAMES)
 report["frames_seconds"] = round(time.time() - started, 1)
 print(f"{count} frames in {report['frames_seconds']} s")
 
 # %%
 # 2. COLMAP. Expect 10–40 minutes on Colab's CPU.
 started = time.time()
-report["colmap"] = reconstruct(WORK / "frames", WORK / "colmap", SEQUENTIAL_OVERLAP, MAPPER)
+report["colmap"] = reconstruct(
+    WORK / "frames", WORK / "colmap", SEQUENTIAL_OVERLAP, MAPPER, EXHAUSTIVE_UP_TO
+)
 report["colmap"]["seconds"] = round(time.time() - started, 1)
 print(json.dumps(report["colmap"], indent=2))
 if report["colmap"]["frames_placed"] < 0.8 * report["colmap"]["frames"]:
