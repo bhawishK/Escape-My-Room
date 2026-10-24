@@ -40,6 +40,9 @@ export default defineConfig({
       // The deterministic development worker, slow enough for progress to be visible.
       ESCAPE_ROOM_PREPARATION_WORKER: 'fixture',
       ESCAPE_ROOM_FIXTURE_STAGE_SECONDS: '0.6',
+      // Never read the developer's `.env`: its key would spend money and its settings
+      // would change what the tests see.
+      ESCAPE_ROOM_ENV_FILE: '',
       ...settings,
     },
     reuseExistingServer: false,

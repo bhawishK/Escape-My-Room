@@ -62,7 +62,13 @@ def _service(prepared_dir: Path, data_dir: Path, **settings: str) -> Iterator[st
         ],
         cwd=ROOT,
         env=os.environ
-        | {"ESCAPE_ROOM_PREPARED_DIR": str(prepared_dir), "ESCAPE_ROOM_DATA_DIR": str(data_dir)}
+        | {
+            "ESCAPE_ROOM_PREPARED_DIR": str(prepared_dir),
+            "ESCAPE_ROOM_DATA_DIR": str(data_dir),
+            # Never read the developer's `.env`: its key would spend money and its settings
+            # would change what the tests see.
+            "ESCAPE_ROOM_ENV_FILE": "",
+        }
         | settings,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

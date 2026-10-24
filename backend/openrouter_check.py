@@ -1,6 +1,8 @@
 """Send the frozen REST3D-shaped requests to the real OpenRouter once and record what came back.
 
-    OPENROUTER_API_KEY=... python -m backend.openrouter_check path/to/room-photo.jpg
+    python -m backend.openrouter_check path/to/room-photo.jpg
+
+The key comes from OPENROUTER_API_KEY, in the environment or in `.env`.
 
 Five requests, each with its answer, tokens, cost and whether it followed the format:
 
@@ -23,6 +25,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+from backend.env_file import load_env_file
 from backend.openrouter import (
     OBJECT_LIST,
     PROMPTS,
@@ -61,6 +64,7 @@ def highlighted(photo: Path, box: tuple[float, float, float, float], max_side: i
 
 
 def main(photo: Path) -> int:
+    load_env_file()
     config = OpenRouterConfig.from_environment()
     client = OpenRouterClient(config, os.environ.get("OPENROUTER_API_KEY"))
     scene = Picture.from_file(photo, config.max_image_side)
