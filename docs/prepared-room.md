@@ -169,3 +169,40 @@ set ESCAPE_ROOM_PREPARED_DIR=assets\large-room
 Use the same host, port and HTTPS settings as in [the startup guide](diagnostic-startup.md).
 
 With measured tracking the phone moves one-to-one, so the virtual room only helps where the real room has the same free floor. Pick a room, or move the stand-in furniture in the script, to fit the space you walk in. The 6 m floor is larger than many rooms.
+
+## Splat rooms (issue 92)
+
+A schema 2 room can name a Gaussian splat, trained from a video of a real room with the [room splat notebook](../spikes/colmap-splat/README.md). Both devices then draw the splat as the room:
+- **Static entities are not drawn, but stay in force.** The phone's walking keeps to the floor, and aiming stops at furniture.
+- **Movable entities are drawn over the splat** and are picked up as usual.
+- **The splat is in the room frame already:** meters, +Y up, floor at `y = 0`.
+
+```json
+"splat": { "asset": "room.ply" }
+```
+
+**Validation:** the asset must be a plain `.ply` or `.spz` file name in the room folder. Python checks that it exists and starts like its format (`ply` text for PLY, gzip for SPZ). A missing or wrong splat makes the room unavailable with a reason, like a missing model. `GET /api/room` and each device's state carry `splat_url`, or `null` for rooms without a splat.
+
+**What devices load:** Spark, the splat renderer, is downloaded only for splat rooms, so other rooms stay as light as before. In a splat room the headset page's overview starts at the room origin facing −Z, where the video was filmed, instead of the stand-in room's corner view.
+
+**Make one from a notebook download** (`room.ply` and `report.json`):
+
+```bash
+python assets/splat-room/build_room.py ~/Downloads/room-splat data/splat-room
+```
+
+It writes `data/splat-room/` (git ignores `data/`):
+- the splat;
+- a floor entity covering the middle 90% of the splat, and at least 2 m square, so walking stays in the room;
+- a 0.3 m movable box, 1 m in front of the middle filmed viewpoint;
+- the manifest.
+
+Each rebuild counts the room version up, so devices still showing the earlier room load the new one. Serve it by setting `ESCAPE_ROOM_PREPARED_DIR=data/splat-room`, in `.env` or the shell, then start Python.
+
+`assets/splat-room/` is the committed test room: a 107 KB synthetic splat of a checkered floor and a red block, with the same floor and box. It is rebuilt with `python assets/splat-room/build_room.py`.
+
+**Limits:**
+- **No furniture entities.** Walking passes through the splat's furniture, since there are no furniture entities for it to stop at.
+- **Approximate scale.** It comes from the notebook's assumed 1.4 m camera height until the room is measured.
+- **Gaps away from the filming.** Away from where the video was filmed, the splat shows gaps and smears.
+- **Weight on phones.** A splat of 400,000 splats is about 42 MB and heavy for low-end phones.

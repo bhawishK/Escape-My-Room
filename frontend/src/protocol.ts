@@ -27,6 +27,8 @@ export interface RoomState {
   quaternion_order: 'xyzw' | null;
   error: string | null;
   entities: RoomEntity[];
+  /** A Gaussian splat drawn as the room's look; static entities are then not drawn. */
+  splat_url: string | null;
   loaded_by: { mobile_master: number | null; vr_solver: number | null };
 }
 

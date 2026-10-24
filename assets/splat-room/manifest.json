@@ -1,0 +1,61 @@
+{
+  "schema_version": 2,
+  "room_version": 1,
+  "units": "meters",
+  "frame": "y_up_right_handed",
+  "pivot": "bottom_center",
+  "quaternion_order": "xyzw",
+  "splat": {
+    "asset": "room.ply"
+  },
+  "entities": [
+    {
+      "id": "floor",
+      "label": "Floor",
+      "asset": "floor.glb",
+      "node": "floor",
+      "kind": "static",
+      "selectable": false,
+      "size": {
+        "width": 2.6399999856948853,
+        "height": 0.02,
+        "depth": 2.6399999856948853
+      },
+      "position": {
+        "x": -0.020000040531158447,
+        "y": -0.02,
+        "z": -0.020000040531158447
+      },
+      "rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      }
+    },
+    {
+      "id": "box",
+      "label": "Box",
+      "asset": "box.glb",
+      "node": "box",
+      "kind": "movable",
+      "selectable": true,
+      "size": {
+        "width": 0.3,
+        "height": 0.3,
+        "depth": 0.3
+      },
+      "position": {
+        "x": -0.020000040531158447,
+        "y": 0.0,
+        "z": -0.020000040531158447
+      },
+      "rotation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0,
+        "w": 1.0
+      }
+    }
+  ]
+}

@@ -71,6 +71,8 @@ class PrototypeRoom:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     entities: list[SceneEntity] = field(default_factory=lambda: list[SceneEntity]())
     room_version: int | None = None
+    # The Gaussian splat drawn as the room's look, when the prepared room has one.
+    splat_url: str | None = None
     load_error: str | None = None
     loaded_versions: dict[Role, int | None] = field(
         default_factory=lambda: {"mobile_master": None, "vr_solver": None}
@@ -123,6 +125,7 @@ class PrototypeRoom:
                 "quaternion_order": QUATERNION_ORDER if available else None,
                 "error": self.load_error,
                 "entities": [entity.model_dump() for entity in self.entities],
+                "splat_url": self.splat_url if available else None,
                 "loaded_by": dict(self.loaded_versions),
             },
         }

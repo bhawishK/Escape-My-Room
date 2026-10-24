@@ -11,6 +11,8 @@ interface TestServer { port: number; room: string; settings: Record<string, stri
 const servers: TestServer[] = [
   { port: 8771, room: 'prepared-room', settings: {} },
   { port: 8772, room: 'multi-asset-room', settings: {} },
+  // A room whose look is a Gaussian splat (#92).
+  { port: 8774, room: 'splat-room', settings: {} },
   // The development preparation worker, configured to fail its geometry stage.
   { port: 8773, room: 'prepared-room', settings: { ESCAPE_ROOM_FIXTURE_FAIL_STAGE: 'geometry' } },
 ];

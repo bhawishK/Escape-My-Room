@@ -125,6 +125,7 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     if prepared is not None:
         room.entities = [entity.model_copy(deep=True) for entity in prepared.entities]
         room.room_version = prepared.room_version
+        room.splat_url = prepared.splat_url
 
     app = FastAPI(title="Escape My Room prototype")
 
