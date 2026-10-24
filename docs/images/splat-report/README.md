@@ -1,10 +1,9 @@
-# Splat report diagrams
+# Splat report diagram
 
-Hand-drawn diagrams for the room-splat report on issue #92, made with the `hand-drawn-diagrams` skill. Each `.excalidraw` file is the editable source of the PNG and SVG with the same name; open it at excalidraw.com, edit, and export again.
+`splat-system` shows the whole splat-room architecture for the report on issue #92, with each part labelled by its technology:
+1. capture;
+2. Google Colab training;
+3. the laptop server;
+4. the browsers on the iPhone and the Quest.
 
-| Diagram | Question it answers |
-| --- | --- |
-| `splat-decision` | Why COLMAP + a trained splat, over REST3D and World Labs Marble |
-| `splat-pipeline` | How a phone video becomes a room splat |
-| `splat-architecture` | How both devices get the splat room |
-| `splat-results` | What made the difference in quality |
+It was made with the `hand-drawn-diagrams` skill. `splat-system.excalidraw` is the editable source of the PNG and SVG: open it at excalidraw.com, edit, and export again.
