@@ -374,7 +374,7 @@ class OpenRouterWorker:
             workspace.calls.append(
                 ModelCall(
                     stage=stage,
-                    purpose="object list",
+                    purpose=OBJECT_LIST.name,
                     model=reply.model,
                     provider=reply.provider,
                     generation_id=reply.generation_id,
@@ -398,8 +398,8 @@ class OpenRouterWorker:
             label=OPENROUTER_LABEL,
             overview_image_id=job.overview_image_id,
             objects=[
-                InventoryObject(id=id, label=label)
-                for id, label in zip(entity_ids(labels), labels, strict=True)
+                InventoryObject(id=entity_id, label=label)
+                for entity_id, label in zip(entity_ids(labels), labels, strict=True)
             ],
             answer=workspace.calls[-1].answer,
         )

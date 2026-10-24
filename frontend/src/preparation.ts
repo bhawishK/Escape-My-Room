@@ -212,7 +212,10 @@ export class RoomPreparation {
     const last = calls[calls.length - 1];
     const tokens = calls.reduce((sum, call) => sum + (call.prompt_tokens ?? 0) + (call.completion_tokens ?? 0), 0);
     const seconds = calls.reduce((sum, call) => sum + call.latency_seconds, 0);
-    const cost = job.cost_usd === null ? 'cost not reported' : `$${job.cost_usd.toFixed(4)}`;
+    // A total that leaves out requests OpenRouter reported no cost for would understate the spend.
+    const unpriced = calls.filter(call => call.cost_usd === null).length;
+    const total = job.cost_usd === null ? 'cost not reported' : `$${job.cost_usd.toFixed(4)}`;
+    const cost = unpriced && job.cost_usd !== null ? `${total} + ${unpriced} without a reported cost` : total;
     const parts = [
       [last.model ?? 'unknown model', last.provider].filter(Boolean).join(' via '),
       `${calls.length} ${calls.length === 1 ? 'request' : 'requests'}`,
@@ -220,11 +223,15 @@ export class RoomPreparation {
       cost,
       `${seconds.toFixed(1)} s`,
     ];
-    const link = document.createElement('a');
-    link.href = `/api/preparations/${job.id}/files/${last.answer}`;
-    link.target = '_blank';
-    link.textContent = 'Raw answer';
-    usage.replaceChildren(`${parts.join(' · ')} · `, link);
+    // Every answer, refused ones included, so a repair can be traced.
+    const links = calls.flatMap((call, index) => {
+      const link = document.createElement('a');
+      link.href = `/api/preparations/${job.id}/files/${call.answer}`;
+      link.target = '_blank';
+      link.textContent = calls.length === 1 ? 'Raw answer' : `answer ${index + 1}${call.accepted ? '' : ' (refused)'}`;
+      return index === 0 ? [link] : [', ', link];
+    });
+    usage.replaceChildren(`${parts.join(' · ')} · `, ...(calls.length === 1 ? [] : ['Raw answers: ']), ...links);
   }
 
   private showCandidate(job: PreparationJob): void {

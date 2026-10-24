@@ -148,7 +148,7 @@ def main(photo: Path) -> int:
         "requests": requests,
         "total_cost_usd": round(sum(spent), 6),
     }
-    folder = Path("data") / "openrouter-checks"
+    folder = Path(os.environ.get("ESCAPE_ROOM_DATA_DIR") or "data") / "openrouter-checks"
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
     path.write_text(json.dumps(report, indent=2), encoding="utf-8")

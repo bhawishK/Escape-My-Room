@@ -131,7 +131,7 @@ The job records these settings, never the key. No other model or provider is use
 
 ### What is recorded
 
-Every request is a **model call** on the job: the model and the upstream provider OpenRouter chose, token counts, the cost OpenRouter reported, the time it took, whether the answer was accepted and why not, and the answer itself as `artifacts/scene_understanding/answer-<n>.txt`. The job's `cost_usd` adds up every call, including refused answers and failed jobs, because those cost money too. The photos page shows the objects, then a line such as `qwen/qwen3-vl-8b-instruct via <provider> · 1 request · 1,240 tokens · $0.0004 · 2.1 s · Raw answer`.
+Every request is a **model call** on the job: the model and the upstream provider OpenRouter chose, token counts, the cost OpenRouter reported, the time it took, whether the answer was accepted and why not, and the answer itself as `artifacts/scene_understanding/answer-<n>.txt`. The job's `cost_usd` adds up every call, including refused answers and failed jobs, because those cost money too. The photos page shows the objects, then a line such as `qwen/qwen3-vl-8b-instruct via <provider> · 1 request · 1,240 tokens · $0.0004 · 2.1 s · Raw answer`. After a repair it links every answer, refused ones marked, and a request OpenRouter reported no cost for is counted separately instead of being left out of the total silently.
 
 ### Answers that do not fit
 

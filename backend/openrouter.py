@@ -336,6 +336,10 @@ MAX_OBJECTS = 60
 MAX_OBJECT_NAME = 100
 
 
+def _shortened(name: str) -> str:
+    return textwrap.shorten(name, 60, placeholder="…")
+
+
 def read_object_list(text: str) -> list[str]:
     names: list[str] = []
     for line in _without_thinking(text).splitlines():
@@ -343,12 +347,10 @@ def read_object_list(text: str) -> list[str]:
         if not name:
             continue
         if len(name) >= MAX_OBJECT_NAME or name.endswith(":"):
-            raise Unreadable(
-                f'"{textwrap.shorten(name, 60, placeholder="…")}" is not an object name'
-            )
+            raise Unreadable(f'"{_shortened(name)}" is not an object name')
         # Object names never end like a sentence; an answer in prose instead of a list does.
         if name.endswith((".", "!", "?")):
-            raise Unreadable(f'"{textwrap.shorten(name, 60, placeholder="…")}" reads as a sentence')
+            raise Unreadable(f'"{_shortened(name)}" reads as a sentence')
         if name.casefold() in (seen.casefold() for seen in names):
             raise Unreadable(f'"{name}" is listed twice')
         names.append(name)
