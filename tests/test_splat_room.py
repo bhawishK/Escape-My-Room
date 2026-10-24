@@ -38,6 +38,33 @@ def test_both_devices_receive_the_splat_with_the_room(tmp_path):
 def test_a_room_without_a_splat_says_so():
     room = TestClient(create_app(MULTI)).get("/api/room").json()
     assert room["splat_url"] is None
+    assert room["splat_placement"] is None
+
+
+def test_the_splat_is_placed_as_the_manifest_says(tmp_path):
+    """A splat trained tilted or at another scale is levelled by its placement, not retrained."""
+    directory = splat_room(tmp_path)
+    turn = {"x": 0.0, "y": 0.0, "z": 0.25881905, "w": 0.96592583}  # 30 degrees about z
+    placement = {"position": {"x": 0.0, "y": 0.4, "z": 0.0}, "rotation": turn, "scale": 0.8}
+    edit_manifest(directory, lambda manifest: manifest["splat"].update(placement))
+    client = TestClient(create_app(directory))
+
+    room = client.get("/api/room").json()
+    assert room["splat_placement"]["position"] == placement["position"]
+    assert room["splat_placement"]["scale"] == 0.8
+    for axis, value in turn.items():
+        assert room["splat_placement"]["rotation"][axis] == pytest.approx(value)
+    with client.websocket_connect("/api/ws?role=mobile_master") as phone:
+        assert phone.receive_json()["state"]["room"]["splat_placement"] == room["splat_placement"]
+
+
+def test_an_unplaced_splat_sits_as_it_was_trained(tmp_path):
+    room = TestClient(create_app(splat_room(tmp_path))).get("/api/room").json()
+    assert room["splat_placement"] == {
+        "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+        "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+        "scale": 1.0,
+    }
 
 
 @pytest.mark.parametrize(

@@ -10,7 +10,7 @@ import { applyPlacement, placeEntities } from './room';
 
 const emptyRoom = (): SessionState['room'] => ({
   available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
-  entities: [], splat_url: null, loaded_by: { mobile_master: null, vr_solver: null },
+  entities: [], splat_url: null, splat_placement: null, loaded_by: { mobile_master: null, vr_solver: null },
 });
 
 const OVERVIEW_FOV = 60;
@@ -325,6 +325,12 @@ export class DiagnosticScene {
         if (token !== this.loadToken) return null;
         this.clearRoom();
         throw error;
+      }
+      if (splat && room.splat_placement) {
+        const { position, rotation, scale } = room.splat_placement;
+        splat.position.set(position.x, position.y, position.z);
+        splat.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+        splat.scale.setScalar(scale);
       }
       this.attach(roots, splat, room.entities);
       this.loadedVersion = version;

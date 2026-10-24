@@ -10,7 +10,7 @@ from fastapi import WebSocket
 
 from backend.alignment import Alignment
 from backend.delivery import Outbox
-from backend.prepared_room import FRAME, QUATERNION_ORDER, UNITS, SceneEntity
+from backend.prepared_room import FRAME, QUATERNION_ORDER, UNITS, SceneEntity, SplatPlacement
 from backend.protocol import (
     MarkerState,
     PoseMessage,
@@ -73,6 +73,7 @@ class PrototypeRoom:
     room_version: int | None = None
     # The Gaussian splat drawn as the room's look, when the prepared room has one.
     splat_url: str | None = None
+    splat_placement: SplatPlacement | None = None
     load_error: str | None = None
     loaded_versions: dict[Role, int | None] = field(
         default_factory=lambda: {"mobile_master": None, "vr_solver": None}
@@ -126,6 +127,9 @@ class PrototypeRoom:
                 "error": self.load_error,
                 "entities": [entity.model_dump() for entity in self.entities],
                 "splat_url": self.splat_url if available else None,
+                "splat_placement": self.splat_placement.model_dump()
+                if available and self.splat_placement is not None
+                else None,
                 "loaded_by": dict(self.loaded_versions),
             },
         }

@@ -391,7 +391,7 @@ const client = new SessionClient({
           delivery: { simulated_delay_ms: 0 },
           room: {
             available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
-            entities: [], splat_url: null, loaded_by: { mobile_master: null, vr_solver: null },
+            entities: [], splat_url: null, splat_placement: null, loaded_by: { mobile_master: null, vr_solver: null },
           },
         });
       }

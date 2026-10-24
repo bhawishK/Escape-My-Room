@@ -29,6 +29,8 @@ export interface RoomState {
   entities: RoomEntity[];
   /** A Gaussian splat drawn as the room's look; static entities are then not drawn. */
   splat_url: string | null;
+  /** Where the splat sits: scaled, rotated, then moved; it levels a splat trained tilted. */
+  splat_placement: { position: Position; rotation: Rotation; scale: number } | null;
   loaded_by: { mobile_master: number | null; vr_solver: number | null };
 }
 

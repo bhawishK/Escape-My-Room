@@ -80,10 +80,19 @@ class SceneEntity(WireModel):
     rotation: Rotation
 
 
+class SplatPlacement(WireModel):
+    """Where the splat sits in the room: scaled, then rotated, then moved."""
+
+    position: Position = Field(default_factory=lambda: Position(x=0.0, y=0.0, z=0.0))
+    rotation: Rotation = Field(default_factory=Rotation)
+    scale: float = Field(default=1.0, gt=0, le=100)
+
+
 class LoadedRoom(BaseModel):
     room_version: int
     entities: list[SceneEntity]
     splat_url: str | None = None
+    splat_placement: SplatPlacement | None = None
 
 
 class _Entity(Protocol):
@@ -147,7 +156,9 @@ class AssetEntity(WireModel):
     rotation: Rotation
 
 
-class SplatAsset(WireModel):
+class SplatAsset(SplatPlacement):
+    """The splat file, and its placement when it was trained tilted or at another scale."""
+
     asset: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}\.(ply|spz)$")
 
 
@@ -261,6 +272,9 @@ def _load_scene(directory: Path, scene: PreparedScene) -> LoadedRoom:
     return LoadedRoom(
         room_version=scene.room_version,
         splat_url=None if scene.splat is None else f"{ASSET_URL_PREFIX}/{scene.splat.asset}",
+        splat_placement=None
+        if scene.splat is None
+        else SplatPlacement.model_validate(scene.splat.model_dump(exclude={"asset"})),
         entities=[
             SceneEntity(
                 id=entity.id,
