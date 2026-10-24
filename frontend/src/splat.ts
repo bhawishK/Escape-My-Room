@@ -14,6 +14,7 @@ function element<T extends HTMLElement>(id: string): T {
 
 const status = element<HTMLParagraphElement>('splat-status');
 const measureButton = element<HTMLButtonElement>('measure');
+const floorButton = element<HTMLButtonElement>('set-floor');
 const gridButton = element<HTMLButtonElement>('grid');
 const measureResult = element<HTMLParagraphElement>('measure-result');
 const scaleForm = element<HTMLFormElement>('scale-form');
@@ -33,6 +34,21 @@ camera.position.set(0, EYE_HEIGHT, 0);
 const rig = new THREE.Group();
 rig.add(camera);
 scene.add(rig);
+
+// `?at=x,z&yaw=degrees&pitch=degrees` starts somewhere else, for example where the video was
+// filmed (report.json lists those positions). Yaw turns left from facing -z.
+const start = new URLSearchParams(window.location.search);
+function standAt(x: number, z: number, yaw: number, pitch: number, height = EYE_HEIGHT): void {
+  rig.position.set(x, 0, z);
+  rig.rotation.set(0, yaw, 0);
+  camera.position.set(0, height, 0);
+  camera.rotation.set(pitch, 0, 0);
+}
+if (start.has('at')) {
+  const [atX, atZ] = (start.get('at') ?? '').split(',').map(Number);
+  standAt(atX || 0, atZ || 0, THREE.MathUtils.degToRad(Number(start.get('yaw')) || 0),
+    THREE.MathUtils.degToRad(Number(start.get('pitch')) || 0));
+}
 scene.add(new SparkRenderer({ renderer }));
 
 const grid = new THREE.GridHelper(10, 20, 0xff9500, 0xaeaeb2);
@@ -54,32 +70,110 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// Scale ----------------------------------------------------------------------------------------
-// The notebook scales the room by assuming the phone was held 1.4 m up. Measuring a known
-// length here corrects that; the correction is remembered per file in this browser.
+// Scale and floor ------------------------------------------------------------------------------
+// The notebook takes the lowest large flat surface as the floor and scales the room by assuming
+// the phone was held 1.4 m above it. If the real floor was barely filmed, a bed or desk top can
+// be taken instead. Tapping the real floor and measuring a known length correct both; the
+// corrections are remembered per file in this browser. `floor` is in the file's own units.
 
 let source = new URLSearchParams(window.location.search).get('src') ?? '/spike/room.ply';
 let room: SplatMesh | undefined;
+let correction = { scale: 1, floor: 0 };
 
-function scaleKey(): string {
-  return `splat-scale:${source}`;
+function correctionKey(): string {
+  return `splat-correction:${source}`;
 }
 
-function savedScale(): number {
+function savedCorrection(): { scale: number; floor: number } {
   try {
-    const value = Number(window.localStorage.getItem(scaleKey()));
-    return value > 0 ? value : 1;
+    const saved = JSON.parse(window.localStorage.getItem(correctionKey()) ?? '{}') as { scale?: number; floor?: number };
+    return { scale: saved.scale && saved.scale > 0 ? saved.scale : 1, floor: saved.floor ?? 0 };
   } catch {
-    return 1;
+    return { scale: 1, floor: 0 };
   }
 }
 
-function applyScale(scale: number): void {
-  room?.scale.setScalar(scale);
-  scaleNote.textContent = scale === 1
-    ? 'Scale assumes the phone was held 1.4 m up. Measure a known length to correct it.'
-    : `Scale corrected by ×${scale.toFixed(3)} from a measured length.`;
+function applyCorrection(next: { scale: number; floor: number }, remember = true): void {
+  correction = next;
+  if (room) {
+    room.scale.setScalar(next.scale);
+    room.position.y = -next.scale * next.floor;
+    room.updateMatrixWorld();
+  }
+  if (remember) {
+    try {
+      window.localStorage.setItem(correctionKey(), JSON.stringify(next));
+    } catch {
+      // The correction then lasts until the page is reloaded.
+    }
+  }
+  const scaleText = next.scale === 1
+    ? 'Scale assumes the phone was held 1.4 m up; measure a known length to correct it.'
+    : `Scale corrected ×${next.scale.toFixed(3)} from a measured length.`;
+  const floorText = next.floor === 0
+    ? 'Floor as the notebook found it; tap Set floor if the grid is not on the real floor.'
+    : 'Floor set by tapping it.';
+  scaleNote.textContent = `${scaleText} ${floorText}`;
 }
+
+// Viewpoints ----------------------------------------------------------------------------------
+// The notebook's report.json lists where each frame was filmed from (and, from later runs, the way
+// it faced). Only those places show the room well; elsewhere the splat has gaps and smears.
+
+interface Viewpoint { position: [number, number, number]; forward?: [number, number, number] }
+const VIEWPOINT_STRIDE = 10;
+let viewpoints: Viewpoint[] = [];
+let viewpointIndex = 0;
+let roomMiddle = new THREE.Vector3();
+
+/** The median splat position: unlike the bounding box, stray splats far outside don't move it. */
+function middleOf(mesh: SplatMesh): THREE.Vector3 {
+  const xs: number[] = [];
+  const ys: number[] = [];
+  const zs: number[] = [];
+  mesh.forEachSplat((index, centre) => {
+    if (index % 10 === 0) {
+      xs.push(centre.x);
+      ys.push(centre.y);
+      zs.push(centre.z);
+    }
+  });
+  const median = (values: number[]) => values.sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0;
+  return new THREE.Vector3(median(xs), median(ys), median(zs));
+}
+
+function showViewpoint(index: number): void {
+  if (!room || viewpoints.length === 0) return;
+  viewpointIndex = (index + viewpoints.length) % viewpoints.length;
+  const { position, forward } = viewpoints[viewpointIndex];
+  const { x, y, z } = room.localToWorld(new THREE.Vector3(...position));
+  const facing = forward
+    ? new THREE.Vector3(...forward)
+    : room.localToWorld(roomMiddle.clone()).sub(new THREE.Vector3(x, y, z));
+  facing.normalize();
+  const pitch = forward ? Math.asin(THREE.MathUtils.clamp(facing.y, -1, 1)) : THREE.MathUtils.degToRad(-10);
+  standAt(x, z, Math.atan2(-facing.x, -facing.z), pitch, y);
+  element('viewpoint-label').textContent = `Filmed viewpoint ${viewpointIndex + 1} of ${viewpoints.length}`;
+}
+
+async function loadViewpoints(url: string): Promise<void> {
+  viewpoints = [];
+  element('viewpoints').hidden = true;
+  try {
+    const response = await fetch(url.replace(/[^/]*$/, 'report.json'));
+    if (!response.ok) return;
+    const report = await response.json() as { cameras?: Viewpoint[] };
+    viewpoints = (report.cameras ?? []).filter((_, i) => i % VIEWPOINT_STRIDE === 0);
+  } catch {
+    return;
+  }
+  if (viewpoints.length === 0) return;
+  if (room && !viewpoints[0].forward) roomMiddle = middleOf(room);
+  element('viewpoints').hidden = false;
+  if (!start.has('at')) showViewpoint(Math.floor(viewpoints.length / 2));
+}
+
+element<HTMLButtonElement>('next-viewpoint').addEventListener('click', () => { showViewpoint(viewpointIndex + 1); });
 
 // Loading --------------------------------------------------------------------------------------
 
@@ -94,7 +188,7 @@ async function load(bytes: ArrayBuffer, name: string, started: number): Promise<
   scene.add(mesh);
   await mesh.initialized;
   room = mesh;
-  applyScale(savedScale());
+  applyCorrection(savedCorrection(), false);
   element('stat-splats').textContent = (mesh.packedSplats?.numSplats ?? 0).toLocaleString();
   element('stat-size').textContent = `${(bytes.byteLength / 1e6).toFixed(1)} MB`;
   element('stat-load').textContent = `${((performance.now() - started) / 1000).toFixed(1)} s`;
@@ -111,6 +205,7 @@ async function loadUrl(url: string): Promise<void> {
     throw new Error(`${url} answered ${response.status}. Put the notebook's room.ply in frontend/public/spike/.`);
   }
   await load(await response.arrayBuffer(), url.split('/').pop() ?? 'room.ply', started);
+  await loadViewpoints(url);
 }
 
 element<HTMLInputElement>('splat-file').addEventListener('change', event => {
@@ -125,7 +220,14 @@ element<HTMLInputElement>('splat-file').addEventListener('change', event => {
 
 // Measuring ------------------------------------------------------------------------------------
 
-let measuring = false;
+// Taps either measure (two points) or set the floor (one point).
+let tapMode: 'off' | 'measure' | 'floor' = 'off';
+
+function setTapMode(next: 'off' | 'measure' | 'floor'): void {
+  tapMode = next;
+  measureButton.setAttribute('aria-pressed', String(next === 'measure'));
+  floorButton.setAttribute('aria-pressed', String(next === 'floor'));
+}
 const picked: THREE.Vector3[] = [];
 const marks = new THREE.Group();
 scene.add(marks);
@@ -160,7 +262,15 @@ function pick(x: number, y: number): void {
   const [hit] = raycaster.intersectObject(room, false);
   if (!hit) {
     measureResult.hidden = false;
-    measureResult.textContent = 'Nothing there to measure; tap on the room.';
+    measureResult.textContent = 'Nothing there; tap on the room.';
+    return;
+  }
+  if (tapMode === 'floor') {
+    const floor = room.worldToLocal(hit.point.clone()).y;
+    applyCorrection({ ...correction, floor });
+    setTapMode('off');
+    measureResult.hidden = false;
+    measureResult.textContent = 'Floor set. The grid should now lie on it.';
     return;
   }
   if (picked.length === 2) clearMeasure();
@@ -183,16 +293,22 @@ function pick(x: number, y: number): void {
 let down: { x: number; y: number } | undefined;
 renderer.domElement.addEventListener('pointerdown', event => { down = { x: event.clientX, y: event.clientY }; });
 renderer.domElement.addEventListener('pointerup', event => {
-  if (measuring && down && Math.hypot(event.clientX - down.x, event.clientY - down.y) < TAP_PIXELS) {
+  if (tapMode !== 'off' && down && Math.hypot(event.clientX - down.x, event.clientY - down.y) < TAP_PIXELS) {
     pick(event.clientX, event.clientY);
   }
   down = undefined;
 });
 
+floorButton.addEventListener('click', () => {
+  clearMeasure();
+  setTapMode(tapMode === 'floor' ? 'off' : 'floor');
+  measureResult.hidden = tapMode !== 'floor';
+  measureResult.textContent = 'Tap a spot on the real floor.';
+});
+
 measureButton.addEventListener('click', () => {
-  measuring = !measuring;
-  measureButton.setAttribute('aria-pressed', String(measuring));
-  if (measuring) {
+  setTapMode(tapMode === 'measure' ? 'off' : 'measure');
+  if (tapMode === 'measure') {
     measureResult.hidden = false;
     measureResult.textContent = 'Tap one end of something you have measured, like the desk.';
   } else {
@@ -204,13 +320,7 @@ scaleForm.addEventListener('submit', event => {
   event.preventDefault();
   const real = Number(realLength.value);
   if (!(real > 0) || picked.length !== 2 || !room) return;
-  const scale = room.scale.x * (real / measured());
-  try {
-    window.localStorage.setItem(scaleKey(), String(scale));
-  } catch {
-    // The correction then lasts until the page is reloaded.
-  }
-  applyScale(scale);
+  applyCorrection({ ...correction, scale: correction.scale * (real / measured()) });
   clearMeasure();
   measureResult.hidden = false;
   measureResult.textContent = 'Scale set. Measure another length to check it.';

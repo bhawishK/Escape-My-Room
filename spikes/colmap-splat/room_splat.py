@@ -28,6 +28,7 @@ MAX_SPLATS = 400_000  # caps file size: about 30 MB at SH_DEGREE 1
 SH_DEGREE = 1  # view-dependent colour detail; 3 is the usual, 4x larger files
 ASSUMED_CAMERA_HEIGHT_M = 1.4  # height the phone was held at; the viewer can correct scale
 HOLDOUT_EVERY = 10  # every Nth frame is kept out of training to measure quality
+MIN_START_SPLATS = 50_000  # training starts from at least this many, copying COLMAP's points
 
 # %%
 # Install. pycolmap is CPU-only here; gsplat compiles its GPU code on first use (5–10 min).
@@ -373,15 +374,27 @@ centres = np.array([camera["camera_to_world"][:3, 3] for camera in cameras])
 scene_scale = 1.1 * float(np.linalg.norm(centres - centres.mean(axis=0), axis=1).max())
 
 means = torch.tensor(points, dtype=torch.float32, device=device)
+start_colours = torch.tensor(colours, dtype=torch.float32, device=device)
+# MCMC grows the splat count by only 5% per refinement, so a sparse COLMAP cloud (a small or
+# compressed video) would never reach MAX_SPLATS. Start from jittered copies of the points.
+copies = max(1, -(-MIN_START_SPLATS // len(means)))
+if copies > 1:
+    spacing = torch.cat(
+        [
+            torch.cdist(chunk, means).topk(2, largest=False).values[:, 1]
+            for chunk in means.split(4096)
+        ]
+    )
+    jitter = torch.randn((copies - 1, *means.shape), device=device) * spacing[None, :, None]
+    means = torch.cat([means, (means[None] + jitter).reshape(-1, 3)])
+    start_colours = start_colours.repeat(copies, 1)
 nearest = torch.cat(
     [torch.cdist(chunk, means).topk(4, largest=False).values[:, 1:] for chunk in means.split(4096)]
 )
 start_size = torch.sqrt((nearest**2).mean(dim=-1)).clamp_min(1e-4)
 count = len(means)
 sh = torch.zeros((count, (SH_DEGREE + 1) ** 2, 3), device=device)
-sh[:, 0] = (
-    torch.tensor(colours, dtype=torch.float32, device=device) / 255 - 0.5
-) / 0.28209479177387814
+sh[:, 0] = (start_colours / 255 - 0.5) / 0.28209479177387814
 params = torch.nn.ParameterDict(
     {
         "means": torch.nn.Parameter(means),
@@ -470,6 +483,7 @@ for step in range(TRAIN_STEPS):
             f"{time.time() - started:.0f} s"
         )
 report["training"] = {
+    "start_splats": count,
     "seconds": round(time.time() - started, 1),
     "splats": len(params["means"]),
     "scene_scale": scene_scale,
@@ -502,8 +516,13 @@ with torch.no_grad():
     )
 report["quality"] = {"held_out_frames": len(held_out), "psnr_db": round(float(np.mean(scores)), 2)}
 report["ply_mb"] = round((out_dir / "room.ply").stat().st_size / 1e6, 1)
+# Where each frame was filmed from and the way it faced, so the viewer can start there.
 report["cameras"] = [
-    {"name": camera["name"], "position": camera["camera_to_world"][:3, 3].round(4).tolist()}
+    {
+        "name": camera["name"],
+        "position": camera["camera_to_world"][:3, 3].round(4).tolist(),
+        "forward": camera["camera_to_world"][:3, 2].round(4).tolist(),
+    }
     for camera in cameras
 ]
 (out_dir / "report.json").write_text(json.dumps(report, indent=2))

@@ -17,10 +17,15 @@
         <div><dt>Download</dt><dd id="stat-size">–</dd></div>
         <div><dt>Loaded in</dt><dd id="stat-load">–</dd></div>
       </dl>
+      <div id="viewpoints" class="splat-panel splat-viewpoints" hidden>
+        <span id="viewpoint-label"></span>
+        <button id="next-viewpoint" class="secondary" type="button">Next viewpoint</button>
+      </div>
       <details class="splat-panel splat-tools">
         <summary>Measure and scale</summary>
         <div class="splat-tool-row">
           <button id="measure" class="secondary" type="button" aria-pressed="false">Measure</button>
+          <button id="set-floor" class="secondary" type="button" aria-pressed="false">Set floor</button>
           <button id="grid" class="secondary" type="button" aria-pressed="true">Floor grid</button>
           <label class="file-button secondary">Open file<input id="splat-file" type="file" accept=".ply,.spz,.splat,.ksplat" /></label>
         </div>

@@ -16,7 +16,10 @@ the iPhone and the Quest? Nothing here is used by the app.
 - **Settings:** in **Settings → Camera → Record Video**, choose **1080p at 30 fps** and turn **HDR Video** off, since HDR frames come out washed out. Lock the exposure if you can: press and hold on the screen until **AE/AF Lock** appears.
 - **Walk round the edge, facing across the room:** walk slowly along the walls, about one step per second, with the phone at chest height, upright, pointing slightly down and *across* the room towards the middle and the far side. Sweep gently left and right as you go. Then the furniture shifts against the far walls with every step, which is what COLMAP measures depth from.
 - **Don't stand in the middle and turn:** the synthetic tests showed that a camera turning on the spot, or walking a small loop facing outward, gives a bent, wrongly-sized room even though COLMAP reports no errors.
+- **Get the floor in shot:** every few steps tilt the phone down so the floor along the walls is visible. The notebook takes the lowest large flat surface as the floor; in the first real run the floor was barely filmed and the mattress was taken instead.
+- **Film the whole room:** what isn't filmed is simply missing. The first real run filmed one side, and the other side is black.
 - **Close the loop:** finish where you started, and add a short second pass of any corner you missed.
+- **Send the original file:** WhatsApp re-encodes video to about 576 px wide, which leaves COLMAP far fewer points. Use Google Drive, AirDrop or a cable instead.
 - **Keep it still:** steady, smooth movements; no people or pets moving; lights on, curtains as they are.
 - **Measure two things** with a tape: one long, like the desk's width, and one other for checking. Write them down.
 
@@ -42,7 +45,10 @@ The zip holds `room.ply` (the splat), `report.json` (frames placed, time, qualit
 3. Open `/splat.html` on the desktop, the iPhone and the Quest, through the same HTTPS route as the app.
    - **Desktop and phone:** drag to look, two fingers or arrow keys to move.
    - **Quest:** **Enter VR**. You stand on the reconstructed floor at the origin; walk or use the thumbsticks.
+   - **Viewpoints:** the page opens where the video was filmed; **Next viewpoint** steps through the filmed places. Elsewhere the splat has gaps and smears.
+   - **Set floor:** if the floor grid isn't on the real floor, tap **Set floor** and then a solid spot on the floor.
    - **Measure:** tap both ends of the length you measured, enter the real length, **Set scale**. Then measure the second length to check.
+   - Positions can also be given in the address: `?at=x,z&yaw=degrees&pitch=degrees`.
    - **Floor grid:** a 0.5 m grid at the floor, to see whether the floor is level and at the right height.
 
 ## 4. Record on #92
@@ -53,6 +59,24 @@ Copy into a comment on #92:
 - the two measurements, before and after **Set scale**;
 - the frame rate on each device;
 - screenshots.
+
+## First real run, 2026-10-24
+
+A 1-minute iPhone video of a room with a loft bed, sent through WhatsApp, run with `QUICK = True`:
+
+| | |
+| --- | --- |
+| Frames | 120, all placed by the incremental mapper; frames were 576 px wide after WhatsApp |
+| COLMAP | 101 s (mapping 23 s); 2,202 sparse points; reprojection error 0.73 px |
+| Training | 19.5 min for 10,000 steps; 98,585 splats, 10.3 MB |
+| Quality on 12 held-out frames | PSNR 35.7 dB; previews nearly match the real frames |
+| Levelling | Camera heights 1.33–1.46 m, so levelled, but the floor found was probably the mattress top |
+
+Findings:
+- **The look is very good from where the video was filmed.** Shelves, ladder, desk, wall, socket and mattress are all recognisable, but the unfilmed side of the room is empty.
+- **Few points meant few splats.** MCMC grows the splat count by 5% per refinement, so starting from 2,202 points it reached only 98,585. The notebook now starts from at least 50,000 jittered copies of the points.
+- **The floor was probably wrong**, and so was the scale that depends on it. The viewer now has **Set floor**, and the filming guide asks for the floor to be in shot.
+- `report.json` now records each camera's direction, so the viewer can face the way the video did.
 
 ## Checking the CPU steps without a GPU
 
