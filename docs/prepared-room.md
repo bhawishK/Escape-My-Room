@@ -232,3 +232,31 @@ That is the recorded run: one view from the room origin and three round the wast
 - **Asking:** each view cost about $0.00009 (338 prompt tokens) and took 2–4 s.
 
 **Limit: viewpoints can be bad.** A view from where the camera never stood can stand inside a wall and show only smears, and Qwen may still name something ("light source"). Choose viewpoints within the filmed space, near `filmed` views, until views are checked before asking.
+
+### Room scale from doors (issue 33)
+
+A splat room's first scale is assumed: `build_room.py` scales the room as if the phone was held 1.4 m up, and records that in the manifest as `"scale_source": "assumed: the phone was held 1.4 m up"`. That assumption was 10–25% off in our rooms. Doors give a better guess, because interior doors are about 2.03 m tall almost everywhere.
+
+```bash
+python -m backend.room_scale_check data/splat-room             # suggest, and save the evidence
+python -m backend.room_scale_check data/splat-room --accept    # apply the suggestion
+python -m backend.room_scale_check data/splat-room --length 2.1  # your doors measure 2.1 m
+python -m backend.room_scale_check data/splat-room --keep      # keep the assumed scale
+```
+
+`backend/room_scale.py` does the suggesting:
+- **Views:** eight level views round where the room was filmed. These are the first, middle and last filmed cameras, or the origin when the room has no `report.json`.
+- **Finding doors:** Qwen gives a box (`bbox_2d`, 0–1000) round each door you walk through.
+- **Measuring:** each box is measured in the splat. The depth is the nearest quarter of the splats inside the box's middle, and the box's top edge at that depth gives the door's height above the floor (y = 0). A box touching the top of the view is skipped, since its top may be cut off.
+- **Suggesting:** the factor makes the median door 2.03 m tall.
+
+Every view is saved under `data/room-scale/<time>/` with the doors' boxes and measured heights drawn on, so the master can check what was counted. Applying runs `build_room.py --rescale ROOM FACTOR SOURCE`. It makes the splat and the floor larger about the origin, keeps the floor at y = 0, moves the box out with the floor without resizing it, counts the room version up, and records the source: "door height 2.03 m (typical), from 3 doors Qwen found" or "door height 2.1 m, measured by the master". Devices only get the placement, never `scale_source`.
+
+**Measured on the hallway room (26 October 2026):**
+- **Doors measured:** 2.09, 1.81 and 1.91 m, giving a suggestion of ×1.066. Each run cost $0.0008–0.0009 for 8 views.
+- **Checking:** the 1.81 m and 1.91 m boxes are a tall cupboard door, seen from two sides, even though the prompt excludes cupboard doors. The 8B model can't always tell them apart in a blurry splat, so the master should check the views before accepting.
+
+**Limits:**
+- **One door is counted once per view it shows in.**
+- **Edge-on doors** give narrow boxes with fewer splats.
+- **Only doors so far.** Socket plates, A4 sheets and steps are too small to measure in today's splats.

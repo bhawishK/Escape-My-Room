@@ -160,6 +160,8 @@ class SplatAsset(SplatPlacement):
     """The splat file, and its placement when it was trained tilted or at another scale."""
 
     asset: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}\.(ply|spz)$")
+    # Where the scale came from, for people: assumed, suggested from objects, or measured (#33).
+    scale_source: str | None = Field(default=None, max_length=200)
 
 
 # How each splat format's file starts: PLY's text header, and SPZ's gzip wrapper.
@@ -274,7 +276,9 @@ def _load_scene(directory: Path, scene: PreparedScene) -> LoadedRoom:
         splat_url=None if scene.splat is None else f"{ASSET_URL_PREFIX}/{scene.splat.asset}",
         splat_placement=None
         if scene.splat is None
-        else SplatPlacement.model_validate(scene.splat.model_dump(exclude={"asset"})),
+        else SplatPlacement.model_validate(
+            scene.splat.model_dump(exclude={"asset", "scale_source"})
+        ),
         entities=[
             SceneEntity(
                 id=entity.id,

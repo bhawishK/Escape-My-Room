@@ -30,7 +30,7 @@ from backend.openrouter import (
     say,
     without_thinking,
 )
-from backend.prepared_room import PreparedRoomError, load_prepared_room
+from backend.prepared_room import PreparedRoomError, SplatPlacement, load_prepared_room
 
 FRONTEND = Path(__file__).resolve().parents[1] / "frontend"
 RENDER_SCRIPT = FRONTEND / "scripts" / "render-views.mjs"
@@ -54,6 +54,47 @@ class RenderedView:
     png: bytes
     # Time to draw this view, once the splat was loaded.
     seconds: float
+
+
+def _camera_axes(view: View) -> tuple[Vector, Vector, Vector]:
+    """The view's forward, right and up directions, as the render page's camera has them."""
+    f = _unit(_minus(view.look_at, view.position))
+    # Looking straight up or down, "up" on screen is the room's -z (see `frontend/src/render.ts`).
+    up = (0.0, 0.0, -1.0) if abs(f[1]) > 0.999 else (0.0, 1.0, 0.0)
+    right = _unit(_cross(f, up))
+    return f, right, _cross(right, f)
+
+
+def project(view: View, point: Vector) -> tuple[float, float] | None:
+    """Where `point` appears in the view, as fractions of its width and height from the top
+    left; None when it is behind the camera."""
+    forward, right, up = _camera_axes(view)
+    offset = _minus(point, view.position)
+    depth = _dot(offset, forward)
+    if depth <= 0:
+        return None
+    half_height = math.tan(math.radians(view.fov_degrees) / 2)
+    half_width = half_height * view.width / view.height
+    x = _dot(offset, right) / (depth * half_width)
+    y = _dot(offset, up) / (depth * half_height)
+    return (x + 1) / 2, (1 - y) / 2
+
+
+def _minus(a: Vector, b: Vector) -> Vector:
+    return a[0] - b[0], a[1] - b[1], a[2] - b[2]
+
+
+def _dot(a: Vector, b: Vector) -> float:
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _cross(a: Vector, b: Vector) -> Vector:
+    return a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]
+
+
+def _unit(a: Vector) -> Vector:
+    length = math.sqrt(_dot(a, a))
+    return a[0] / length, a[1] / length, a[2] / length
 
 
 def orbit(
@@ -93,6 +134,27 @@ def standing(spot: tuple[float, float], look_at: Vector, eye_height: float = EYE
     return View(position=(spot[0], eye_height, spot[1]), look_at=look_at)
 
 
+def placed(placement: SplatPlacement, point: Sequence[float]) -> Vector:
+    """A point in the splat's own frame, moved as the splat is: scaled, rotated, then moved."""
+    turn, lift, scale = placement.rotation, placement.position, placement.scale
+    x, y, z = rotate(
+        (turn.x, turn.y, turn.z, turn.w), (scale * point[0], scale * point[1], scale * point[2])
+    )
+    return x + lift.x, y + lift.y, z + lift.z
+
+
+def point_at(view: View, x: float, y: float, depth: float) -> Vector:
+    """The point seen at fractions (x, y) of the view, `depth` metres in front of the camera."""
+    forward, right, up = _camera_axes(view)
+    half_height = math.tan(math.radians(view.fov_degrees) / 2)
+    half_width = half_height * view.width / view.height
+    across, rise = (2 * x - 1) * half_width * depth, (1 - 2 * y) * half_height * depth
+    px, py, pz = (
+        view.position[i] + depth * forward[i] + across * right[i] + rise * up[i] for i in range(3)
+    )
+    return px, py, pz
+
+
 def filmed(room_dir: Path) -> list[View]:
     """The views the room's video was filmed from, from the notebook's `report.json`, if any.
 
@@ -107,13 +169,9 @@ def filmed(room_dir: Path) -> list[View]:
         return []
     turn = placement.rotation
     q = (turn.x, turn.y, turn.z, turn.w)
-    lift = placement.position
     views: list[View] = []
     for camera in json.loads(report.read_text(encoding="utf-8")).get("cameras", []):
-        cx, cy, cz = camera["position"]
-        scale = placement.scale
-        x, y, z = rotate(q, (scale * cx, scale * cy, scale * cz))
-        position = (x + lift.x, y + lift.y, z + lift.z)
+        position = placed(placement, tuple(camera["position"]))
         forward = rotate(q, tuple(camera["forward"]))
         look_at = (position[0] + forward[0], position[1] + forward[1], position[2] + forward[2])
         views.append(View(position=position, look_at=look_at))
