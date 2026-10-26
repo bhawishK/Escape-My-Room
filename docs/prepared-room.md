@@ -206,3 +206,29 @@ Each rebuild counts the room version up, so devices still showing the earlier ro
 - **Approximate scale.** It comes from the notebook's assumed 1.4 m camera height until the room is measured.
 - **Gaps away from the filming.** Away from where the video was filmed, the splat shows gaps and smears.
 - **Weight on phones.** A splat of 400,000 splats is about 42 MB and heavy for low-end phones.
+
+### Render-and-ask (issue 98)
+
+Python can render a splat room from any viewpoint and ask Qwen about the views, so later AI stages can look at the reconstructed room itself, not only at the photos. `backend/room_views.py` provides:
+- **`render_views(room_dir, views)`** draws the room's splat, placed as its manifest says, from each `View` (position, look-at point, field of view, size), in room metres. It runs Spark, the renderer the devices use, in headless Edge through `frontend/scripts/render-views.mjs`. It needs Node and a built frontend (`npm run build`, which builds `render.html`), but no GPU.
+- **Viewpoint helpers:**
+  - `orbit(target, distance, count, height)`: views round a target;
+  - `filmed(room_dir)`: the cameras the video was filmed from, read from the notebook's `report.json`, which `build_room.py` now copies into the room;
+  - `standing(spot, look_at)`: a player standing at a spot, at eye height;
+  - `overhead(target)`: looking straight down.
+- **`ask_about_views(client, views, question, answer, on_reply)`** sends 1–7 views, labelled "View 1"…, and the question through the OpenRouter adapter. It uses that adapter's answer formats, bounded repairs and failure kinds, and passes every reply to `on_reply` for recording. `SHORT_ANSWER` reads a few-word answer; add `SHORT_ANSWER_REQUEST` to the question, or Qwen explains at length.
+
+A real run with the key from `.env` saves the views and a report under `data/room-views/`:
+
+```bash
+python -m backend.room_views_check data/splat-room "What object is at the centre of this view?" \
+  "0,1.6,0@-0.5,0.15,-1.57" "orbit:-0.5,0.15,-1.57:1.2:1.2:4:1,4,2"
+```
+
+That is the recorded run: one view from the room origin and three round the waste bin, the last of them standing inside the wall behind it. The first three were answered "trash bag", "trash can" and "plastic bag".
+
+**Measured on the hallway room (26 October 2026, laptop without a GPU):**
+- **Rendering:** 0.16–0.42 s per 640×480 view. Starting the browser and loading the 42 MB splat takes about 2 s.
+- **Asking:** each view cost about $0.00009 (338 prompt tokens) and took 2–4 s.
+
+**Limit: viewpoints can be bad.** A view from where the camera never stood can stand inside a wall and show only smears, and Qwen may still name something ("light source"). Choose viewpoints within the filmed space, near `filmed` views, until views are checked before asking.

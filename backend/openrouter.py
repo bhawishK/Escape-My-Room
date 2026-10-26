@@ -90,7 +90,19 @@ class Picture:
     def from_file(cls, path: Path, max_side: int) -> "Picture":
         """The image as RGB PNG, scaled down so neither side exceeds `max_side`."""
         with Image.open(path) as image:
-            rgb = image.convert("RGB")
+            return cls._encoded(image, max_side)
+
+    @classmethod
+    def from_png(cls, png: bytes, max_side: int) -> "Picture":
+        """A PNG as it is when neither side exceeds `max_side`; otherwise scaled down."""
+        with Image.open(io.BytesIO(png)) as image:
+            if max(image.size) <= max_side:
+                return cls(png)
+            return cls._encoded(image, max_side)
+
+    @classmethod
+    def _encoded(cls, image: Image.Image, max_side: int) -> "Picture":
+        rgb = image.convert("RGB")
         rgb.thumbnail((max_side, max_side))
         data = io.BytesIO()
         rgb.save(data, format="PNG")
@@ -323,7 +335,7 @@ def ask[T](
     )
 
 
-def _without_thinking(text: str) -> str:
+def without_thinking(text: str) -> str:
     """The answer without <think> blocks, closed or cut off, as REST3D strips them."""
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     if "<think>" in text:
@@ -342,7 +354,7 @@ def _shortened(name: str) -> str:
 
 def read_object_list(text: str) -> list[str]:
     names: list[str] = []
-    for line in _without_thinking(text).splitlines():
+    for line in without_thinking(text).splitlines():
         name = re.sub(r"^[-*]\s*", "", re.sub(r"^\d+[.)]\s*", "", line.strip())).strip()
         if not name:
             continue
@@ -386,7 +398,7 @@ TOOL_EXAMPLE = (
 
 def read_tool_call(text: str, *, first: bool, mask_count: int) -> ToolCall:
     """The tool call in an answer; `first` calls may only segment or report no mask."""
-    clean = _without_thinking(text)
+    clean = without_thinking(text)
     if "<tool>" not in clean or "</tool>" not in clean:
         raise Unreadable("the answer has no <tool> call")
     raw = clean.split("<tool>")[-1].split("</tool>")[0].strip().replace("}}}", "}}")
@@ -438,7 +450,7 @@ def tool_call_format(*, first: bool, mask_count: int) -> AnswerFormat[ToolCall]:
 
 # SAM 3's mask check: <verdict>Accept</verdict> or <verdict>Reject</verdict>.
 def read_verdict(text: str) -> Literal["Accept", "Reject"]:
-    clean = _without_thinking(text)
+    clean = without_thinking(text)
     if "<verdict>" not in clean:
         raise Unreadable("the answer has no <verdict>")
     verdict = clean.split("<verdict>")[-1].split("</verdict>")[0].strip()
@@ -475,7 +487,7 @@ class SupportEdge:
 
 def read_support_line(text: str, child: str, parents: list[str]) -> SupportEdge:
     """The support edge for `child`; unlike REST3D, an unknown parent is refused, not floored."""
-    for line in _without_thinking(text).splitlines():
+    for line in without_thinking(text).splitlines():
         if "->" not in line:
             continue
         named, rest = (part.strip() for part in line.split("->", 1))
