@@ -2,8 +2,8 @@
 
     python assets/splat-room/build_room.py SOURCE OUT
 
-SOURCE holds the notebook's `room.ply` and, optionally, its `report.json`. The splat is copied as
-it is; with a report, the manifest also places it: turned so the camera path is level, raised so
+SOURCE holds the notebook's `room.ply` and, optionally, its `report.json`. Both are copied as they
+are; with a report, the manifest also places it: turned so the camera path is level, raised so
 the floor is at y = 0, and scaled so the phone was held 1.4 m up. The floor entity is sized to
 where the splat is, so the phone's walking stays in the room; it is not drawn. The box is placed on
 the floor 1 m in front of the viewpoint nearest the origin, so there is something to pick up.
@@ -191,6 +191,9 @@ def write_room(out: Path, splat: Path, report: Path, room_version: int) -> None:
     cameras = []
     if report.is_file():
         cameras = json.loads(report.read_text(encoding="utf-8")).get("cameras", [])
+        # Kept with the room: render-and-ask (#98) looks from where the video was filmed.
+        if report.resolve() != (out / "report.json").resolve():
+            shutil.copyfile(report, out / "report.json")
     place = placement(out / "room.ply", cameras)
     extent = floor_extent([placed(place, p) for p in visible_splats(out / "room.ply")])
     min_x, max_x, min_z, max_z = extent
