@@ -222,8 +222,10 @@ A real run with the key from `.env` saves the views and a report under `data/roo
 
 ```bash
 python -m backend.room_views_check data/splat-room "What object is at the centre of this view?" \
-  "0,1.6,0@-0.5,0.15,-1.57" "orbit:-0.5,0.15,-1.57:1.2:1.2:4:1,4"
+  "0,1.6,0@-0.5,0.15,-1.57" "orbit:-0.5,0.15,-1.57:1.2:1.2:4:1,4,2"
 ```
+
+That is the recorded run: one view from the room origin and three round the waste bin, the last of them standing inside the wall behind it. The first three were answered "trash bag", "trash can" and "plastic bag".
 
 **Measured on the hallway room (26 October 2026, laptop without a GPU):**
 - **Rendering:** 0.16–0.42 s per 640×480 view. Starting the browser and loading the 42 MB splat takes about 2 s.

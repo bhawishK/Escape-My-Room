@@ -238,3 +238,16 @@ def test_qwen_is_asked_about_one_to_seven_views(monkeypatch, count):
             )
 
     assert fake.received == []
+
+
+def test_a_narrower_field_of_view_shows_the_target_larger():
+    wide, narrow = render_views(
+        TEST_ROOM,
+        [
+            View(position=(0.0, 1.2, 1.0), look_at=BLOCK, fov_degrees=90.0),
+            View(position=(0.0, 1.2, 1.0), look_at=BLOCK, fov_degrees=30.0),
+        ],
+    )
+
+    # The block's share of the image grows about as tan(45) / tan(15) squared: roughly 14 times.
+    assert red_share(narrow.png) > 8 * red_share(wide.png) > 0

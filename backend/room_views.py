@@ -10,7 +10,6 @@ OpenRouter adapter, with its answer formats, bounded repairs and failure kinds. 
 each reply, with its tokens and cost, through `on_reply`, as `ask` does.
 """
 
-import io
 import json
 import math
 import shutil
@@ -20,8 +19,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from PIL import Image
-
+from backend.grab import Vector, rotate
 from backend.openrouter import (
     AnswerFormat,
     OpenRouterClient,
@@ -37,8 +35,6 @@ from backend.prepared_room import PreparedRoomError, load_prepared_room
 FRONTEND = Path(__file__).resolve().parents[1] / "frontend"
 RENDER_SCRIPT = FRONTEND / "scripts" / "render-views.mjs"
 RENDER_TIMEOUT_SECONDS = 600
-
-type Vector = tuple[float, float, float]
 
 
 @dataclass(frozen=True)
@@ -114,24 +110,14 @@ def filmed(room_dir: Path) -> list[View]:
     lift = placement.position
     views: list[View] = []
     for camera in json.loads(report.read_text(encoding="utf-8")).get("cameras", []):
-        x, y, z = _rotate(q, tuple(placement.scale * c for c in camera["position"]))
+        cx, cy, cz = camera["position"]
+        scale = placement.scale
+        x, y, z = rotate(q, (scale * cx, scale * cy, scale * cz))
         position = (x + lift.x, y + lift.y, z + lift.z)
-        forward = _rotate(q, tuple(camera["forward"]))
+        forward = rotate(q, tuple(camera["forward"]))
         look_at = (position[0] + forward[0], position[1] + forward[1], position[2] + forward[2])
         views.append(View(position=position, look_at=look_at))
     return views
-
-
-def _rotate(q: tuple[float, float, float, float], v: tuple[float, ...]) -> Vector:
-    """v turned by the unit quaternion q (x, y, z, w)."""
-    x, y, z, w = q
-    # t = 2 (q.xyz x v); v' = v + w t + q.xyz x t
-    tx, ty, tz = 2 * (y * v[2] - z * v[1]), 2 * (z * v[0] - x * v[2]), 2 * (x * v[1] - y * v[0])
-    return (
-        v[0] + w * tx + (y * tz - z * ty),
-        v[1] + w * ty + (z * tx - x * tz),
-        v[2] + w * tz + (x * ty - y * tx),
-    )
 
 
 class RenderFailure(Exception):
@@ -186,6 +172,7 @@ MAX_SHORT_ANSWER = 120
 
 
 def read_short_answer(text: str) -> str:
+    """One line of a few words, such as an object's name."""
     answer = without_thinking(text).strip()
     if not answer:
         raise Unreadable("the answer is empty")
@@ -194,15 +181,14 @@ def read_short_answer(text: str) -> str:
     return answer
 
 
+# Added to a question for a short answer: unasked, Qwen explains at length (seen on 26 October).
+SHORT_ANSWER_REQUEST = "Answer in one short line of a few words, with no explanation."
 # A few words, for questions such as "what object is at the centre of this view?".
 SHORT_ANSWER = AnswerFormat(
     "short answer",
     read_short_answer,
-    "Your answer did not follow the format. Answer in one short line of a few words, "
-    "with no explanation.",
+    f"Your answer did not follow the format. {SHORT_ANSWER_REQUEST}",
 )
-# Added to a question for a short answer: unasked, Qwen explains at length (seen on 26 October).
-SHORT_ANSWER_REQUEST = "Answer in one short line of a few words, with no explanation."
 
 
 def ask_about_views[T](
@@ -218,18 +204,6 @@ def ask_about_views[T](
         raise ValueError(f"Qwen is asked about 1 to {limit} views at a time, not {len(views)}.")
     parts: list[Picture | str] = []
     for number, view in enumerate(views, start=1):
-        parts += [f"View {number}:", _picture(view.png, client.config.max_image_side)]
+        parts += [f"View {number}:", Picture.from_png(view.png, client.config.max_image_side)]
     parts.append(question)
     return ask(client, [say("user", *parts)], answer, on_reply)
-
-
-def _picture(png: bytes, max_side: int) -> Picture:
-    """The view as it is, or scaled down so neither side exceeds `max_side`."""
-    with Image.open(io.BytesIO(png)) as image:
-        if max(image.size) <= max_side:
-            return Picture(png)
-        rgb = image.convert("RGB")
-    rgb.thumbnail((max_side, max_side))
-    data = io.BytesIO()
-    rgb.save(data, format="PNG")
-    return Picture(data.getvalue())

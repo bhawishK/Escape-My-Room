@@ -7,7 +7,7 @@ Or `orbit:x,y,z:distance:height:count[:picks]` for views round a target (`orbit`
 `backend/room_views.py`), keeping only the comma-separated picks if given, counted from 1.
 
 The key comes from OPENROUTER_API_KEY, in the environment or in `.env`. This spends real money
-from the key (about a tenth of a cent a view) and is never run by the tests. The views and a report
+from the key (about $0.0001 a view) and is never run by the tests. The views and a report
 with each answer, its tokens and cost, and the render times are written to
 `data/room-views/<time>/`; the report contains no key.
 """
@@ -25,6 +25,7 @@ from backend.openrouter import OpenRouterClient, OpenRouterConfig, ProviderFailu
 from backend.room_views import (
     SHORT_ANSWER,
     SHORT_ANSWER_REQUEST,
+    RenderedView,
     View,
     ask_about_views,
     orbit,
@@ -32,7 +33,7 @@ from backend.room_views import (
 )
 
 
-def point(text: str) -> tuple[float, float, float]:
+def parse_point(text: str) -> tuple[float, float, float]:
     x, y, z = (float(part) for part in text.split(","))
     return x, y, z
 
@@ -42,13 +43,37 @@ def parse_views(arguments: list[str]) -> list[View]:
     for argument in arguments:
         if argument.startswith("orbit:"):
             _, target, distance, height, count, *picks = argument.split(":")
-            around = orbit(point(target), float(distance), int(count), float(height))
+            around = orbit(parse_point(target), float(distance), int(count), float(height))
             chosen = [int(pick) for pick in picks[0].split(",")] if picks else []
             views += [around[pick - 1] for pick in chosen] if chosen else around
         else:
             position, look_at = argument.split("@")
-            views.append(View(position=point(position), look_at=point(look_at)))
+            views.append(View(position=parse_point(position), look_at=parse_point(look_at)))
     return views
+
+
+def ask_one(
+    client: OpenRouterClient, view: RenderedView, question: str, spent: list[float]
+) -> dict[str, object]:
+    """Ask about one view; its replies, with tokens and cost, and its answer or failure."""
+    calls: list[dict[str, object]] = []
+
+    def record(reply: Reply, problem: str | None) -> None:
+        calls.append({**asdict(reply), "accepted": problem is None, "problem": problem})
+        if reply.cost_usd is not None:
+            spent.append(reply.cost_usd)
+
+    entry: dict[str, object] = {
+        "view": asdict(view.view),
+        "render_seconds": round(view.seconds, 3),
+        "calls": calls,
+    }
+    try:
+        entry["answer"] = ask_about_views(client, [view], question, SHORT_ANSWER, record)
+    except ProviderFailure as exc:
+        entry["answer"] = None
+        entry["failure"] = f"{exc.kind}: {exc}"
+    return entry
 
 
 def main(room: Path, question: str, arguments: list[str]) -> int:
@@ -67,26 +92,8 @@ def main(room: Path, question: str, arguments: list[str]) -> int:
     spent: list[float] = []
     for number, view in enumerate(rendered, start=1):
         (folder / f"view-{number}.png").write_bytes(view.png)
-        calls: list[dict[str, object]] = []
-
-        def record(reply: Reply, problem: str | None, calls: list[dict[str, object]] = calls):
-            calls.append({**asdict(reply), "accepted": problem is None, "problem": problem})
-            if reply.cost_usd is not None:
-                spent.append(reply.cost_usd)
-
-        entry: dict[str, object] = {
-            "image": f"view-{number}.png",
-            "view": asdict(view.view),
-            "render_seconds": round(view.seconds, 3),
-            "calls": calls,
-        }
-        entries.append(entry)
-        try:
-            asked = f"{question} {SHORT_ANSWER_REQUEST}"
-            entry["answer"] = ask_about_views(client, [view], asked, SHORT_ANSWER, record)
-        except ProviderFailure as exc:
-            entry["answer"] = None
-            entry["failure"] = f"{exc.kind}: {exc}"
+        asked = ask_one(client, view, f"{question} {SHORT_ANSWER_REQUEST}", spent)
+        entries.append({"image": f"view-{number}.png", **asked})
 
     report = {
         "checked_at": datetime.now(UTC).isoformat(),

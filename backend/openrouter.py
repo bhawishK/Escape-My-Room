@@ -90,7 +90,19 @@ class Picture:
     def from_file(cls, path: Path, max_side: int) -> "Picture":
         """The image as RGB PNG, scaled down so neither side exceeds `max_side`."""
         with Image.open(path) as image:
-            rgb = image.convert("RGB")
+            return cls._encoded(image, max_side)
+
+    @classmethod
+    def from_png(cls, png: bytes, max_side: int) -> "Picture":
+        """A PNG as it is when neither side exceeds `max_side`; otherwise scaled down."""
+        with Image.open(io.BytesIO(png)) as image:
+            if max(image.size) <= max_side:
+                return cls(png)
+            return cls._encoded(image, max_side)
+
+    @classmethod
+    def _encoded(cls, image: Image.Image, max_side: int) -> "Picture":
+        rgb = image.convert("RGB")
         rgb.thumbnail((max_side, max_side))
         data = io.BytesIO()
         rgb.save(data, format="PNG")
