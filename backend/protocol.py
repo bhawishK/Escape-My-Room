@@ -67,6 +67,15 @@ class EntityTransformMessage(WireModel):
     position: Position
 
 
+class Orientation(WireModel):
+    """A quaternion in (x, y, z, w) order. It is normalized when a grip is applied."""
+
+    x: float = Field(ge=-2, le=2)
+    y: float = Field(ge=-2, le=2)
+    z: float = Field(ge=-2, le=2)
+    w: float = Field(ge=-2, le=2)
+
+
 class SelectMessage(WireModel):
     """The phone's private choice of the object it means to manipulate; a null id deselects."""
 
@@ -76,18 +85,31 @@ class SelectMessage(WireModel):
 
 
 class AcquireMessage(WireModel):
-    """The phone takes hold of its selected object, to carry it as the phone moves."""
+    """Take hold of an object. The phone names its selection; the headset also sends its grip."""
 
     type: Literal["acquire"]
     room_version: int = Field(ge=1)
     id: str = Field(max_length=64)
+    # Headset only, in room meters. Omitted by the phone, which aims across the floor instead.
+    position: Position | None = None
+    orientation: Orientation | None = None
 
 
 class ReleaseMessage(WireModel):
-    """The phone lets go of its hold; the object stays where the hold left it."""
+    """The holder lets go. The object stays where the hold left it and is not passed on."""
 
     type: Literal["release"]
     manipulation_id: int = Field(ge=1)
+
+
+class GripMessage(WireModel):
+    """The headset's controller grip while it holds an object, in room meters."""
+
+    type: Literal["grip"]
+    manipulation_id: int = Field(ge=1)
+    sequence: int = Field(ge=1)
+    position: Position
+    orientation: Orientation
 
 
 class PoseMessage(WireModel):

@@ -1,6 +1,26 @@
 import { alignmentFromPose, type CalibrationInput } from './alignment';
+import { rayForward } from './grab';
 import type { Position, Rotation } from './protocol';
 import type { DiagnosticScene } from './scene';
+
+export interface ControllerSample {
+  pressed: boolean;
+  started: boolean;
+  ended: boolean;
+  /** Grip pose in the local reference space, when the controller reports one. */
+  position: Position | null;
+  orientation: Rotation | null;
+  /** Target ray in the local reference space. Direction is the ray's forward. */
+  rayOrigin: Position | null;
+  rayDirection: Position | null;
+}
+
+function idleController(): ControllerSample {
+  return {
+    pressed: false, started: false, ended: false,
+    position: null, orientation: null, rayOrigin: null, rayDirection: null,
+  };
+}
 
 export interface XRReport {
   secure_context: boolean;
@@ -21,6 +41,9 @@ export class XRDiagnostic {
   private latest: CalibrationInput | null = null;
   private viewer: { position: Position; orientation: Rotation } | null = null;
   private confirmHeld = false;
+  private gripPressed = false;
+  private controllerSample: ControllerSample = idleController();
+  private aimSamples: { origin: Position; direction: Position }[] = [];
   private readonly report: XRReport = {
     secure_context: isSecureContext, api_available: Boolean(navigator.xr),
     immersive_vr: false, mode: null, reference_space: null,
@@ -68,6 +91,9 @@ export class XRDiagnostic {
       this.latest = null;
       this.viewer = null;
       this.confirmHeld = false;
+      this.gripPressed = false;
+      this.controllerSample = idleController();
+      this.aimSamples = [];
       this.view.setPresenting(false);
       this.report.mode = null;
       this.changed({ ...this.report }, false);
@@ -79,8 +105,7 @@ export class XRDiagnostic {
       this.report.mode = mode;
       this.report.reference_space = 'local';
       this.report.dom_overlay = session.domOverlayState?.type ?? 'unavailable';
-      // Grip and the A or X button confirm while the headset pose is live.
-      session.addEventListener('squeezestart', () => this.confirm());
+      // A or X confirms alignment. The grip grabs once the room is aligned; the page decides that.
       if (this.report.dom_overlay === 'unavailable') {
         session.addEventListener('select', () => { void this.end(); });
       }
@@ -121,6 +146,17 @@ export class XRDiagnostic {
       this.changed({ ...this.report }, true);
     }
     this.readConfirmButtons();
+    this.readController(frame);
+  }
+
+  /** The latest grip sample from this frame. Grip is button 1 on a Quest controller. */
+  controller(): ControllerSample {
+    return this.controllerSample;
+  }
+
+  /** One pointing ray per controller, in the local reference space. */
+  aimRays(): { origin: Position; direction: Position }[] {
+    return this.aimSamples;
   }
 
   async end(): Promise<void> {
@@ -133,8 +169,8 @@ export class XRDiagnostic {
     let pressed = false;
     for (const source of this.session?.inputSources ?? []) {
       const buttons = source.gamepad?.buttons;
-      // Quest grip is button 1. A on the right controller and X on the left are button 4.
-      if (buttons?.[1]?.pressed || buttons?.[4]?.pressed) pressed = true;
+      // A on the right controller and X on the left are button 4. The grip is handled separately.
+      if (buttons?.[4]?.pressed) pressed = true;
     }
     if (pressed && !this.confirmHeld) this.confirm();
     this.confirmHeld = pressed;
@@ -143,6 +179,59 @@ export class XRDiagnostic {
   /** Headset pose mapped to the floor center, or null before a tracked frame. */
   confirmedAlignment(): CalibrationInput | null {
     return this.latest;
+  }
+
+  private readController(frame?: XRFrame): void {
+    const sources = this.session?.inputSources ?? [];
+    let pressed: XRInputSource | null = null;
+    for (const source of sources) {
+      if (source.gamepad?.buttons?.[1]?.pressed) {
+        pressed ??= source;
+      }
+    }
+    const down = pressed !== null;
+    const started = down && !this.gripPressed;
+    const ended = !down && this.gripPressed;
+    this.gripPressed = down;
+    const source = pressed ?? sources[0] ?? null;
+    let position: Position | null = null;
+    let orientation: Rotation | null = null;
+    let rayOrigin: Position | null = null;
+    let rayDirection: Position | null = null;
+    if (frame && this.reference && source?.gripSpace) {
+      const pose = frame.getPose(source.gripSpace, this.reference);
+      if (pose && !pose.emulatedPosition) {
+        const p = pose.transform.position;
+        const q = pose.transform.orientation;
+        position = { x: p.x, y: p.y, z: p.z };
+        orientation = { x: q.x, y: q.y, z: q.z, w: q.w };
+      }
+    }
+    if (frame && this.reference && source?.targetRaySpace) {
+      const ray = frame.getPose(source.targetRaySpace, this.reference);
+      if (ray && !ray.emulatedPosition) {
+        const p = ray.transform.position;
+        const q = ray.transform.orientation;
+        rayOrigin = { x: p.x, y: p.y, z: p.z };
+        rayDirection = rayForward({ x: q.x, y: q.y, z: q.z, w: q.w });
+      }
+    }
+    this.controllerSample = {
+      pressed: down, started, ended, position, orientation, rayOrigin, rayDirection,
+    };
+    const rays: { origin: Position; direction: Position }[] = [];
+    for (const input of sources) {
+      if (!frame || !this.reference || !input.targetRaySpace) continue;
+      const pose = frame.getPose(input.targetRaySpace, this.reference);
+      if (!pose || pose.emulatedPosition) continue;
+      const p = pose.transform.position;
+      const q = pose.transform.orientation;
+      rays.push({
+        origin: { x: p.x, y: p.y, z: p.z },
+        direction: rayForward({ x: q.x, y: q.y, z: q.z, w: q.w }),
+      });
+    }
+    this.aimSamples = rays;
   }
 
   /** The latest non-emulated viewer pose in the local reference space, or null when it is gone. */

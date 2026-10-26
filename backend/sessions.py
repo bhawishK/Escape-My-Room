@@ -10,6 +10,7 @@ from fastapi import WebSocket
 
 from backend.alignment import Alignment
 from backend.delivery import Outbox
+from backend.grab import grab_offset, grabbed_point, normalize
 from backend.prepared_room import FRAME, QUATERNION_ORDER, UNITS, SceneEntity, SplatPlacement
 from backend.protocol import (
     MarkerState,
@@ -48,15 +49,17 @@ def floor_bounds(entities: list[SceneEntity]) -> tuple[float, float, float, floa
 
 @dataclass
 class Manipulation:
-    """One hold: the owner's phone aims the object across the floor until it is let go."""
+    """One hold. The phone aims across the floor; the headset keeps the object on its grip."""
 
     id: int
     entity: str
     owner: Role
-    # The floor height the object rested at when picked up; it slides across the floor there.
+    # The floor height the object rested at when the phone picked it up.
     rest_y: float
-    # The pose sequence of the latest movement applied, or None before the first.
+    # The pose or grip sequence of the latest movement applied, or None before the first.
     sequence: int | None = None
+    # Box position in the headset grip's local frame. None for a phone hold.
+    offset: tuple[float, float, float] | None = None
 
 
 @dataclass
@@ -184,19 +187,37 @@ class PrototypeRoom:
         return "ok"
 
     def acquire(
-        self, room_version: int, entity_id: str
-    ) -> Literal["ok", "unavailable", "mismatch", "not_selected", "not_tracked", "already_held"]:
-        """Pick up the phone's selected object, to where its screen centre meets the floor."""
+        self,
+        role: Role,
+        room_version: int,
+        entity_id: str,
+        grip: tuple[Position, tuple[float, float, float, float]] | None = None,
+    ) -> Literal[
+        "ok",
+        "unavailable",
+        "mismatch",
+        "not_selected",
+        "not_tracked",
+        "already_held",
+        "controlled_by_other",
+        "unknown",
+        "not_selectable",
+        "no_grip",
+    ]:
+        """The phone aims its selection. The headset grabs without moving the object."""
         if self.load_error is not None or self.room_version is None:
             return "unavailable"
         if room_version != self.room_version:
             return "mismatch"
+        held = self.manipulation
+        if held is not None:
+            return "already_held" if held.owner == role else "controlled_by_other"
+        if role == "vr_solver":
+            return self.acquire_grip(entity_id, grip)
         if self.selection is None or entity_id != self.selection:
             return "not_selected"
         if self.marker.tracking_status != "tracked" or self.marker.position is None:
             return "not_tracked"
-        if self.manipulation is not None:
-            return "already_held"
         self.manipulation_count += 1
         self.manipulation = Manipulation(
             id=self.manipulation_count,
@@ -208,10 +229,74 @@ class PrototypeRoom:
         self.revision += 1
         return "ok"
 
-    def release(self, manipulation_id: int) -> Literal["ok", "stale"]:
-        """End the current hold; the object stays on the floor where it was aimed."""
+    def acquire_grip(
+        self,
+        entity_id: str,
+        grip: tuple[Position, tuple[float, float, float, float]] | None,
+    ) -> Literal["ok", "unknown", "not_selectable", "no_grip"]:
+        entity = next((entity for entity in self.entities if entity.id == entity_id), None)
+        if entity is None:
+            return "unknown"
+        if entity.kind != "movable" or not entity.selectable:
+            return "not_selectable"
+        if grip is None:
+            return "no_grip"
+        orientation = normalize(grip[1])
+        if orientation is None:
+            return "no_grip"
+        place = entity.position
+        self.manipulation_count += 1
+        self.manipulation = Manipulation(
+            id=self.manipulation_count,
+            entity=entity_id,
+            owner="vr_solver",
+            rest_y=place.y,
+            offset=grab_offset(
+                (grip[0].x, grip[0].y, grip[0].z),
+                orientation,
+                (place.x, place.y, place.z),
+            ),
+        )
+        self.revision += 1
+        return "ok"
+
+    def accept_grip(
+        self,
+        role: Role,
+        manipulation_id: int,
+        sequence: int,
+        position: Position,
+        orientation: tuple[float, float, float, float],
+    ) -> Literal["ok", "stale", "controlled_by_other", "no_grip"]:
+        """Move the headset's object with its grip. Anyone else's grip is refused."""
+        held = self.manipulation
+        if held is None or held.id != manipulation_id:
+            return "stale"
+        if held.owner != role or held.offset is None:
+            return "controlled_by_other"
+        unit = normalize(orientation)
+        if unit is None:
+            return "no_grip"
+        point = grabbed_point((position.x, position.y, position.z), unit, held.offset)
+
+        def bounded(value: float) -> float:
+            return max(-100, min(100, value))
+
+        self.entity(held.entity).position = Position(
+            x=bounded(point[0]), y=bounded(point[1]), z=bounded(point[2])
+        )
+        held.sequence = sequence
+        self.revision += 1
+        return "ok"
+
+    def release(
+        self, role: Role, manipulation_id: int
+    ) -> Literal["ok", "stale", "controlled_by_other"]:
+        """The holder lets go. The other person cannot end the hold or take the object."""
         if self.manipulation is None or self.manipulation.id != manipulation_id:
             return "stale"
+        if self.manipulation.owner != role:
+            return "controlled_by_other"
         self.drop()
         self.revision += 1
         return "ok"
@@ -292,12 +377,13 @@ class PrototypeRoom:
             pitch=pose.pitch,
         )
         held = self.manipulation
-        if held is not None and pose.position is None:
-            # Without a phone position there is nothing to carry it in front of.
-            self.drop()
-        elif held is not None:
-            self.carry()
-            held.sequence = pose.sequence
+        # A phone pose moves only the phone's hold. The headset's object stays with its grip.
+        if held is not None and held.owner == "mobile_master":
+            if pose.position is None:
+                self.drop()
+            else:
+                self.carry()
+                held.sequence = pose.sequence
         self.revision += 1
 
     def entity(self, entity_id: str) -> SceneEntity:
@@ -335,12 +421,13 @@ class PrototypeRoom:
         entity.position = Position(x=bounded(x), y=held.rest_y, z=bounded(z))
 
     def drop(self) -> None:
-        """End the hold, letting the object fall straight down to the height it rested at."""
+        """End the hold. A phone aim falls back to its floor height; a headset grip stays put."""
         held = self.manipulation
         if held is None:
             return
-        entity = self.entity(held.entity)
-        entity.position = Position(x=entity.position.x, y=held.rest_y, z=entity.position.z)
+        if held.owner == "mobile_master":
+            entity = self.entity(held.entity)
+            entity.position = Position(x=entity.position.x, y=held.rest_y, z=entity.position.z)
         self.manipulation = None
 
     def disconnect(self, role: Role) -> None:
@@ -350,8 +437,9 @@ class PrototypeRoom:
         self.cancel_presence_timer(role)
         self.presence[role] = PresenceState(tracking_status="lost")
         self.presence_seen.pop(role, None)
+        if self.manipulation is not None and self.manipulation.owner == role:
+            self.drop()
         if role == "mobile_master":
             self.marker = MarkerState(tracking_status="lost")
             self.selection = None
-            self.drop()
         self.revision += 1

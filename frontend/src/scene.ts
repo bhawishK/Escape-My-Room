@@ -43,6 +43,8 @@ export class DiagnosticScene {
   private readonly statusTexture: THREE.CanvasTexture;
   private readonly statusLabel: THREE.Sprite;
   private statusText = '';
+  /** A message in front of the headset, instead of Press A or Aligned, until cleared. */
+  private notice: string | null = null;
   private readonly raycaster = new THREE.Raycaster();
   /** Outlines the object the phone's gaze cursor is over. */
   private readonly highlight = new THREE.BoxHelper(new THREE.Object3D(), 0xffcc00);
@@ -59,6 +61,8 @@ export class DiagnosticScene {
   private selected: string | null = null;
   /** Outlines the object someone is holding, on both devices. */
   private readonly control = new THREE.BoxHelper(new THREE.Object3D(), 0xff9500);
+  /** Beams from the headset controllers. Cyan misses; orange is on a movable object. */
+  private readonly aimBeams: THREE.Mesh[] = [];
   private controlled: string | null = null;
   private predicted: { id: string; position: THREE.Vector3 } | null = null;
   /**
@@ -268,6 +272,57 @@ export class DiagnosticScene {
     this.outlineSelection();
   }
 
+  /**
+   * Draws each controller's pointing ray in the local reference space. `targetId` is the movable
+   * object one of them is on, outlined until the ray leaves it.
+   */
+  showAim(
+    rays: readonly { origin: Position; direction: Position; onTarget: boolean; blocked?: boolean }[],
+    targetId: string | null,
+  ): void {
+    while (this.aimBeams.length < rays.length) {
+      const beam = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.006, 0.006, 1, 6),
+        new THREE.MeshBasicMaterial({ color: 0x30b0c7 }),
+      );
+      beam.frustumCulled = false;
+      beam.visible = false;
+      this.scene.add(beam);
+      this.aimBeams.push(beam);
+    }
+    const up = new THREE.Vector3(0, 1, 0);
+    this.aimBeams.forEach((beam, index) => {
+      const ray = this.presenting ? rays[index] : undefined;
+      if (!ray) {
+        beam.visible = false;
+        return;
+      }
+      const dir = new THREE.Vector3(ray.direction.x, ray.direction.y, ray.direction.z);
+      if (dir.lengthSq() < 1e-8) {
+        beam.visible = false;
+        return;
+      }
+      dir.normalize();
+      const reach = 4;
+      beam.visible = true;
+      beam.scale.set(1, reach, 1);
+      beam.position.set(
+        ray.origin.x + dir.x * reach / 2,
+        ray.origin.y + dir.y * reach / 2,
+        ray.origin.z + dir.z * reach / 2,
+      );
+      beam.quaternion.setFromUnitVectors(up, dir);
+      const material = beam.material;
+      if (material instanceof THREE.MeshBasicMaterial) {
+        material.color.setHex(ray.blocked ? 0xff3b30 : ray.onTarget ? 0xff9500 : 0x30b0c7);
+      }
+    });
+    const root = targetId ? this.entityRoots.get(targetId) : undefined;
+    if (root) this.highlight.setFromObject(root);
+    this.highlight.visible = root !== undefined;
+    this.highlighted = targetId;
+  }
+
   /** Outlines the object being held, or none for null. */
   showControl(id: string | null): void {
     this.controlled = id;
@@ -412,7 +467,18 @@ export class DiagnosticScene {
       this.camera.lookAt(0, 0.6, -1.2);
     }
     this.container.dataset.view = this.following ? 'phone' : aligned ? 'calibrated' : 'overview';
-    this.paintStatus(aligned ? 'Aligned' : 'Press A');
+    this.refreshStatus();
+  }
+
+  /** Shows `text` on the headset sign. Null returns to Press A or Aligned. */
+  showNotice(text: string | null): void {
+    this.notice = text;
+    this.refreshStatus();
+  }
+
+  private refreshStatus(): void {
+    const aligned = this.alignment.status === 'aligned';
+    this.paintStatus(this.notice ?? (aligned ? 'Aligned' : 'Press A'));
     this.statusLabel.visible = this.presenting;
   }
 
@@ -425,9 +491,15 @@ export class DiagnosticScene {
     context.fillStyle = '#08111ee8';
     context.fillRect(0, 0, this.statusCanvas.width, this.statusCanvas.height);
     context.fillStyle = text === 'Aligned' ? '#81ded1' : '#ffd399';
-    context.font = '700 72px sans-serif';
     context.textAlign = 'center';
     context.textBaseline = 'middle';
+    const maxWidth = this.statusCanvas.width - 40;
+    let size = 64;
+    context.font = `700 ${size}px sans-serif`;
+    while (size > 28 && context.measureText(text).width > maxWidth) {
+      size -= 4;
+      context.font = `700 ${size}px sans-serif`;
+    }
     context.fillText(text, this.statusCanvas.width / 2, this.statusCanvas.height / 2);
     this.statusTexture.needsUpdate = true;
   }
