@@ -15,6 +15,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# Importing `backend.app` reads the developer's `.env` into this process, and every service a test
+# starts inherits this process's environment. Never read it: its key would reach the tests.
+os.environ["ESCAPE_ROOM_ENV_FILE"] = ""
+
 
 @pytest.fixture(scope="session")
 def service_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
