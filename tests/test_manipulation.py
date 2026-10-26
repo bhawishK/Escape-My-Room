@@ -193,7 +193,7 @@ def test_the_headset_sees_the_hold_but_cannot_take_or_end_it(service_url):
             {"type": "release", "manipulation_id": identity},
         ):
             headset.send(json.dumps(message))
-            assert error_code(headset) == "role_forbidden"
+            assert error_code(headset) == "controlled_by_other"
         carried = box(phone.walk_to(0.0, 1.0))
         headset.send(json.dumps({"type": "entity_transform", "id": "box", "position": carried}))
         assert error_code(headset) == "entity_controlled"

@@ -42,7 +42,7 @@
             </div>
             <div id="vr-controls" hidden>
               <button id="confirm-alignment" disabled>Confirm alignment</button>
-              <p class="hint">Stand at the floor center and face the desk, then confirm. In the headset, press the A button when you see the words Press A. Without tracking, the page button records the origin.</p>
+              <p class="hint">Stand at the floor center and face the desk, then confirm. In the headset, press A when you see Press A. After that, point at the box and squeeze the grip to pick it up; let go to put it down. Without tracking, the page button records the origin.</p>
               <div class="button-row">
                 <button id="start-xr" disabled>Enter VR</button>
                 <button id="end-xr" disabled class="secondary">End VR</button>
@@ -128,7 +128,8 @@
     </div>
     <div id="xr-overlay" hidden>
       <p id="xr-hud">Connection diagnostic</p>
-      <p>Squeeze either grip button to confirm. Point the laser here and pull the trigger to press a button.</p>
+      <p id="xr-grab" data-testid="xr-grab"></p>
+      <p>Press A to confirm alignment. A line comes out of each controller. Put the line on the box until it turns orange, then squeeze the grip. Release the grip to put it down. Pull the trigger to press a button.</p>
       <button id="overlay-confirm-alignment">Confirm alignment</button>
       <button id="hold-probe">Hold input probe</button>
       <button id="overlay-end-xr">End XR</button>

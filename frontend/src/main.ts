@@ -1,20 +1,21 @@
 import './style.css';
-import { roomHeading, roomPoint } from './alignment';
+import { roomDirection, roomHeading, roomOrientation, roomPoint } from './alignment';
 import { element } from './dom';
 import { FloorDepth } from './floor-depth';
 import { GazeCursor } from './gaze-cursor';
 import { floorPoint } from './aim';
+import { grabbedPosition, offsetOf, targetAlongRay } from './grab';
 import { MotionStats } from './motion-stats';
 import { EngineTracking, engineUnavailable, trackingEngine } from './engine-tracking';
 import { MovementLog, type TrackingMode } from './movement-log';
 import { StepTracking, type PhoneTracking } from './phone-tracking';
 import { START_EYE, headingOf, pitchOf, type RoomPose } from './phone-view';
-import { NO_PRESENCE, type PresenceInput, type Role, type SessionState } from './protocol';
+import { NO_PRESENCE, type Position, type PresenceInput, type Role, type Rotation, type SessionState } from './protocol';
 import { SessionClient } from './session';
 import { DiagnosticScene } from './scene';
 import { STEP_LENGTHS } from './step-walk';
 import { floorplan, type Floorplan } from './steps';
-import { XRDiagnostic, xrError } from './xr';
+import { XRDiagnostic, xrError, type ControllerSample } from './xr';
 
 const phoneButton = element<HTMLButtonElement>('connect-phone');
 const vrButton = element<HTMLButtonElement>('connect-vr');
@@ -45,6 +46,14 @@ const PICK_UP_MS = 300;
 /** While carrying, the phone tells Python where it is and faces this often, so the object follows. */
 const CARRY_POSE_MS = 100;
 let lastCarryPose = 0;
+/** While the headset holds the box, its grip pose is sent this often. */
+const GRIP_POSE_MS = 100;
+let lastGripPose = 0;
+/** The grip is down, and the offset that keeps the box from jumping into the hand. */
+let gripDown = false;
+let grabOffset: Position | null = null;
+/** The headset hold already asked to end, so it is asked once. */
+let headsetReleasing: number | null = null;
 /** The floor height a carried object slides across, from where it rested when picked up. */
 let carryFloor: number | null = null;
 /** The floor's extent, which a carried object stays on. */
@@ -309,7 +318,7 @@ function applyState(next: SessionState): void {
   view?.showControl(held?.entity ?? null);
   // Another device's hold arrives a few times a second; draw it gliding between placements.
   view?.smooth(held && role && held.owner !== role ? held.entity : null);
-  if (held && held.owner === role) motion.acknowledge(held.sequence);
+  if (held && role === 'mobile_master' && held.owner === role) motion.acknowledge(held.sequence);
   element('control-status').textContent = held ?
     `${held.owner === 'mobile_master' ? 'Phone' : 'Headset'} is moving ${entityLabel(held.entity)}` :
     'No object is being moved';
@@ -355,7 +364,23 @@ function applyState(next: SessionState): void {
   element('alignment-status').textContent = alignmentLabel(next);
   element('vr-status').textContent = next.vr_connected ? 'VR device connected' : 'Waiting for VR device';
   element('vr-status').dataset.connected = String(next.vr_connected);
-  element('xr-hud').textContent = next.mobile_connected ? 'Phone connected' : 'Waiting for phone';
+  const headset = headsetHold();
+  if (role === 'vr_solver' && !headset && grabOffset) {
+    view?.predict(null);
+    grabOffset = null;
+    headsetReleasing = null;
+  }
+  if (headset && !gripDown) endHeadsetHold();
+  if (headset) element('xr-grab').textContent = '';
+  element('xr-hud').textContent = role === 'vr_solver'
+    ? (headset
+      ? `Holding ${entityLabel(headset.entity)} · release the grip to put it down`
+      : next.manipulation
+        ? `Phone is holding ${entityLabel(next.manipulation.entity)}`
+        : next.alignment.vr_solver.status === 'aligned'
+          ? 'Put the line on the box until it turns orange, then squeeze the grip'
+          : 'Press A to confirm alignment')
+    : (next.mobile_connected ? 'Phone connected' : 'Waiting for phone');
 }
 
 const client = new SessionClient({
@@ -418,6 +443,15 @@ const client = new SessionClient({
     showError(message);
     // The room view covers the page's error box, so its status line says it too.
     if (roomViewOpen) element('view-status').textContent = message;
+    if (role === 'vr_solver') {
+      element('xr-grab').textContent = message;
+      view?.showNotice(message);
+      if (!headsetHold()) {
+        grabOffset = null;
+        gripDown = false;
+        view?.predict(null);
+      }
+    }
   },
 });
 
@@ -524,6 +558,7 @@ try {
     sceneView.tick(lastFrame === null ? 0 : time - lastFrame);
     lastFrame = time;
     publishPresence();
+    updateHeadsetGrab(time);
     if (roomViewOpen) {
       // A new height eases in rather than jumping.
       const target = measuredHeight ?? START_EYE.y;
@@ -661,6 +696,119 @@ element('open-room-view').addEventListener('click', () => {
   setRoomView(true);
 });
 element('close-room-view').addEventListener('click', () => setRoomView(false));
+/** The hold this headset owns, if Python has one in progress. */
+function headsetHold(): SessionState['manipulation'] {
+  const held = state?.manipulation ?? null;
+  return held && role === 'vr_solver' && held.owner === 'vr_solver' ? held : null;
+}
+
+/** Asks Python to end the headset's hold, once. The object stays where the grip left it. */
+function endHeadsetHold(): void {
+  const mine = headsetHold();
+  if (!mine || headsetReleasing === mine.id) return;
+  headsetReleasing = mine.id;
+  gripDown = false;
+  client.sendRelease(mine.id);
+}
+
+/** Grip and target ray in room meters, after alignment. */
+function roomGrip(sample: ControllerSample): {
+  position: Position;
+  orientation: Rotation;
+  rayOrigin: Position;
+  rayDirection: Position;
+} | null {
+  const alignment = state?.alignment.vr_solver;
+  if (
+    !alignment || alignment.status !== 'aligned' ||
+    !sample.position || !sample.orientation || !sample.rayOrigin || !sample.rayDirection
+  ) return null;
+  return {
+    position: roomPoint(alignment, sample.position),
+    orientation: roomOrientation(alignment, sample.orientation),
+    rayOrigin: roomPoint(alignment, sample.rayOrigin),
+    rayDirection: roomDirection(alignment, sample.rayDirection),
+  };
+}
+
+/** Pointing rays in local space, and whether each one is on a movable object. */
+function headsetRays(): {
+  origin: Position; direction: Position; onTarget: boolean; blocked: boolean; hit: string | null;
+}[] {
+  const alignment = state?.alignment.vr_solver;
+  const entities = state?.room.entities ?? [];
+  const aligned = alignment?.status === 'aligned';
+  const taken = state?.manipulation?.owner === 'mobile_master' ? state.manipulation.entity : null;
+  return (xr?.aimRays() ?? []).map(ray => {
+    const hit = aligned && alignment
+      ? targetAlongRay(roomPoint(alignment, ray.origin), roomDirection(alignment, ray.direction), entities)
+      : null;
+    const blocked = hit !== null && hit === taken;
+    return { origin: ray.origin, direction: ray.direction, onTarget: hit !== null && !blocked, blocked, hit: blocked ? null : hit };
+  });
+}
+
+/**
+ * Before alignment, the grip confirms it. After alignment, a grip squeeze on the box grabs it,
+ * and letting go puts it down. The box keeps its offset from the grip, so it does not jump.
+ */
+function updateHeadsetGrab(time: number): void {
+  if (role !== 'vr_solver') return;
+  const sample = xr?.controller();
+  const rays = xrActive ? headsetRays() : [];
+  view?.showAim(rays, rays.find(ray => ray.hit)?.hit ?? null);
+  const phoneHold = state?.manipulation?.owner === 'mobile_master' ? state.manipulation : null;
+  const mineNow = headsetHold();
+  if (rays.some(ray => ray.blocked)) view?.showNotice('The other person is holding that object.');
+  else if (phoneHold) view?.showNotice(`Phone is holding ${entityLabel(phoneHold.entity)}`);
+  else if (mineNow) view?.showNotice(`Holding ${entityLabel(mineNow.entity)} · release the grip`);
+  else if (xrActive) view?.showNotice(null);
+  if (!xrActive || !sample) {
+    if (headsetHold()) endHeadsetHold();
+    return;
+  }
+  const aligned = state?.alignment.vr_solver.status === 'aligned';
+  if (sample.started && !aligned) {
+    confirmAlignment();
+    return;
+  }
+  if (sample.started && aligned) {
+    const posed = roomGrip(sample);
+    const version = state?.room.room_version;
+    const entities = state?.room.entities ?? [];
+    const hit = posed ? targetAlongRay(posed.rayOrigin, posed.rayDirection, entities) : null;
+    const box = hit ? entities.find(entity => entity.id === hit) : undefined;
+    const taken = hit !== null && state?.manipulation?.owner === 'mobile_master' && state.manipulation.entity === hit;
+    if (taken) {
+      gripDown = false;
+      const message = 'The other person is holding that object.';
+      view?.showNotice(message);
+      element('xr-hud').textContent = message;
+      element('xr-grab').textContent = message;
+    } else if (!posed || !hit || !box || version === null || version === undefined) {
+      gripDown = false;
+      element('xr-hud').textContent = 'Put the line on the box until it turns orange, then squeeze the grip';
+    } else {
+      gripDown = true;
+      grabOffset = offsetOf(posed.position, posed.orientation, box.position);
+      client.sendAcquire(version, hit, { position: posed.position, orientation: posed.orientation });
+    }
+  }
+  if (sample.ended) {
+    gripDown = false;
+    endHeadsetHold();
+  }
+  const mine = headsetHold();
+  const posed = sample.pressed ? roomGrip(sample) : null;
+  if (mine && gripDown && posed && grabOffset) {
+    view?.predict(mine.entity, grabbedPosition(posed.position, posed.orientation, grabOffset));
+    if (time - lastGripPose >= GRIP_POSE_MS) {
+      lastGripPose = time;
+      client.sendGrip(mine.id, { position: posed.position, orientation: posed.orientation });
+    }
+  }
+}
+
 const confirmAlignment = () => {
   if (!connected) return;
   client.sendCalibration(xr?.confirmedAlignment() ?? { yaw: 0, origin: { x: 0, y: 0, z: 0 } });

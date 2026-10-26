@@ -91,12 +91,14 @@ The phone picks up its selected object and places it by aiming, then lets go. Th
 
 The user chose this on 20 October 2026, after trying first to carry the object by counting steps and then to hold it in front of them. Both felt loose. The aim is the 3-degree-of-freedom ray-casting technique that orientation-only VR controllers use. Real 6-degree-of-freedom tracking, through Android WebXR or a native ARKit app, remains the route to the one-to-one room view.
 
-Only the phone may send:
+The phone sends:
 
 ```json
 { "type": "acquire", "room_version": 1, "id": "box" }
 { "type": "release", "manipulation_id": 3 }
 ```
+
+The headset uses the same two messages once it is holding, and adds its grip pose. That is [headset grab](solver-grab.md).
 
 Poses carry where the phone's screen centre aims:
 - `heading`, in radians: 0 faces the desk (-Z), and positive turns left.
@@ -120,7 +122,8 @@ The hold is shared. The state carries `"manipulation": { "id": 3, "entity": "box
 | `already_held` | A hold is already in progress |
 | `room_version_mismatch`, `room_unavailable` | As for selection |
 | `stale_manipulation` | `release` names a hold that is not the current one |
-| `role_forbidden` | The headset sent `acquire` or `release` |
+| `controlled_by_other` | The other person already holds it. Their grab, grip, or release is refused, and the owner and place stay as they are |
+| `role_forbidden` | The phone sent `grip`, or the headset sent `pose` |
 | `entity_controlled` | An `entity_transform` for the held object |
 | `selection_held` (on `select`) | The selection cannot change during a hold |
 
@@ -144,6 +147,44 @@ A desktop run of both pages with synthetic orientation readings, the phone 1.5 m
 | Let go | Stayed there; the headset page showed **Phone is moving box** until then |
 
 Not yet tried on the iPhone and Quest.
+
+## Headset grab
+
+Issue #7. After alignment, the Quest grip picks up a free movable object and the phone sees it move. The two people cannot hold the same object. Letting go leaves it where it is; it is not handed to the other person. See [solver grab](solver-grab.md).
+
+The headset sends the same `acquire` and `release` as the phone, plus the grip pose in room meters:
+
+```json
+{
+  "type": "acquire",
+  "room_version": 1,
+  "id": "box",
+  "position": { "x": -0.5, "y": 0.2, "z": -0.4 },
+  "orientation": { "x": 0, "y": 0, "z": 0, "w": 1 }
+}
+```
+
+```json
+{
+  "type": "grip",
+  "manipulation_id": 3,
+  "sequence": 1,
+  "position": { "x": -0.2, "y": 0.2, "z": -0.4 },
+  "orientation": { "x": 0, "y": 0, "z": 0, "w": 1 }
+}
+```
+
+`acquire` stores the object's offset from that grip and does not move it. Later `grip` messages, at most 10 a second, put the object at grip plus that offset. `sequence` starts at 1 and must increase on that socket. A grip from the phone, or for a hold the headset does not own, changes nothing.
+
+The shared state uses the same `manipulation` object. `owner` is `vr_solver` while the headset holds it. Both pages show **Headset is moving box**.
+
+| Refusal | When |
+| --- | --- |
+| `controlled_by_other` | The phone holds it, or the phone tries to take or end the headset's hold |
+| `no_grip` | The headset `acquire` has no grip pose |
+| `entity_not_selectable` | The object is fixed |
+| `already_held` | This headset already holds something |
+| `stale_manipulation` | `release` or `grip` names a hold that is not current |
 
 ## Motion delivery
 

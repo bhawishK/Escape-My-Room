@@ -1,4 +1,4 @@
-import type { Position } from './protocol';
+import type { Position, Rotation } from './protocol';
 
 export interface CalibrationInput {
   yaw: number;
@@ -60,4 +60,27 @@ export function roomHeading(
   const roomX = cosine * forwardX + sine * forwardZ;
   const roomZ = -sine * forwardX + cosine * forwardZ;
   return Math.atan2(-roomX, -roomZ);
+}
+
+/** A WebXR direction in the room, using the stored yaw. Length is unchanged. */
+export function roomDirection(alignment: CalibrationInput, direction: Position): Position {
+  const cosine = Math.cos(alignment.yaw);
+  const sine = Math.sin(alignment.yaw);
+  return {
+    x: cosine * direction.x + sine * direction.z,
+    y: direction.y,
+    z: -sine * direction.x + cosine * direction.z,
+  };
+}
+
+/** A WebXR quaternion in the room: the stored yaw, then the headset rotation. */
+export function roomOrientation(alignment: CalibrationInput, orientation: Rotation): Rotation {
+  const half = alignment.yaw / 2;
+  const yaw = { x: 0, y: Math.sin(half), z: 0, w: Math.cos(half) };
+  return {
+    w: yaw.w * orientation.w - yaw.y * orientation.y,
+    x: yaw.w * orientation.x + yaw.y * orientation.z,
+    y: yaw.w * orientation.y + yaw.y * orientation.w,
+    z: yaw.w * orientation.z - yaw.y * orientation.x,
+  };
 }

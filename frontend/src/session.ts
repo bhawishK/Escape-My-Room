@@ -1,5 +1,5 @@
 import type { CalibrationInput } from './alignment';
-import type { PoseInput, PresenceInput, Role, SelectionResult, ServerEvent, SessionState } from './protocol';
+import type { PoseInput, Position, PresenceInput, Role, Rotation, SelectionResult, ServerEvent, SessionState } from './protocol';
 
 interface SessionEvents {
   state: (state: SessionState) => void;
@@ -18,6 +18,7 @@ export class SessionClient {
   private socket: WebSocket | null = null;
   private sequence = 0;
   private presenceSequence = 0;
+  private gripSequence = 0;
   /** The newest pose not yet sent because the connection was congested. */
   private waitingPose: PoseInput | null = null;
   private drainTimer: number | null = null;
@@ -33,6 +34,7 @@ export class SessionClient {
     this.socket = socket;
     this.sequence = 0;
     this.presenceSequence = 0;
+    this.gripSequence = 0;
     this.stopWaitingPose();
     try {
       await new Promise<void>((resolve, reject) => {
@@ -135,10 +137,24 @@ export class SessionClient {
     this.socket.send(JSON.stringify({ type: 'select', room_version: roomVersion, id }));
   }
 
-  /** Asks Python to start holding the selected object, so walking carries it. */
-  sendAcquire(roomVersion: number, id: string): void {
+  /**
+   * Asks Python to start a hold. The phone names its selection. The headset also sends the grip
+   * pose in room meters, and Python keeps the object where it already is relative to that grip.
+   */
+  sendAcquire(roomVersion: number, id: string, grip?: { position: Position; orientation: Rotation }): void {
     if (this.socket?.readyState !== WebSocket.OPEN) return;
-    this.socket.send(JSON.stringify({ type: 'acquire', room_version: roomVersion, id }));
+    this.socket.send(JSON.stringify({
+      type: 'acquire', room_version: roomVersion, id, ...(grip ?? {}),
+    }));
+  }
+
+  /** The headset's grip while it holds an object. Dropped when the socket is backed up. */
+  sendGrip(manipulationId: number, grip: { position: Position; orientation: Rotation }): boolean {
+    if (this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > CONGESTED_BYTES) return false;
+    this.socket.send(JSON.stringify({
+      type: 'grip', manipulation_id: manipulationId, sequence: ++this.gripSequence, ...grip,
+    }));
+    return true;
   }
 
   /** Lets go of a hold; the object stays where it is. */

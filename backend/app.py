@@ -37,6 +37,7 @@ from backend.protocol import (
     AcquireMessage,
     CalibrateMessage,
     EntityTransformMessage,
+    GripMessage,
     MarkerState,
     PoseMessage,
     PresenceMessage,
@@ -57,6 +58,7 @@ type Incoming = (
     | SelectMessage
     | AcquireMessage
     | ReleaseMessage
+    | GripMessage
     | PresenceMessage
 )
 # The message model for each incoming `type`.
@@ -68,6 +70,7 @@ INCOMING: dict[str, type[Incoming]] = {
     "select": SelectMessage,
     "acquire": AcquireMessage,
     "release": ReleaseMessage,
+    "grip": GripMessage,
     "presence": PresenceMessage,
 }
 
@@ -91,7 +94,11 @@ MANIPULATION_REFUSALS = {
     "not_selected": ("not_selected", "Select the object before holding it."),
     "not_tracked": ("not_tracked", "Turn on Walk with steps so the phone has a position."),
     "already_held": ("already_held", "The object is already being moved."),
+    "controlled_by_other": ("controlled_by_other", "The other person is holding that object."),
     "stale": ("stale_manipulation", "That hold has already ended."),
+    "unknown": ("unknown_entity", "That room object does not exist."),
+    "not_selectable": ("entity_not_selectable", "That object is fixed and cannot be held."),
+    "no_grip": ("no_grip", "The controller has no grip pose."),
 }
 
 
@@ -229,6 +236,7 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     async def room_socket(socket: WebSocket, role: Role) -> None:
         sequence = 0
         presence_sequence = 0
+        grip_sequence = 0
         outbox = Outbox(socket, room.delivery_delay)
 
         async def reject(code: str, message: str) -> None:
@@ -333,14 +341,46 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                             )
                             continue
                         await room.broadcast()
-                    elif isinstance(incoming, AcquireMessage | ReleaseMessage):
-                        if role != "mobile_master":
-                            await reject("role_forbidden", "Only the phone holds objects for now.")
-                            continue
-                        if isinstance(incoming, AcquireMessage):
-                            result = room.acquire(incoming.room_version, incoming.id)
+                    elif isinstance(incoming, AcquireMessage | ReleaseMessage | GripMessage):
+                        if isinstance(incoming, GripMessage):
+                            if role != "vr_solver":
+                                await reject(
+                                    "role_forbidden",
+                                    "Only the headset moves an object with the controller.",
+                                )
+                                continue
+                            if incoming.sequence <= grip_sequence:
+                                await reject(
+                                    "stale_sequence",
+                                    "Grip sequences must increase on this socket.",
+                                )
+                                continue
+                            grip_sequence = incoming.sequence
+                            orientation = incoming.orientation
+                            result = room.accept_grip(
+                                role,
+                                incoming.manipulation_id,
+                                incoming.sequence,
+                                incoming.position,
+                                (orientation.x, orientation.y, orientation.z, orientation.w),
+                            )
+                        elif isinstance(incoming, AcquireMessage):
+                            grip = None
+                            if incoming.position is not None and incoming.orientation is not None:
+                                orientation = incoming.orientation
+                                grip = (
+                                    incoming.position,
+                                    (orientation.x, orientation.y, orientation.z, orientation.w),
+                                )
+                            elif incoming.position is not None or incoming.orientation is not None:
+                                await reject(
+                                    "invalid_message",
+                                    "A grip pose needs both a position and an orientation.",
+                                )
+                                continue
+                            result = room.acquire(role, incoming.room_version, incoming.id, grip)
                         else:
-                            result = room.release(incoming.manipulation_id)
+                            result = room.release(role, incoming.manipulation_id)
                         if result == "unavailable":
                             await reject(
                                 "room_unavailable",
@@ -378,7 +418,7 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                             await reject("unknown_entity", "That room object does not exist.")
                             continue
                         if result == "controlled":
-                            await reject("entity_controlled", "The phone is moving that object.")
+                            await reject("entity_controlled", "That object is being held.")
                             continue
                         if result == "unavailable":
                             await reject(
