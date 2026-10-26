@@ -68,16 +68,27 @@ def _camera_axes(view: View) -> tuple[Vector, Vector, Vector]:
 def project(view: View, point: Vector) -> tuple[float, float] | None:
     """Where `point` appears in the view, as fractions of its width and height from the top
     left; None when it is behind the camera."""
-    forward, right, up = _camera_axes(view)
-    offset = _minus(point, view.position)
-    depth = _dot(offset, forward)
-    if depth <= 0:
+    _, right, up = _camera_axes(view)
+    ahead = depth(view, point)
+    if ahead <= 0:
         return None
-    half_height = math.tan(math.radians(view.fov_degrees) / 2)
-    half_width = half_height * view.width / view.height
-    x = _dot(offset, right) / (depth * half_width)
-    y = _dot(offset, up) / (depth * half_height)
+    offset = _minus(point, view.position)
+    half_width, half_height = _half_extents(view)
+    x = _dot(offset, right) / (ahead * half_width)
+    y = _dot(offset, up) / (ahead * half_height)
     return (x + 1) / 2, (1 - y) / 2
+
+
+def depth(view: View, point: Vector) -> float:
+    """How far `point` is in front of the camera, along its line of sight."""
+    forward, _, _ = _camera_axes(view)
+    return _dot(_minus(point, view.position), forward)
+
+
+def _half_extents(view: View) -> tuple[float, float]:
+    """Half the view's width and height, one metre in front of the camera."""
+    half_height = math.tan(math.radians(view.fov_degrees) / 2)
+    return half_height * view.width / view.height, half_height
 
 
 def _minus(a: Vector, b: Vector) -> Vector:
@@ -134,7 +145,7 @@ def standing(spot: tuple[float, float], look_at: Vector, eye_height: float = EYE
     return View(position=(spot[0], eye_height, spot[1]), look_at=look_at)
 
 
-def placed(placement: SplatPlacement, point: Sequence[float]) -> Vector:
+def in_room(placement: SplatPlacement, point: Sequence[float]) -> Vector:
     """A point in the splat's own frame, moved as the splat is: scaled, rotated, then moved."""
     turn, lift, scale = placement.rotation, placement.position, placement.scale
     x, y, z = rotate(
@@ -143,14 +154,13 @@ def placed(placement: SplatPlacement, point: Sequence[float]) -> Vector:
     return x + lift.x, y + lift.y, z + lift.z
 
 
-def point_at(view: View, x: float, y: float, depth: float) -> Vector:
-    """The point seen at fractions (x, y) of the view, `depth` metres in front of the camera."""
+def point_at(view: View, x: float, y: float, ahead: float) -> Vector:
+    """The point seen at fractions (x, y) of the view, `ahead` metres in front of the camera."""
     forward, right, up = _camera_axes(view)
-    half_height = math.tan(math.radians(view.fov_degrees) / 2)
-    half_width = half_height * view.width / view.height
-    across, rise = (2 * x - 1) * half_width * depth, (1 - 2 * y) * half_height * depth
+    half_width, half_height = _half_extents(view)
+    across, rise = (2 * x - 1) * half_width * ahead, (1 - 2 * y) * half_height * ahead
     px, py, pz = (
-        view.position[i] + depth * forward[i] + across * right[i] + rise * up[i] for i in range(3)
+        view.position[i] + ahead * forward[i] + across * right[i] + rise * up[i] for i in range(3)
     )
     return px, py, pz
 
@@ -171,7 +181,7 @@ def filmed(room_dir: Path) -> list[View]:
     q = (turn.x, turn.y, turn.z, turn.w)
     views: list[View] = []
     for camera in json.loads(report.read_text(encoding="utf-8")).get("cameras", []):
-        position = placed(placement, tuple(camera["position"]))
+        position = in_room(placement, tuple(camera["position"]))
         forward = rotate(q, tuple(camera["forward"]))
         look_at = (position[0] + forward[0], position[1] + forward[1], position[2] + forward[2])
         views.append(View(position=position, look_at=look_at))

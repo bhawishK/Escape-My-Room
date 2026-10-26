@@ -281,15 +281,37 @@ def write_floor(out: Path, width: float, depth: float) -> None:
     )
 
 
+MIN_FACTOR, MAX_FACTOR = 0.2, 5.0
+KEPT = "; kept by the master"
+
+
+def keep_scale(room: Path) -> None:
+    """Note that the master kept the room's scale as it is. Devices never see the note, so the
+    room is not changed otherwise."""
+    path = room / "manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    source = manifest["splat"].get("scale_source") or "not recorded"
+    if not source.endswith(KEPT):
+        manifest["splat"]["scale_source"] = source + KEPT
+        path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+
 def rescale(room: Path, factor: float, source: str) -> None:
     """Make a built room `factor` times larger about its origin, and record where that came from.
 
     The splat and the floor grow; the floor stays at y = 0 and the box, a real-sized prop, keeps
     its size and moves out with the floor. The room version counts up so devices reload it.
+    A factor outside MIN_FACTOR to MAX_FACTOR is refused: no correction we have seen comes close.
     """
+    if not MIN_FACTOR <= factor <= MAX_FACTOR:
+        raise ValueError(
+            f"A scale factor of {factor} is not between {MIN_FACTOR} and {MAX_FACTOR}."
+        )
     path = room / "manifest.json"
     manifest = json.loads(path.read_text(encoding="utf-8"))
     splat = manifest["splat"]
+    if factor * splat.get("scale", 1.0) > 100:
+        raise ValueError(f"A scale factor of {factor} would make the splat over 100 times larger.")
     position = splat.get("position", {"x": 0.0, "y": 0.0, "z": 0.0})
     splat["position"] = {axis: factor * value for axis, value in position.items()}
     splat.setdefault("rotation", dict(zip("xyzw", IDENTITY, strict=True)))

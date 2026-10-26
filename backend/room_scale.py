@@ -16,27 +16,44 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from backend.grab import Vector
 from backend.openrouter import AnswerFormat, OpenRouterClient, Reply, Unreadable, without_thinking
 from backend.prepared_room import load_prepared_room
 from backend.room_views import (
     View,
     ask_about_views,
+    depth,
     filmed,
-    placed,
+    in_room,
     point_at,
     project,
     render_views,
 )
-from backend.splat_file import Vector, visible_splats
+from backend.splat_file import visible_splats
 
 # Fractions of a view: left, top, right, bottom.
 type Box = tuple[float, float, float, float]
+
+# A typical interior door: 2.03 m (6 ft 8 in) in the US, 1.98-2.04 m in Europe.
+DOOR_HEIGHT = 2.03
+
+FIND_DOORS = (
+    "Find every door a person walks through in this image, open or closed: room, hall and "
+    "entrance doors, not cupboard, wardrobe or cabinet doors. "
+    'Output ONLY a JSON list like [{"label": "door", "bbox_2d": [x1, y1, x2, y2]}], with '
+    "coordinates from 0 to 1000 relative to the image width and height. "
+    "Output [] if there is no door."
+)
 
 # A box's sides often take in the door frame and the wall; its middle is the door itself.
 SIDE_MARGIN = 0.2
 MIN_SPLATS = 20
 # The nearest quarter of what a box shows is the object; further splats show through or past it.
 NEAR_SHARE = 0.25
+# A box this close to the top of the view may have lost the door's top edge.
+CUT_OFF = 0.01
+# Eye height of the scan views: a whole door fits in their 80 degrees from a step or two away.
+SCAN_EYE = 1.1
 
 
 def room_splats(room_dir: Path) -> list[Vector]:
@@ -46,7 +63,7 @@ def room_splats(room_dir: Path) -> list[Vector]:
         raise ValueError("The prepared room has no splat.")
     placement = room.splat_placement
     path = room_dir / room.splat_url.rsplit("/", 1)[-1]
-    return [placed(placement, point) for point in visible_splats(path)]
+    return [in_room(placement, point) for point in visible_splats(path)]
 
 
 @dataclass(frozen=True)
@@ -68,32 +85,13 @@ def measure_height(splats: list[Vector], view: View, box: Box) -> Measurement | 
     for point in splats:
         seen = project(view, point)
         if seen and left + inset <= seen[0] <= right - inset and top <= seen[1] <= bottom:
-            depths.append(_depth(view, point))
+            depths.append(depth(view, point))
     if len(depths) < MIN_SPLATS:
         return None
     depths.sort()
-    depth = statistics.median(depths[: max(1, int(len(depths) * NEAR_SHARE))])
-    top_point = point_at(view, (left + right) / 2, top, depth)
-    return Measurement(height=top_point[1], depth=depth, splats=len(depths))
-
-
-def _depth(view: View, point: Vector) -> float:
-    """How far `point` is in front of the camera, along its line of sight."""
-    look = [view.look_at[i] - view.position[i] for i in range(3)]
-    length = sum(c * c for c in look) ** 0.5
-    return sum((point[i] - view.position[i]) * look[i] for i in range(3)) / length
-
-
-# A typical interior door: 2.03 m (6 ft 8 in) in the US, 1.98-2.04 m in Europe.
-DOOR_HEIGHT = 2.03
-
-FIND_DOORS = (
-    "Find every door a person walks through in this image, open or closed: room, hall and "
-    "entrance doors, not cupboard, wardrobe or cabinet doors. "
-    'Output ONLY a JSON list like [{"label": "door", "bbox_2d": [x1, y1, x2, y2]}], with '
-    "coordinates from 0 to 1000 relative to the image width and height. "
-    "Output [] if there is no door."
-)
+    ahead = statistics.median(depths[: max(1, int(len(depths) * NEAR_SHARE))])
+    top_point = point_at(view, (left + right) / 2, top, ahead)
+    return Measurement(height=top_point[1], depth=ahead, splats=len(depths))
 
 
 def read_door_boxes(text: str) -> list[Box]:
@@ -135,17 +133,16 @@ DOOR_BOXES = AnswerFormat(
     "or [] if there is no door.",
 )
 
-# A box this close to the top of the view may have lost the door's top edge.
-CUT_OFF = 0.01
-
 
 @dataclass(frozen=True)
-class Evidence:
-    view: View
+class Door:
+    """A door Qwen found: measured, or with the reason it was not."""
+
     # Which of the views it was seen in, counted from 1.
     view_number: int
     box: Box
-    measured: Measurement
+    measured: Measurement | None
+    skipped: str | None = None
 
 
 @dataclass(frozen=True)
@@ -153,16 +150,18 @@ class Suggestion:
     # Multiply the room's scale by this; None when no door could be measured.
     factor: float | None
     typical_height: float
-    evidence: list[Evidence]
-    # Doors Qwen found that were not measured, and why.
-    skipped: list[str]
+    doors: list[Door]
+    views: list[View]
     # Every view looked at, as PNGs, for the master to check.
     pngs: list[bytes]
 
+    @property
+    def measured(self) -> list[Door]:
+        return [door for door in self.doors if door.skipped is None]
+
 
 def scan_views(room_dir: Path) -> list[View]:
-    """Eight level views round each place the room was filmed from, wide enough to see a whole
-    door from a step or two away.
+    """Eight level views round each place the room was filmed from.
 
     The places are the first, middle and last filmed cameras, or the origin when the room keeps no
     record of its filming: the walk is centred there. Away from the filming the splat has gaps,
@@ -171,11 +170,10 @@ def scan_views(room_dir: Path) -> list[View]:
     cameras = filmed(room_dir)
     picks = sorted({0, len(cameras) // 2, len(cameras) - 1}) if cameras else []
     spots = [(cameras[i].position[0], cameras[i].position[2]) for i in picks] or [(0.0, 0.0)]
-    eye = 1.1
     return [
         View(
-            position=(x, eye, z),
-            look_at=(x + math.sin(turn), eye, z - math.cos(turn)),
+            position=(x, SCAN_EYE, z),
+            look_at=(x + math.sin(turn), SCAN_EYE, z - math.cos(turn)),
             fov_degrees=80.0,
         )
         for x, z in spots
@@ -195,23 +193,23 @@ def suggest_scale(
     views = views or scan_views(room_dir)
     rendered = render_views(room_dir, views)
     splats = room_splats(room_dir)
-    evidence: list[Evidence] = []
-    skipped: list[str] = []
+    doors: list[Door] = []
     for number, shot in enumerate(rendered, start=1):
         for box in ask_about_views(client, [shot], FIND_DOORS, DOOR_BOXES, on_reply):
-            if box[1] < CUT_OFF:
-                skipped.append(f"View {number}: the door's top is cut off by the edge of the view")
-                continue
-            measured = measure_height(splats, shot.view, box)
-            if measured is None:
-                skipped.append(f"View {number}: too little of the splat inside the door's box")
-            elif not typical_height / 2 < measured.height < typical_height * 2:
-                skipped.append(
-                    f"View {number}: measured {measured.height:.2f} m, too far from a door's height"
-                )
-            else:
-                evidence.append(Evidence(shot.view, number, box, measured))
-    factor = None
-    if evidence:
-        factor = typical_height / statistics.median(item.measured.height for item in evidence)
-    return Suggestion(factor, typical_height, evidence, skipped, [shot.png for shot in rendered])
+            doors.append(_measured_door(splats, shot.view, number, box, typical_height))
+    heights = [door.measured.height for door in doors if door.measured and not door.skipped]
+    factor = typical_height / statistics.median(heights) if heights else None
+    return Suggestion(factor, typical_height, doors, views, [shot.png for shot in rendered])
+
+
+def _measured_door(
+    splats: list[Vector], view: View, number: int, box: Box, typical_height: float
+) -> Door:
+    if box[1] < CUT_OFF:
+        return Door(number, box, None, "its top is cut off by the edge of the view")
+    measured = measure_height(splats, view, box)
+    if measured is None:
+        return Door(number, box, None, "too little of the splat inside its box")
+    if not typical_height / 2 < measured.height < typical_height * 2:
+        return Door(number, box, measured, "too far from a door's height")
+    return Door(number, box, measured)

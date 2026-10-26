@@ -8,10 +8,14 @@ floor at z = -1, its splats' centres run from x = -0.5 to 0.38 and up to y = 0.7
 import importlib.util
 import io
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 from PIL import Image
+from test_prepared_room import edit_manifest
 
 from backend.openrouter import OpenRouterClient, OpenRouterConfig, Reply, Unreadable
 from backend.prepared_room import load_prepared_room
@@ -140,11 +144,14 @@ def test_the_doors_qwen_finds_are_measured_into_a_suggested_scale(monkeypatch):
             typical_height=0.8,
         )
 
-    [evidence] = suggestion.evidence
-    assert evidence.view == front
-    assert BLOCK_TOP < evidence.measured.height < BLOCK_TOP + 0.13
-    assert suggestion.factor == pytest.approx(0.8 / evidence.measured.height)
-    assert suggestion.skipped == ["View 2: the door's top is cut off by the edge of the view"]
+    measured, cut_off = suggestion.doors
+    assert suggestion.measured == [measured]
+    assert measured.view_number == 1 and suggestion.views[0] == front
+    assert measured.measured is not None
+    assert BLOCK_TOP < measured.measured.height < BLOCK_TOP + 0.13
+    assert suggestion.factor == pytest.approx(0.8 / measured.measured.height)
+    assert (cut_off.view_number, cut_off.box) == (2, (0.3, 0.0, 0.7, 0.6))
+    assert cut_off.skipped == "its top is cut off by the edge of the view"
     assert len(replies) == 3 and all(problem is None for _, problem in replies)
     assert [len(r.body["messages"][0]["content"]) for r in fake.received] == [3, 3, 3]
 
@@ -160,7 +167,7 @@ def test_no_doors_found_means_no_suggestion(monkeypatch):
         )
 
     assert suggestion.factor is None
-    assert suggestion.evidence == []
+    assert suggestion.doors == []
 
 
 def load_build_room():
@@ -240,3 +247,117 @@ def test_the_room_is_scanned_from_where_it_was_filmed(tmp_path):
 
 def test_a_room_without_its_filming_is_scanned_from_the_origin():
     assert {view.position for view in scan_views(TEST_ROOM)} == {(0.0, 1.1, 0.0)}
+
+
+@pytest.mark.parametrize("factor", [float("nan"), float("inf"), 0.0, -1.5, 0.1, 10.0])
+def test_a_factor_that_cannot_be_right_leaves_the_room_alone(tmp_path, factor):
+    room = built_room(tmp_path)
+    before = (room / "manifest.json").read_bytes(), (room / "floor.glb").read_bytes()
+
+    with pytest.raises(ValueError, match="factor"):
+        load_build_room().rescale(room, factor, "a mistake")
+
+    assert ((room / "manifest.json").read_bytes(), (room / "floor.glb").read_bytes()) == before
+
+
+def test_keeping_the_assumed_scale_notes_it_once_and_changes_nothing_else(tmp_path):
+    room = built_room(tmp_path)
+    before = manifest(room)
+    builder = load_build_room()
+
+    builder.keep_scale(room)
+    builder.keep_scale(room)
+
+    after = manifest(room)
+    assert after["splat"]["scale_source"] == (
+        "assumed: the phone was held 1.4 m up; kept by the master"
+    )
+    after["splat"]["scale_source"] = before["splat"]["scale_source"]
+    assert after == before
+
+
+def test_keeping_a_scale_with_no_recorded_source_does_not_invent_one(tmp_path):
+    room = built_room(tmp_path)
+    edit_manifest(room, lambda manifest: manifest["splat"].pop("scale_source"))
+
+    load_build_room().keep_scale(room)
+
+    assert manifest(room)["splat"]["scale_source"] == "not recorded; kept by the master"
+
+
+def saved_suggestion(data: Path, room: Path, stamp: str = "20261026T204410Z") -> None:
+    """A suggestion as `room_scale_check suggest` saves it: door 1 measured 1.9 m, door 2 not."""
+    folder = data / "room-scale" / stamp
+    folder.mkdir(parents=True)
+    doors = [
+        {
+            "door": 1,
+            "image": "view-1.png",
+            "box": [0.2, 0.28, 0.27, 0.73],
+            "measured_height": 1.9,
+            "depth": 2.7,
+            "splats": 81,
+            "skipped": None,
+        },
+        {
+            "door": 2,
+            "image": "view-2.png",
+            "box": [0.3, 0.0, 0.7, 0.6],
+            "measured_height": None,
+            "depth": None,
+            "splats": None,
+            "skipped": "its top is cut off by the edge of the view",
+        },
+    ]
+    report = {
+        "room": str(room.resolve()),
+        "typical_door_height": 2.03,
+        "doors": doors,
+        "suggested_factor": 2.03 / 1.9,
+    }
+    (folder / "report.json").write_text(json.dumps(report), encoding="utf-8")
+
+
+def check(data: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "backend.room_scale_check", *arguments],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=os.environ | {"ESCAPE_ROOM_DATA_DIR": str(data), "ESCAPE_ROOM_ENV_FILE": ""},
+    )
+
+
+def test_the_master_accepts_the_saved_suggestion_without_asking_qwen_again(tmp_path):
+    room = built_room(tmp_path)
+    scale = manifest(room)["splat"]["scale"]
+    saved_suggestion(tmp_path / "data", room)
+
+    result = check(tmp_path / "data", "accept", str(room))
+
+    assert result.returncode == 0, result.stderr
+    splat = manifest(room)["splat"]
+    assert splat["scale"] == pytest.approx(scale * 2.03 / 1.9)
+    assert splat["scale_source"] == (
+        "door height 2.03 m (typical), from 1 doors Qwen found (20261026T204410Z)"
+    )
+
+
+def test_the_master_gives_the_real_height_of_one_measured_door(tmp_path):
+    room = built_room(tmp_path)
+    scale = manifest(room)["splat"]["scale"]
+    saved_suggestion(tmp_path / "data", room)
+
+    refused = check(tmp_path / "data", "measured", str(room), "2.1", "--door", "2")
+    assert refused.returncode != 0
+    assert "Door #2 was not measured" in refused.stderr
+    assert manifest(room)["splat"]["scale"] == scale
+
+    result = check(tmp_path / "data", "measured", str(room), "2.1", "--door", "1")
+    assert result.returncode == 0, result.stderr
+    splat = manifest(room)["splat"]
+    assert splat["scale"] == pytest.approx(scale * 2.1 / 1.9)
+    assert splat["scale_source"] == (
+        "door height 2.1 m, measured by the master (door #1 in 20261026T204410Z)"
+    )

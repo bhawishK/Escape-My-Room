@@ -3,7 +3,7 @@
 from array import array
 from pathlib import Path
 
-type Vector = tuple[float, float, float]
+from backend.grab import Vector
 
 
 class SplatFileError(Exception):

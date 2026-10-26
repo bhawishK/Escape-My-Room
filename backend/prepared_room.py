@@ -277,7 +277,7 @@ def _load_scene(directory: Path, scene: PreparedScene) -> LoadedRoom:
         splat_placement=None
         if scene.splat is None
         else SplatPlacement.model_validate(
-            scene.splat.model_dump(exclude={"asset", "scale_source"})
+            scene.splat.model_dump(include=set(SplatPlacement.model_fields))
         ),
         entities=[
             SceneEntity(
