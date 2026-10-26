@@ -8,6 +8,12 @@ the floor is at y = 0, and scaled so the phone was held 1.4 m up. The floor enti
 where the splat is, so the phone's walking stays in the room; it is not drawn. The box is placed on
 the floor 1 m in front of the viewpoint nearest the origin, so there is something to pick up.
 OUT is usually `data/splat-room`; set ESCAPE_ROOM_PREPARED_DIR to it before starting Python.
+The manifest's `scale_source` says the scale is assumed from that height.
+
+    python assets/splat-room/build_room.py --rescale ROOM FACTOR SOURCE
+
+makes a built room FACTOR times larger and records SOURCE as where its scale came from (#33);
+`python -m backend.room_scale_check` suggests the factor from the room's doors.
 
 With no arguments, writes the committed test room here: a small synthetic splat of a checkered
 floor and a red block, for the automated tests.
@@ -19,9 +25,10 @@ import math
 import shutil
 import struct
 import sys
-from array import array
 from pathlib import Path
 from typing import Any
+
+from backend.splat_file import visible_splats
 
 ROOT = Path(__file__).resolve().parent
 FLOOR_HEIGHT = 0.02
@@ -35,19 +42,6 @@ _spec = importlib.util.spec_from_file_location(
 assert _spec and _spec.loader
 multi_asset = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(multi_asset)
-
-
-def read_splat(path: Path) -> tuple[list[str], array]:
-    """The property names and float values of a binary little-endian PLY of float properties."""
-    data = path.read_bytes()
-    end = data.index(b"end_header\n") + len(b"end_header\n")
-    header = data[:end].decode("ascii").splitlines()
-    if "format binary_little_endian 1.0" not in header:
-        raise SystemExit(f"{path} is not a binary little-endian PLY.")
-    names = [line.split()[-1] for line in header if line.startswith("property float ")]
-    values = array("f")
-    values.frombytes(data[end:])
-    return names, values
 
 
 Vector = tuple[float, float, float]
@@ -105,18 +99,6 @@ def level_from_walk(positions: list[Vector]) -> tuple[Quaternion, float]:
     return (-nz * half, 0.0, nx * half, math.cos(angle / 2)), math.degrees(angle)
 
 
-def visible_splats(path: Path) -> list[Vector]:
-    """Centres of the splats more than half opaque."""
-    names, values = read_splat(path)
-    stride = len(names)
-    x, y, z, opacity = (names.index(name) for name in ("x", "y", "z", "opacity"))
-    return [
-        (values[i + x], values[i + y], values[i + z])
-        for i in range(0, len(values), stride)
-        if values[i + opacity] > 0
-    ]
-
-
 def floor_height(heights: list[float], camera: float) -> float:
     """The most crowded level at least 0.6 below the camera: the largest flat surface, the floor."""
     low = sorted(heights)[len(heights) // 200]
@@ -137,12 +119,21 @@ def floor_height(heights: list[float], camera: float) -> float:
 def placement(splat: Path, cameras: list[dict]) -> dict[str, Any]:
     """Level by the walk, put the floor at y = 0, and scale so the phone was held 1.4 m up."""
     if not cameras:
-        return {"rotation": IDENTITY, "scale": 1.0, "lift": 0.0, "tilt": 0.0}
+        return {"rotation": IDENTITY, "scale": 1.0, "lift": 0.0, "tilt": 0.0, "source": None}
     turn, tilt = level_from_walk([tuple(c["position"]) for c in cameras])
     camera = sum(rotate(turn, tuple(c["position"]))[1] for c in cameras) / len(cameras)
     floor = floor_height([rotate(turn, p)[1] for p in visible_splats(splat)], camera)
-    scale = CAMERA_HEIGHT / (camera - floor) if camera - floor > 0.2 else 1.0
-    return {"rotation": turn, "scale": scale, "lift": -scale * floor, "tilt": tilt}
+    if camera - floor <= 0.2:
+        return {"rotation": turn, "scale": 1.0, "lift": 0.0, "tilt": tilt, "source": None}
+    scale = CAMERA_HEIGHT / (camera - floor)
+    source = f"assumed: the phone was held {CAMERA_HEIGHT} m up"
+    return {
+        "rotation": turn,
+        "scale": scale,
+        "lift": -scale * floor,
+        "tilt": tilt,
+        "source": source,
+    }
 
 
 def placed(place: dict[str, Any], point: Vector) -> Vector:
@@ -199,11 +190,7 @@ def write_room(out: Path, splat: Path, report: Path, room_version: int) -> None:
     min_x, max_x, min_z, max_z = extent
     width, depth = max_x - min_x, max_z - min_z
     box_x, box_z = box_place(cameras, place, extent)
-    multi_asset.write_glb(
-        out / "floor.glb",
-        "floor",
-        [multi_asset.part("floor_slab", (width, FLOOR_HEIGHT, depth), "#8d9399")],
-    )
+    write_floor(out, width, depth)
     multi_asset.write_glb(
         out / "box.glb", "box", [multi_asset.part("box_body", (BOX_SIZE,) * 3, "#ff9500")]
     )
@@ -229,6 +216,7 @@ def write_room(out: Path, splat: Path, report: Path, room_version: int) -> None:
             "position": {"x": 0.0, "y": place["lift"], "z": 0.0},
             "rotation": dict(zip("xyzw", place["rotation"], strict=True)),
             "scale": place["scale"],
+            "scale_source": place["source"],
         }
     manifest = {
         "schema_version": 2,
@@ -285,10 +273,69 @@ def write_test_splat(path: Path) -> None:
     path.write_bytes("\n".join(header).encode() + data)
 
 
+def write_floor(out: Path, width: float, depth: float) -> None:
+    multi_asset.write_glb(
+        out / "floor.glb",
+        "floor",
+        [multi_asset.part("floor_slab", (width, FLOOR_HEIGHT, depth), "#8d9399")],
+    )
+
+
+MIN_FACTOR, MAX_FACTOR = 0.2, 5.0
+KEPT = "; kept by the master"
+
+
+def keep_scale(room: Path) -> None:
+    """Note that the master kept the room's scale as it is. Devices never see the note, so the
+    room is not changed otherwise."""
+    path = room / "manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    source = manifest["splat"].get("scale_source") or "not recorded"
+    if not source.endswith(KEPT):
+        manifest["splat"]["scale_source"] = source + KEPT
+        path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+
+def rescale(room: Path, factor: float, source: str) -> None:
+    """Make a built room `factor` times larger about its origin, and record where that came from.
+
+    The splat and the floor grow; the floor stays at y = 0 and the box, a real-sized prop, keeps
+    its size and moves out with the floor. The room version counts up so devices reload it.
+    A factor outside MIN_FACTOR to MAX_FACTOR is refused: no correction we have seen comes close.
+    """
+    if not MIN_FACTOR <= factor <= MAX_FACTOR:
+        raise ValueError(
+            f"A scale factor of {factor} is not between {MIN_FACTOR} and {MAX_FACTOR}."
+        )
+    path = room / "manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    splat = manifest["splat"]
+    if factor * splat.get("scale", 1.0) > 100:
+        raise ValueError(f"A scale factor of {factor} would make the splat over 100 times larger.")
+    position = splat.get("position", {"x": 0.0, "y": 0.0, "z": 0.0})
+    splat["position"] = {axis: factor * value for axis, value in position.items()}
+    splat.setdefault("rotation", dict(zip("xyzw", IDENTITY, strict=True)))
+    splat["scale"] = factor * splat.get("scale", 1.0)
+    splat["scale_source"] = source
+    for entity in manifest["entities"]:
+        at = entity["position"]
+        entity["position"] = {"x": factor * at["x"], "y": at["y"], "z": factor * at["z"]}
+        if entity["id"] == "floor":
+            size = entity["size"]
+            size["width"], size["depth"] = factor * size["width"], factor * size["depth"]
+            write_floor(room, size["width"], size["depth"])
+    manifest["room_version"] += 1
+    path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    print(f"rescaled {room} by x{factor:.3f}: {source}")
+
+
 def main() -> None:
     if len(sys.argv) == 1:
         write_test_splat(ROOT / "room.ply")
         write_room(ROOT, ROOT / "room.ply", ROOT / "report.json", room_version=1)
+        return
+    if len(sys.argv) == 5 and sys.argv[1] == "--rescale":
+        rescale(Path(sys.argv[2]), float(sys.argv[3]), sys.argv[4])
         return
     if len(sys.argv) != 3:
         raise SystemExit(__doc__)
