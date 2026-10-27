@@ -351,13 +351,13 @@ def write_phone_splat(source: Path, out: Path, count: int) -> int:
     opacity = names.index("opacity")
     scales = [names.index(f"scale_{axis}") for axis in range(3)]
 
-    def shows(start: int) -> float:
+    def visibility(start: int) -> float:
         opaque = 1 / (1 + math.exp(-values[start + opacity]))
-        smaller, *largest = sorted(values[start + s] for s in scales)
+        _, *largest = sorted(values[start + s] for s in scales)
         return opaque * math.exp(min(sum(largest), 50.0))
 
     starts = range(0, len(values), stride)
-    kept = sorted(sorted(starts, key=shows, reverse=True)[:count])
+    kept = sorted(sorted(starts, key=visibility, reverse=True)[:count])
     header = ["ply", "format binary_little_endian 1.0", f"element vertex {len(kept)}"]
     header += [f"property float {name}" for name in PHONE_PROPERTIES] + ["end_header", ""]
     row = struct.Struct(f"<{len(columns)}f")

@@ -158,12 +158,16 @@ class AssetEntity(WireModel):
     rotation: Rotation
 
 
+# A splat file in the room's folder.
+SPLAT_FILE = r"^[A-Za-z0-9_-]{1,64}\.(ply|spz)$"
+
+
 class SplatAsset(SplatPlacement):
     """The splat file, and its placement when it was trained tilted or at another scale."""
 
-    asset: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}\.(ply|spz)$")
+    asset: str = Field(pattern=SPLAT_FILE)
     # A lighter copy for phones, so 8th Wall keeps its pace beside it (#109).
-    phone_asset: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}\.(ply|spz)$")
+    phone_asset: str | None = Field(default=None, pattern=SPLAT_FILE)
     # Where the scale came from, for people: assumed, suggested from objects, or measured (#33).
     scale_source: str | None = Field(default=None, max_length=200)
 

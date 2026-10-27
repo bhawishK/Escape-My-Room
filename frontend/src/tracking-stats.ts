@@ -12,6 +12,12 @@ const RATE_WINDOW_MS = 5000;
 /** Status and mode changes kept; a run with more is losing tracking far too often anyway. */
 const KEPT_CHANGES = 200;
 
+/** The splat a room view draws: its file and how many splats it holds. */
+export interface SplatDrawn {
+  file: string;
+  splats: number;
+}
+
 export interface StatusChange {
   at_ms: number;
   mode: TrackingMode;
@@ -116,7 +122,7 @@ export class TrackingStats {
   }
 
   /** `splat` is the file the room view draws and how many splats it holds. */
-  report(splat: { file: string; splats: number } | null = null, now = performance.now()): Record<string, unknown> {
+  report(splat: SplatDrawn | null = null, now = performance.now()): Record<string, unknown> {
     return {
       mode: this.current?.mode ?? null,
       fallback_reason: this.current?.fallback_reason ?? null,

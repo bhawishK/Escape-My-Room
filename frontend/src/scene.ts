@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { STANDING_EYE_HEIGHT } from './alignment';
 import type { RoomPose } from './phone-view';
+import type { SplatDrawn } from './tracking-stats';
 import type {
   AlignmentState, Position, PresenceState, Role, RoomEntity, SessionState,
 } from './protocol';
@@ -31,7 +32,15 @@ export class DiagnosticScene {
   /** The room's splat, when it has one; Spark is loaded only for such rooms. */
   private splat: SplatMesh | null = null;
   /** The splat file drawn and how many splats it holds, for the diagnostic report. */
-  splatDrawn: { file: string; splats: number } | null = null;
+  splatDrawn: SplatDrawn | null = null;
+  /**
+   * When something drawn last changed other than the camera: state, a glide, a selection, a
+   * loaded room. The phone draws on demand (#109), so it draws fully for a moment after this.
+   */
+  changedAt = -Infinity;
+  /** What `apply` and the room's placements last drew, to tell a change from a repeat. */
+  private drawnState = '';
+  private drawnPlacement = '';
   private resize: () => void = () => undefined;
   private sparkReady: Promise<typeof import('@sparkjsdev/spark')> | null = null;
   private presenting = false;
@@ -139,6 +148,9 @@ export class DiagnosticScene {
 
   /** This page's role, so its own presence marker stays hidden. */
   setLocalRole(role: Role | null): void {
+    // Called with every state: resizing redraws nothing until the next frame, and the
+    // headset may not resize while presenting, so only a new role changes anything.
+    if (role === this.localRole) return;
     this.localRole = role;
     // The phone draws one pixel per screen pixel: up to four times fewer than at two, which
     // leaves 8th Wall the time to track (#109). Its splat is small on a phone's screen anyway.
@@ -147,6 +159,16 @@ export class DiagnosticScene {
   }
 
   apply(state: SessionState): void {
+    // Every state message comes here, the phone's own presence included: only what this view
+    // draws, the marker and the other person, counts as a change.
+    const drawn = JSON.stringify([
+      state.marker.position,
+      (['mobile_master', 'vr_solver'] as const).filter(who => who !== this.localRole).map(who => state.participants?.[who] ?? null),
+    ]);
+    if (drawn !== this.drawnState) {
+      this.drawnState = drawn;
+      this.changedAt = performance.now();
+    }
     const position = state.marker.position;
     const phone = state.participants?.mobile_master;
     const phoneShown = phone?.tracking_status === 'tracked' || phone?.tracking_status === 'stale';
@@ -240,6 +262,7 @@ export class DiagnosticScene {
 
   /** Outlines the entity Python accepted as this phone's selection, or none for null. */
   select(id: string | null): void {
+    if (id !== this.selected) this.changedAt = performance.now();
     this.selected = id;
     this.outlineSelection();
   }
@@ -274,6 +297,7 @@ export class DiagnosticScene {
   tick(ms: number): void {
     const root = this.smoothed ? this.entityRoots.get(this.smoothed.id) : undefined;
     if (!this.smoothed || !root) return;
+    this.changedAt = performance.now();
     const blend = this.smoothingMs <= 0 ? 1 : 1 - Math.exp(-ms / this.smoothingMs);
     root.position.lerp(this.smoothed.target, blend);
     this.outlineSelection();
@@ -332,6 +356,8 @@ export class DiagnosticScene {
 
   /** Outlines the object being held, or none for null. */
   showControl(id: string | null): void {
+    // Called with every state message: only a new hold is a change.
+    if (id !== this.controlled) this.changedAt = performance.now();
     this.controlled = id;
     this.outlineSelection();
   }
@@ -397,12 +423,20 @@ export class DiagnosticScene {
         splat.scale.setScalar(scale);
       }
       this.attach(roots, splat, room.entities);
+      this.splatDrawn = splat && splatUrl ? { file: splatUrl.split('/').pop() ?? splatUrl, splats: splat.packedSplats?.numSplats ?? 0 } : null;
+      this.changedAt = performance.now();
       this.loadedVersion = version;
       this.loadingVersion = null;
       return { version, acknowledge: true };
     }
     const gliding = this.smoothed ? this.entityRoots.get(this.smoothed.id)?.position.clone() : undefined;
     applyPlacement(this.entityRoots, room.entities);
+    // Applied with every state message: only a moved object counts as a change.
+    const placed = JSON.stringify(room.entities.map(entity => [entity.position, entity.rotation]));
+    if (placed !== this.drawnPlacement) {
+      this.drawnPlacement = placed;
+      this.changedAt = performance.now();
+    }
     if (this.smoothed && gliding) {
       // The new placement becomes where the glide heads, from where it is drawn now.
       const root = this.entityRoots.get(this.smoothed.id);
@@ -530,7 +564,6 @@ export class DiagnosticScene {
         raycastable: false,
       });
       await mesh.initialized;
-      this.splatDrawn = { file: url.split('/').pop() ?? url, splats: mesh.packedSplats?.numSplats ?? 0 };
       return mesh;
     } catch {
       throw failed;

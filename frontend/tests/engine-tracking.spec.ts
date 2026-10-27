@@ -26,7 +26,11 @@ test('the phone sends its movement log to Python, which saves it for reading aft
   const log = JSON.parse(readFileSync(join(folder, newest), 'utf-8'));
   expect(log.user_agent).toContain('Mozilla');
   // The diagnostic report's tracking summary comes along, so nothing has to be downloaded on the phone.
-  expect(log.tracking).toMatchObject({ mode: 'measured', fallback_reason: null, pose_rate_hz: expect.any(Number) });
+  expect(log.tracking).toMatchObject({
+    mode: 'measured', fallback_reason: null, pose_rate_hz: expect.any(Number), frame_rate_hz: expect.any(Number),
+    // This room has no splat.
+    splat: null,
+  });
   expect(log.tracking.status_changes.map((change: { status: string }) => change.status)).toEqual(['inactive', 'tracked']);
   expect(log.tracking.first_tracked_pose_ms).toEqual(expect.any(Number));
   const events = log.entries.filter((entry: { kind: string }) => entry.kind === 'event').map((entry: { name: string; detail: string }) => `${entry.name}: ${entry.detail}`);
@@ -280,7 +284,7 @@ test('the diagnostic report records how measured tracking behaved', async ({ pag
   await engineFrame(page, { x: 9, y: 9, z: 9 }, undefined, { trackingStatus: 'LIMITED', trackingReason: 'EXCESSIVE_MOTION' });
   for (let step = 0; step < 5; step++) await engineFrame(page, { x: 0, y: 1.6, z: 1.1 - step * 0.1 });
 
-  await expect(page.getByTestId('tracking-stats')).toHaveText('Measured · tracked · 2.0 poses/s');
+  await expect(page.getByTestId('tracking-stats')).toHaveText(/^Measured · tracked · 2\.0 poses\/s · \d+ fps$/);
   const tracking = (await downloadReport(page)).motion.tracking;
   expect(tracking.mode).toBe('measured');
   expect(tracking.fallback_reason).toBeNull();

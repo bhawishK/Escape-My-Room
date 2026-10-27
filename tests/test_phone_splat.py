@@ -19,8 +19,6 @@ TEST_ROOM = ROOT / "assets" / "splat-room"
 FULL = ["x", "y", "z", "nx", "ny", "nz", "f_dc_0", "f_dc_1", "f_dc_2"]
 FULL += [f"f_rest_{i}" for i in range(9)]
 FULL += ["opacity", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"]
-PHONE = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity"]
-PHONE += ["scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"]
 
 
 def build_room():
@@ -66,7 +64,8 @@ def test_the_phone_keeps_the_splats_that_show_most_with_base_colours_only(tmp_pa
     build_room().write_phone_splat(tmp_path / "room.ply", tmp_path / "room-phone.ply", 3)
 
     names, values = read_splat(tmp_path / "room-phone.ply")
-    assert names == PHONE
+    assert names == build_room().PHONE_PROPERTIES
+    assert "f_rest_0" not in names
     rows = [values[i : i + len(names)] for i in range(0, len(values), len(names))]
     assert sorted(row[0] for row in rows) == [1.0, 3.0, 5.0]
     # Each kept splat is copied exactly, colour and all.
@@ -78,7 +77,8 @@ def test_the_phone_keeps_the_splats_that_show_most_with_base_colours_only(tmp_pa
 def test_a_room_given_a_phone_splat_names_it_and_serves_it_to_phones(tmp_path):
     room = copy_room(TEST_ROOM, tmp_path / "room")
     full = json.loads((room / "manifest.json").read_text(encoding="utf-8"))
-    total = len(read_splat(room / "room.ply")[1]) // 17
+    names, values = read_splat(room / "room.ply")
+    total = len(values) // len(names)
 
     build_room().add_phone_splat(room, total // 2)
 

@@ -46,6 +46,12 @@ const motion = new MotionStats();
 const trackingStats = new TrackingStats();
 /** While nothing moves, the phone's room view still redraws this often to show others' changes. */
 const PHONE_REDRAW_MS = 100;
+/** After anything drawn changes, it draws every frame this long, so glides and outlines stay smooth. */
+const PHONE_SETTLE_MS = 300;
+/** A pose as text, to tell whether the phone moved since it last drew. */
+function poseKey({ position: p, orientation: o }: RoomPose): string {
+  return `${p.x} ${p.y} ${p.z} ${o.x} ${o.y} ${o.z} ${o.w}`;
+}
 /** How long a press on the selected object lasts before it is picked up, so a tap is not. */
 const PICK_UP_MS = 300;
 /** While carrying, the phone tells Python where it is and faces this often, so the object follows. */
@@ -635,8 +641,9 @@ try {
     // In the room view the phone draws when it has moved, and otherwise only often enough to
     // show what others change: drawing the same picture sixty times a second takes time from
     // 8th Wall, which then tracks fewer poses (#109).
-    const pose = roomViewOpen && role === 'mobile_master' ? JSON.stringify(tracking.pose()) : '';
-    if (!pose || pose !== drawnPose || time - lastDrawn >= PHONE_REDRAW_MS) {
+    const pose = roomViewOpen && role === 'mobile_master' ? poseKey(tracking.pose()) : '';
+    const changed = performance.now() - sceneView.changedAt < PHONE_SETTLE_MS;
+    if (!pose || pose !== drawnPose || changed || time - lastDrawn >= PHONE_REDRAW_MS) {
       drawnPose = pose;
       lastDrawn = time;
       sceneView.renderer.render(sceneView.scene, sceneView.camera);
