@@ -342,6 +342,7 @@ test('each opening of the room view is timed to its own first pose, and every mo
     'measured inactive: starting',
     'measured tracked: NORMAL UNSPECIFIED',
     'measured inactive: room view closed',
+    'measured inactive: starting',
     'measured tracked: NORMAL UNSPECIFIED',
   ]);
   expect((tracking.mode_changes as { mode: string }[]).map(change => change.mode)).toEqual(['measured']);
@@ -372,7 +373,7 @@ test('the gaze cursor pauses measured tracking, which the headset sees as lost, 
   // Stopping the gaze cursor releases the front camera and starts the engine again, from the start.
   await phone.getByRole('button', { name: 'Stop gaze cursor', exact: true }).click();
   await expect.poll(async () => (await engineCalls(phone)).runs).toBe(2);
-  expect((await engineCalls(phone)).origins.at(-1)).toEqual({ origin: { x: 0, y: 1.5, z: 1.6 }, facing: { w: 1, x: 0, y: 0, z: 0 } });
+  expect((await engineCalls(phone)).origins.at(-1)).toEqual(START);
   expect(await liveCameras(phone)).toEqual([]);
   await expect(phone.getByTestId('tracking-mode')).toHaveText('Tracking · 8th Wall, measured');
   await engineFrame(phone, { x: 0.2, y: 1.5, z: 1.4 });
@@ -419,9 +420,73 @@ test('closing the room view stops the engine, and reopening starts it again from
 
   await phone.getByRole('button', { name: 'Open room view', exact: true }).click();
   await expect.poll(async () => (await engineCalls(phone)).runs).toBe(2);
-  expect((await engineCalls(phone)).origins.at(-1)).toEqual({ origin: { x: 0, y: 1.5, z: 1.6 }, facing: { w: 1, x: 0, y: 0, z: 0 } });
+  expect((await engineCalls(phone)).origins.at(-1)).toEqual(START);
   await engineFrame(phone, { x: 0, y: 1.5, z: 1.5 });
   await expect(vr.getByTestId('marker-position')).toHaveText('0.00, 1.50, 1.50 m');
   await phone.close();
   await vr.close();
+});
+
+/** The starting viewpoint the engine is told to start from, facing the desk. */
+const START = { origin: { x: 0, y: 1.5, z: 1.6 }, facing: { w: 1, x: 0, y: 0, z: 0 } };
+
+/** A phone tracking with the fake engine, with fake cameras and a face model that never loads. */
+async function trackingPhone(page: Page): Promise<void> {
+  await useFakeEngine(page);
+  await page.addInitScript(fakeCameras);
+  await page.context().route('**/face_landmarker.task', () => undefined);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await engineFrame(page, { x: 0.5, y: 1.5, z: 1 });
+}
+
+test('closing the room view while the gaze cursor has the camera does not start the engine, reopening does', async ({ page }) => {
+  await trackingPhone(page);
+  await page.getByRole('button', { name: 'Gaze cursor', exact: true }).click();
+  await expect(page.getByTestId('tracking-mode')).toHaveText('Tracking · 8th Wall, paused for the gaze cursor');
+
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
+  expect(await liveCameras(page)).toEqual([]);
+  expect(await engineCalls(page)).toMatchObject({ runs: 1, stops: 1 });
+
+  await page.getByRole('button', { name: 'Open room view', exact: true }).click();
+  await expect.poll(async () => (await engineCalls(page)).runs).toBe(2);
+  expect((await engineCalls(page)).origins.at(-1)).toEqual(START);
+  await engineFrame(page, { x: 0, y: 1.5, z: 1.5 });
+  const changes = (await downloadReport(page)).motion.tracking.status_changes as { status: string; reason: string }[];
+  expect(changes.map(({ status, reason }) => `${status}: ${reason}`)).toEqual([
+    'inactive: starting',
+    'tracked: NORMAL UNSPECIFIED',
+    'lost: paused for the gaze cursor',
+    'inactive: room view closed',
+    'inactive: starting',
+    'tracked: NORMAL UNSPECIFIED',
+  ]);
+});
+
+test('hiding the page stops the gaze cursor but starts the engine only once the page is back', async ({ page }) => {
+  await trackingPhone(page);
+  await page.getByRole('button', { name: 'Gaze cursor', exact: true }).click();
+  await expect(page.getByLabel('Front camera')).toBeVisible();
+
+  const visibility = (state: 'hidden' | 'visible') => page.evaluate(value => {
+    Object.defineProperty(document, 'visibilityState', { value, configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, state);
+  await visibility('hidden');
+  await expect(page.getByLabel('Front camera')).toBeHidden();
+  await page.waitForTimeout(300);
+  expect((await engineCalls(page)).runs).toBe(1);
+  await expect(page.getByTestId('tracking-mode')).toHaveText('Tracking · 8th Wall, paused for the gaze cursor');
+
+  await visibility('visible');
+  await expect.poll(async () => (await engineCalls(page)).runs).toBe(2);
+  expect((await engineCalls(page)).origins.at(-1)).toEqual(START);
+  await expect(page.getByTestId('tracking-mode')).toHaveText('Tracking · 8th Wall, measured');
+  // The restarted engine has no reason of its own yet: the old engine's is not carried over.
+  const changes = (await downloadReport(page)).motion.tracking.status_changes as { status: string; reason: string }[];
+  expect(changes.slice(-2).map(({ status, reason }) => `${status}: ${reason}`)).toEqual([
+    'lost: paused for the gaze cursor',
+    'inactive: starting',
+  ]);
 });
