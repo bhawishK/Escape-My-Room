@@ -15,7 +15,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from backend.boxes import Box, box_format, find_objects
+from backend.boxes import Box, box_format, centre, find_objects
 from backend.grab import Vector
 from backend.openrouter import OpenRouterClient, Reply
 from backend.room_scale import box_depth, room_splats, scan_views
@@ -39,12 +39,13 @@ def place_box(splats: list[Vector], view: View, box: Box) -> Vector | None:
     found = box_depth(splats, view, box, NEAR_HALF)
     if found is None:
         return None
-    left, top, right, bottom = box
-    return point_at(view, (left + right) / 2, (top + bottom) / 2, found[0])
+    return point_at(view, *centre(box), found[0])
 
 
 @dataclass(frozen=True)
 class Landmark:
+    """A recognisable object with a known place in the room, to locate a camera from."""
+
     id: str
     label: str
     # Its middle, in room metres.
@@ -53,6 +54,8 @@ class Landmark:
     seen: int = 1
     # Other names Qwen gave it, any of which finds it.
     aliases: tuple[str, ...] = ()
+    # The map's views it was sighted in, counted from 1: its evidence.
+    views: tuple[int, ...] = ()
 
     def answers_to(self, label: str) -> bool:
         return label == self.label or label in self.aliases
@@ -86,7 +89,16 @@ MAX_RMS = 0.04
 # How far a fix from two landmarks may be from the rough place given: 8th Wall drifts less than this
 # between fixes.
 NEAR_WITHIN = 1.0
+# The solver starts from this many headings round the landmarks, to find every pose that fits.
 STARTS = 8
+# Sightings of one label placed closer than this are one object (about a door's width: its middle
+# is placed 0.6 m apart from different views); under different labels they must
+# be at the same place (a sink 0.5 m below a mirror is two objects).
+MERGE_DISTANCE = 0.8
+SAME_PLACE = 0.25
+# Boxes overlapping this much are one object named twice.
+SAME_BOX = 0.8
+LANDMARKS_FILE = "landmarks.json"
 
 
 def pose_view(
@@ -175,7 +187,6 @@ def _poses(
     fov_degrees: float,
     width: int,
     height: int,
-    keep: int = STARTS,
 ) -> list[list[float]]:
     """Poses (x, y, z, heading) that fit the boxes to their landmarks, from starts all round
     them, best first: two landmarks fit more than one pose exactly."""
@@ -191,7 +202,7 @@ def _poses(
         if all(math.dist(p[:3], other[:3]) > 0.05 for _, other in fitted):
             fitted.append((cost, p))
     fitted.sort(key=lambda item: item[0])
-    return [p for _, p in fitted[:keep]]
+    return [p for _, p in fitted]
 
 
 def _residuals(
@@ -203,12 +214,13 @@ def _residuals(
     def residuals(p: list[float]) -> list[float]:
         view = pose_view((p[0], p[1], p[2]), p[3], pitch, fov_degrees, width, height)
         out: list[float] = []
-        for (left, top, right, bottom), mark in pairs:
+        for box, mark in pairs:
             seen_at = project(view, mark.centre)
             if seen_at is None:
                 out += [1.0, 1.0]
             else:
-                out += [seen_at[0] - (left + right) / 2, seen_at[1] - (top + bottom) / 2]
+                x, y = centre(box)
+                out += [seen_at[0] - x, seen_at[1] - y]
         return [*out, HEIGHT_WEIGHT * (p[1] - HELD_AT)]
 
     return residuals
@@ -219,7 +231,7 @@ def _miss(view: View, box: Box, mark: Landmark) -> float:
     seen_at = project(view, mark.centre)
     if seen_at is None:
         return math.inf
-    return math.dist(seen_at, ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2))
+    return math.dist(seen_at, centre(box))
 
 
 def _agreeing(view: View, seen: list[tuple[Box, list[Landmark]]]) -> list[tuple[Box, Landmark]]:
@@ -288,16 +300,6 @@ def _solve(matrix: list[list[float]], vector: list[float]) -> list[float] | None
     return [rows[i][n] / rows[i][i] for i in range(n)]
 
 
-# Sightings of one label placed closer than this are one object (about a door's width: its middle
-# is placed 0.6 m apart from different views); under different labels they must
-# be at the same place (a sink 0.5 m below a mirror is two objects).
-MERGE_DISTANCE = 0.8
-SAME_PLACE = 0.25
-# Boxes overlapping this much are one object named twice.
-SAME_BOX = 0.8
-LANDMARKS_FILE = "landmarks.json"
-
-
 @dataclass(frozen=True)
 class PlacedSighting:
     """A box Qwen gave in one of the map's views, and where it placed the object; None when the
@@ -311,6 +313,8 @@ class PlacedSighting:
 
 @dataclass(frozen=True)
 class LandmarkMap:
+    """A room's landmarks, with the sightings and views they were built from."""
+
     landmarks: list[Landmark]
     sightings: list[PlacedSighting]
     views: list[View]
@@ -341,29 +345,34 @@ def build_landmarks(
 def _merged(sightings: list[PlacedSighting]) -> list[Landmark]:
     """Sightings of one label close together are one object. So are sightings under different
     labels at the same place: Qwen named the hallway's cupboard both a door and a cupboard."""
-    groups: list[tuple[list[str], list[Vector]]] = []
+    groups: list[tuple[list[str], list[Vector], list[int]]] = []
     for sighting in sightings:
         if sighting.point is None:
             continue
-        for labels, points in groups:
-            apart = math.dist(_middle(points), sighting.point)
+        for labels, points, views in groups:
+            apart = math.dist(_median(points), sighting.point)
             if apart < (MERGE_DISTANCE if sighting.label in labels else SAME_PLACE):
                 points.append(sighting.point)
+                views.append(sighting.view_number)
                 if sighting.label not in labels:
                     labels.append(sighting.label)
                 break
         else:
-            groups.append(([sighting.label], [sighting.point]))
+            groups.append(([sighting.label], [sighting.point], [sighting.view_number]))
     landmarks: list[Landmark] = []
-    for (label, *aliases), points in groups:
+    for (label, *aliases), points, views in groups:
         slug = re.sub(r"[^a-z0-9]+", "_", label.casefold()).strip("_")
         same = sum(mark.label == label for mark in landmarks)
         name = slug if same == 0 else f"{slug}_{same + 1}"
-        landmarks.append(Landmark(name, label, _middle(points), len(points), tuple(aliases)))
+        evidence = tuple(sorted(set(views)))
+        landmarks.append(
+            Landmark(name, label, _median(points), len(points), tuple(aliases), evidence)
+        )
     return landmarks
 
 
-def _middle(points: list[Vector]) -> Vector:
+def _median(points: list[Vector]) -> Vector:
+    """Each coordinate's median: one wrong placement does not move it."""
     x, y, z = (statistics.median(point[i] for point in points) for i in range(3))
     return x, y, z
 
@@ -377,7 +386,12 @@ def load_landmarks(room_dir: Path) -> list[Landmark]:
     data = json.loads((room_dir / LANDMARKS_FILE).read_text(encoding="utf-8"))
     return [
         Landmark(
-            item["id"], item["label"], tuple(item["centre"]), item["seen"], tuple(item["aliases"])
+            item["id"],
+            item["label"],
+            tuple(item["centre"]),
+            item["seen"],
+            tuple(item["aliases"]),
+            tuple(item["views"]),
         )
         for item in data["landmarks"]
     ]
@@ -385,9 +399,11 @@ def load_landmarks(room_dir: Path) -> list[Landmark]:
 
 @dataclass(frozen=True)
 class Located:
-    # None when too few landmarks were seen, or they did not fit together.
+    """What Qwen saw in a view, and the fix it gave, or why it gave none."""
+
     fix: Fix | None
     sightings: list[Sighting]
+    reason: str | None = None
 
 
 def locate(
@@ -404,7 +420,26 @@ def locate(
     sightings = ask_about_views(client, [shot], find_objects(labels), box_format(labels), on_reply)
     view = shot.view
     fix = solve_pose(sightings, landmarks, pitch, view.fov_degrees, view.width, view.height, near)
-    return Located(fix, sightings)
+    return Located(fix, sightings, None if fix else why_not(sightings, landmarks, near))
+
+
+def usable(sightings: Sequence[Sighting], landmarks: Sequence[Landmark]) -> int:
+    """How many objects in view are on the map: a box named twice counts once."""
+    return sum(
+        any(mark.answers_to(label) for mark in landmarks) for label, _ in _one_per_box(sightings)
+    )
+
+
+def why_not(
+    sightings: Sequence[Sighting], landmarks: Sequence[Landmark], near: Vector | None
+) -> str:
+    """Why `solve_pose` found no fix from these sightings."""
+    seen = usable(sightings, landmarks)
+    if seen < 2:
+        return "fewer than two landmarks in view"
+    if seen == 2 and near is None:
+        return "two landmarks fit more than one pose, and no rough place was given"
+    return "no pose fits enough of the landmarks seen"
 
 
 def _one_per_box(sightings: Sequence[Sighting]) -> list[Sighting]:

@@ -9,7 +9,7 @@ import json
 import math
 
 import pytest
-from test_room_scale import BLOCK, TEST_ROOM, red_box
+from test_room_scale import BLOCK, TEST_ROOM, client_for, red_box
 
 from backend.boxes import read_boxes
 from backend.landmarks import (
@@ -22,10 +22,10 @@ from backend.landmarks import (
     save_landmarks,
     solve_pose,
 )
-from backend.openrouter import OpenRouterClient, OpenRouterConfig, Reply, Unreadable
+from backend.openrouter import Reply, Unreadable
 from backend.room_scale import room_splats
 from backend.room_views import View, project, render_views
-from tests.fake_openrouter import FakeOpenRouter, fake_openrouter
+from tests.fake_openrouter import fake_openrouter
 
 
 def test_labelled_boxes_keep_their_label_as_asked():
@@ -101,11 +101,6 @@ def test_one_landmark_is_not_enough_to_locate_a_camera():
     assert solve_pose([("sofa", (0.4, 0.4, 0.6, 0.6))], LANDMARKS, PITCH) is None
 
 
-def client_for(fake: FakeOpenRouter, monkeypatch: pytest.MonkeyPatch) -> OpenRouterClient:
-    monkeypatch.setenv("ESCAPE_ROOM_OPENROUTER_URL", fake.url)
-    return OpenRouterClient(OpenRouterConfig.from_environment(), "sk-or-test-key-never-shown")
-
-
 def boxes_answer(label: str, png: bytes) -> str:
     return json.dumps([{"label": label, "bbox_2d": [round(1000 * e) for e in red_box(png)]}])
 
@@ -129,7 +124,7 @@ def test_sightings_from_several_views_become_one_landmark_on_the_map(monkeypatch
         )
 
     [landmark] = built.landmarks
-    assert (landmark.id, landmark.label) == ("red_block", "red block")
+    assert (landmark.id, landmark.label, landmark.views) == ("red_block", "red block", (1, 2))
     assert math.dist(landmark.centre, BLOCK) < 0.12
     assert [sighting.view_number for sighting in built.sightings] == [1, 2]
     assert len(replies) == 2
@@ -155,6 +150,7 @@ def test_a_view_with_only_one_landmark_in_it_is_not_located(monkeypatch):
         )
 
     assert located.fix is None
+    assert located.reason == "fewer than two landmarks in view"
     assert [label for label, _ in located.sightings] == ["red block"]
 
 

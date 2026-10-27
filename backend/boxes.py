@@ -12,6 +12,12 @@ from backend.openrouter import AnswerFormat, Unreadable, without_thinking
 type Box = tuple[float, float, float, float]
 
 
+def centre(box: Box) -> tuple[float, float]:
+    """The middle of a box, as fractions of the view."""
+    left, top, right, bottom = box
+    return (left + right) / 2, (top + bottom) / 2
+
+
 def read_boxes(text: str, labels: Sequence[str]) -> list[tuple[str, Box]]:
     """Each box with its label, one of `labels` (as asked, whatever its case), as fractions."""
     answer = re.sub(r"^```(?:json)?\s*|\s*```$", "", without_thinking(text).strip())
@@ -43,23 +49,26 @@ def read_boxes(text: str, labels: Sequence[str]) -> list[tuple[str, Box]]:
     return boxes
 
 
-def find_objects(labels: Sequence[str]) -> str:
-    """The question that asks for the boxes of these objects."""
+def _asked_for(labels: Sequence[str]) -> str:
+    """The answer format, as both the question and the repair spell it out."""
     names = ", ".join(labels)
     return (
-        f"Find every one of these objects in this image: {names}. "
         f'Output ONLY a JSON list like [{{"label": "{labels[0]}", "bbox_2d": [x1, y1, x2, y2]}}], '
         "with coordinates from 0 to 1000 relative to the image width and height, and each label "
         f"exactly one of: {names}. Output [] if none of them is in view."
     )
 
 
-def box_format(labels: Sequence[str]) -> AnswerFormat[list[tuple[str, Box]]]:
+def find_objects(labels: Sequence[str]) -> str:
+    """The question that asks for the boxes of these objects."""
     names = ", ".join(labels)
+    return f"Find every one of these objects in this image: {names}. {_asked_for(labels)}"
+
+
+def box_format(labels: Sequence[str]) -> AnswerFormat[list[tuple[str, Box]]]:
+    """Reads the boxes `find_objects` asks for, and asks again in the same words when unreadable."""
     return AnswerFormat(
         "object boxes",
         lambda text: read_boxes(text, labels),
-        "Your answer did not follow the format. Output ONLY a JSON list like "
-        f'[{{"label": "{labels[0]}", "bbox_2d": [x1, y1, x2, y2]}}] with coordinates from 0 to '
-        f"1000 and each label exactly one of: {names}; or [] if none is in view.",
+        f"Your answer did not follow the format. {_asked_for(labels)}",
     )

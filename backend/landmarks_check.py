@@ -35,6 +35,7 @@ from backend.landmarks import (
     pose_view,
     save_landmarks,
     solve_pose,
+    usable,
 )
 from backend.openrouter import OpenRouterClient, OpenRouterConfig, Reply
 from backend.room_scale import views_round
@@ -122,10 +123,14 @@ def fix_report(fix: Fix | None, position: Vector, heading: float) -> dict[str, o
     }
 
 
-def summary(errors: list[float]) -> dict[str, object]:
+def summary(errors: list[float], views: int) -> dict[str, object]:
+    """How many views were fixed, and how far off the fixes were. The errors are over fixed
+    views only, so the fix rate belongs beside them."""
     errors = sorted(errors)
     return {
         "fixed": len(errors),
+        "of_views": views,
+        "fix_rate": round(len(errors) / views, 3) if views else None,
         "median_m": statistics.median(errors) if errors else None,
         "p90_m": errors[min(len(errors) - 1, int(len(errors) * 0.9))] if errors else None,
         "max_m": errors[-1] if errors else None,
@@ -151,14 +156,14 @@ def evaluate(room: Path, client: OpenRouterClient, folder: Path) -> dict[str, ob
         before_cost, before_seconds = spend.cost, spend.seconds
         located = locate(client, spend.record, shot, landmarks, PHONE_PITCH)
         latencies.append(spend.seconds - before_seconds)
-        two_or_more += len(located.sightings) >= 2
+        two_or_more += usable(located.sightings, landmarks) >= 2
         # 8th Wall's pose stands in for where the phone roughly is: drifted 0.5 m, each view in a
         # different direction.
-        drift = 2 * math.pi * (number - 1) / len(truths)
+        towards = 2 * math.pi * (number - 1) / len(truths)
         rough = (
-            position[0] + DRIFT * math.cos(drift),
+            position[0] + DRIFT * math.cos(towards),
             position[1],
-            position[2] + DRIFT * math.sin(drift),
+            position[2] + DRIFT * math.sin(towards),
         )
         width, height = PHONE_SIZE
         near_fix = solve_pose(
@@ -178,15 +183,17 @@ def evaluate(room: Path, client: OpenRouterClient, folder: Path) -> dict[str, ob
                 "latency_seconds": round(latencies[-1], 2),
                 "cost_usd": round(spend.cost - before_cost, 6),
                 "fix_alone": fix_report(located.fix, position, heading),
+                "no_fix_alone_because": located.reason,
                 "rough_place": [round(c, 3) for c in rough],
                 "fix_near_rough_place": fix_report(near_fix, position, heading),
             }
         )
     return {
         "views": len(results),
-        "with_two_or_more_sighted": two_or_more,
-        "landmarks_alone": summary(alone),
-        f"near_a_rough_place_{DRIFT}_m_off": summary(with_rough),
+        # Views back the way the walk came see empty splat, so they never see two.
+        "with_two_or_more_landmarks_in_view": two_or_more,
+        "landmarks_alone": summary(alone, len(results)),
+        f"near_a_rough_place_{DRIFT}_m_off": summary(with_rough, len(results)),
         "cost_usd": round(spend.cost, 6),
         "latency_seconds_median": round(statistics.median(latencies), 2),
         "results": results,
