@@ -12,6 +12,7 @@ import { MovementLog, type TrackingMode } from './movement-log';
 import { StepTracking, type PhoneTracking } from './phone-tracking';
 import { START_EYE, headingOf, pitchOf, type RoomPose } from './phone-view';
 import { NO_PRESENCE, type Position, type PresenceInput, type Role, type Rotation, type SessionState } from './protocol';
+import { showsRevision } from './revision';
 import { SessionClient } from './session';
 import { DiagnosticScene } from './scene';
 import { STEP_LENGTHS } from './step-walk';
@@ -354,7 +355,7 @@ function ownHold(): SessionState['manipulation'] {
 }
 
 function applyState(next: SessionState): void {
-  if (state && next.revision < state.revision) return;
+  if (!showsRevision(state?.revision ?? null, next.revision)) return;
   const before = ownHold();
   state = next;
   view?.setLocalRole(role);
@@ -496,6 +497,13 @@ const client = new SessionClient({
         gripDown = false;
         view?.predict(null);
       }
+    }
+    // A refused grab must not keep a local carry. An error while this phone already holds
+    // leaves that hold alone, so letting go still ends it.
+    if (role === 'mobile_master' && !ownHold()) {
+      holding = false;
+      carryFloor = null;
+      view?.predict(null);
     }
   },
 });
