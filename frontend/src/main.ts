@@ -223,7 +223,13 @@ const gaze = new GazeCursor({
   dot: element('gaze-dot'), prompt: element('gaze-prompt'),
 }, {
   status: message => { element('view-status').textContent = message; },
-  phase: () => controls(),
+  phase: phase => {
+    // However the gaze cursor stops, its front camera is free again for the engine.
+    if (phase === 'off' && roomViewOpen && measured?.paused) {
+      void measured.resume().catch(error => showRoomViewError(error, 'Tracking could not start again.')).finally(controls);
+    }
+    controls();
+  },
   hover: point => {
     const id = view?.pointAt(point) ?? null;
     return id && entityLabel(id);
@@ -249,13 +255,16 @@ function controls(): void {
   element('vr-controls').hidden = role !== 'vr_solver';
   element('phone-controls').hidden = role !== 'mobile_master';
   for (const id of ['walk-reset', 'walk-length']) element(id).hidden = tracking !== steps || !steps.active;
-  element('recentre').hidden = tracking !== measured || !measured.active;
-  element('tracking-mode').textContent = tracking === measured ? 'Tracking · 8th Wall, measured' : 'Tracking · step counting';
+  element('recentre').hidden = tracking !== measured || !measured.active || measured.paused;
+  element('tracking-mode').textContent = tracking !== measured ? 'Tracking · step counting' :
+    measured.paused ? 'Tracking · 8th Wall, paused for the gaze cursor' : 'Tracking · 8th Wall, measured';
+  // Measured tracking measures the height itself; the depth model is for step counting.
+  depthButton.hidden = tracking === measured;
   element('walk-length').textContent = `Step ${steps.stepLength.toFixed(1)} m`;
   depthButton.textContent = depth.getPhase() !== 'off' ? 'Cancel measuring' :
     measuredHeight === null ? 'Measure height' : 'Measure again';
   depthButton.disabled = !connected;
-  element('depth-default').hidden = measuredHeight === null || depth.getPhase() !== 'off';
+  element('depth-default').hidden = tracking === measured || measuredHeight === null || depth.getPhase() !== 'off';
   gazeButton.textContent = gaze.getPhase() === 'off' ? 'Gaze cursor' : 'Stop gaze cursor';
   gazeButton.disabled = !connected;
   const pointing = gaze.getPhase() === 'tracking';
@@ -662,8 +671,12 @@ gazeButton.addEventListener('click', () => {
     return;
   }
   element('error').hidden = true;
-  // The phone runs one camera at a time.
+  // The phone runs one camera at a time: the engine's back camera too, until the gaze cursor stops.
   if (depth.getPhase() !== 'off') depth.stop('Height measurement stopped for the gaze cursor.');
+  if (tracking === measured && measured.active) {
+    trackingStats.status('lost', 'paused for the gaze cursor');
+    measured.pause('Tracking paused for the gaze cursor · stop it to track again');
+  }
   void gaze.start().catch(error => showRoomViewError(error, 'The gaze cursor could not start.')).finally(controls);
 });
 gazeModeButton.addEventListener('click', () => {

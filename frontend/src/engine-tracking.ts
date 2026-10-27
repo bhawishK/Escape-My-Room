@@ -108,6 +108,8 @@ export class EngineTracking implements PhoneTracking {
   private normal = false;
   private everNormal = false;
   private reported: TrackingStatus = 'inactive';
+  /** Why the engine is paused for another camera, or null while it is not. */
+  private pausedFor: string | null = null;
   /**
    * Turns (about the vertical) and then shifts the engine's poses into the room. After a loss the
    * engine restarts at the starting viewpoint, wherever the phone really is, so this lines it up
@@ -129,13 +131,41 @@ export class EngineTracking implements PhoneTracking {
 
   get active(): boolean { return this.running; }
 
+  /** Stopped for another camera, until `resume`; the phone runs one camera at a time. */
+  get paused(): boolean { return this.pausedFor !== null; }
+
   /**
    * `inactive` until the engine first tracks normally, since its poses mean nothing while it works
-   * out scale; then `tracked`, or `lost` while it is limited, with the view held where it was.
+   * out scale; then `tracked`, or `lost` while it is limited or paused, with the view held.
    */
   get status(): TrackingStatus {
+    if (this.pausedFor !== null) return 'lost';
     if (!this.running || !this.everNormal) return 'inactive';
     return this.normal ? 'tracked' : 'lost';
+  }
+
+  /**
+   * Stops the engine so another feature can use a camera. The phone counts as lost, holding the
+   * view where it was, until `resume`; `hint` says why.
+   */
+  pause(hint: string): void {
+    if (!this.running || this.pausedFor !== null) return;
+    this.attempts++;
+    this.engine.stop();
+    this.pausedFor = hint;
+    this.reported = 'lost';
+    this.events.status('lost', hint);
+  }
+
+  /**
+   * Starts the engine again after a pause. It restarts at the starting viewpoint, so the room is
+   * recentred there. Call from a tap, as `start`.
+   */
+  async resume(): Promise<void> {
+    if (this.pausedFor === null) return;
+    this.pausedFor = null;
+    this.running = false;
+    await this.start();
   }
 
   /**
@@ -227,7 +257,9 @@ export class EngineTracking implements PhoneTracking {
     this.attempts++;
     this.look.stop();
     if (!this.running) return;
-    this.engine.stop();
+    // A paused engine is stopped already.
+    if (this.pausedFor === null) this.engine.stop();
+    this.pausedFor = null;
     this.running = false;
   }
 
