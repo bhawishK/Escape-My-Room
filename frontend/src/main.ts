@@ -16,7 +16,7 @@ import {
 } from './protocol';
 import { showsRevision } from './revision';
 import { SessionClient } from './session';
-import { DiagnosticScene } from './scene';
+import { DiagnosticScene, type ViewMode } from './scene';
 import { STEP_LENGTHS } from './step-walk';
 import { floorplan, type Floorplan } from './steps';
 import { XRDiagnostic, xrError, type ControllerSample } from './xr';
@@ -100,6 +100,7 @@ function chooseTracking(): void {
         measuredUnsent = true;
         trackingStats.pose();
       },
+      projection: intrinsics => view?.useProjection(intrinsics),
       camera: status => movementLog.event('camera', status),
       tracking: (status, reason) => {
         trackingStats.engine(status, reason);
@@ -344,6 +345,32 @@ function controls(): void {
   for (const id of ['gaze-mode', 'gaze-calibrate', 'gaze-test']) element(id).hidden = !pointing;
   element('aim-reticle').hidden = !roomViewOpen || ownHold() === null;
   gazeModeButton.textContent = gaze.getMode() === 'eyes' ? 'Switch to head' : 'Switch to eyes';
+  showViewMode();
+  ghostButton.hidden = shownMode === 'vr';
+  ghostButton.textContent = shownMode === 'ghost' ? 'Hide room model' : 'Show room model';
+}
+
+/** The room model is shown faintly over the camera image, to check the line-up. */
+let ghost = false;
+let shownMode: ViewMode = 'vr';
+const ghostButton = element<HTMLButtonElement>('ghost-toggle');
+ghostButton.addEventListener('click', () => {
+  ghost = !ghost;
+  controls();
+});
+/**
+ * With 8th Wall running, the room view draws the room's objects over its camera image (#122).
+ * Otherwise, counting steps or while another feature has the camera, it shows the room model.
+ */
+function showViewMode(): void {
+  const camera = roomViewOpen && tracking === measured && measured.active && !measured.paused;
+  const mode: ViewMode = !camera ? 'vr' : ghost ? 'ghost' : 'ar';
+  if (mode === shownMode) return;
+  shownMode = mode;
+  view?.setMode(mode);
+  document.documentElement.classList.toggle('camera-view', mode !== 'vr');
+  trackingStats.view(mode);
+  movementLog.event('view', mode);
 }
 
 /** Shows the room full screen on the phone, looking from the phone's place in the room. */
@@ -369,6 +396,7 @@ function setRoomView(open: boolean): void {
     if (wasTracking && connected) publishPose(null);
     view?.follow(null);
   }
+  showViewMode();
 }
 
 function presenceLabel(who: Role, next: SessionState): string {

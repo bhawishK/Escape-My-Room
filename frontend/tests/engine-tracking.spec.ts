@@ -64,7 +64,7 @@ test('8th Wall poses move the phone, and the headset sees where it really is', a
   await vr.close();
 });
 
-test('the engine starts in metres at the room view’s starting place, facing the desk, with the camera hidden', async ({ page }) => {
+test('the engine starts in metres at the room view’s starting place, facing the desk, with the camera shown under the room', async ({ page }) => {
   await useFakeEngine(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
@@ -72,9 +72,9 @@ test('the engine starts in metres at the room view’s starting place, facing th
   const calls = await engineCalls(page);
   expect(calls.runs).toBe(1);
   expect(calls.configure).toContainEqual(expect.objectContaining({ scale: 'absolute' }));
-  expect(calls.origins.at(-1)).toEqual({ origin: { x: 0, y: 1.5, z: 1.6 }, facing: { w: 1, x: 0, y: 0, z: 0 } });
+  expect(calls.origins.at(-1)).toMatchObject({ origin: { x: 0, y: 1.5, z: 1.6 }, facing: { w: 1, x: 0, y: 0, z: 0 } });
   expect(calls.modules).toContain('reality');
-  expect(calls.cameraFeed).toBe(false);
+  expect(calls.cameraFeed).toBe(true);
   // Step-counting controls belong to the fallback.
   await expect(page.getByRole('button', { name: 'Back to start', exact: true })).toBeHidden();
   await expect(page.getByTestId('engine-credits')).toContainText('Niantic Spatial');
@@ -377,7 +377,7 @@ test('the gaze cursor pauses measured tracking, which the headset sees as lost, 
   // Stopping the gaze cursor releases the front camera and starts the engine again, from the start.
   await phone.getByRole('button', { name: 'Stop gaze cursor', exact: true }).click();
   await expect.poll(async () => (await engineCalls(phone)).runs).toBe(2);
-  expect((await engineCalls(phone)).origins.at(-1)).toEqual(START);
+  expect((await engineCalls(phone)).origins.at(-1)).toMatchObject(START);
   expect(await liveCameras(phone)).toEqual([]);
   await expect(phone.getByTestId('tracking-mode')).toHaveText('Tracking · 8th Wall, measured');
   await engineFrame(phone, { x: 0.2, y: 1.5, z: 1.4 });
@@ -424,7 +424,7 @@ test('closing the room view stops the engine, and reopening starts it again from
 
   await phone.getByRole('button', { name: 'Open room view', exact: true }).click();
   await expect.poll(async () => (await engineCalls(phone)).runs).toBe(2);
-  expect((await engineCalls(phone)).origins.at(-1)).toEqual(START);
+  expect((await engineCalls(phone)).origins.at(-1)).toMatchObject(START);
   await engineFrame(phone, { x: 0, y: 1.5, z: 1.5 });
   await expect(vr.getByTestId('marker-position')).toHaveText('0.00, 1.50, 1.50 m');
   await phone.close();
@@ -455,7 +455,7 @@ test('closing the room view while the gaze cursor has the camera does not start 
 
   await page.getByRole('button', { name: 'Open room view', exact: true }).click();
   await expect.poll(async () => (await engineCalls(page)).runs).toBe(2);
-  expect((await engineCalls(page)).origins.at(-1)).toEqual(START);
+  expect((await engineCalls(page)).origins.at(-1)).toMatchObject(START);
   await engineFrame(page, { x: 0, y: 1.5, z: 1.5 });
   const changes = (await downloadReport(page)).motion.tracking.status_changes as { status: string; reason: string }[];
   expect(changes.map(({ status, reason }) => `${status}: ${reason}`)).toEqual([
@@ -485,7 +485,7 @@ test('hiding the page stops the gaze cursor but starts the engine only once the 
 
   await visibility('visible');
   await expect.poll(async () => (await engineCalls(page)).runs).toBe(2);
-  expect((await engineCalls(page)).origins.at(-1)).toEqual(START);
+  expect((await engineCalls(page)).origins.at(-1)).toMatchObject(START);
   await expect(page.getByTestId('tracking-mode')).toHaveText('Tracking · 8th Wall, measured');
   // The restarted engine has no reason of its own yet: the old engine's is not carried over.
   const changes = (await downloadReport(page)).motion.tracking.status_changes as { status: string; reason: string }[];

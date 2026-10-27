@@ -104,6 +104,7 @@
       <div class="hud-buttons">
         <button id="recentre" class="secondary" hidden>Recentre</button>
         <button id="calibrate" class="secondary" hidden>Calibrate</button>
+        <button id="ghost-toggle" class="secondary" hidden>Show room model</button>
         <button id="walk-reset" class="secondary" hidden>Back to start</button>
         <button id="walk-length" class="secondary" hidden>Step 0.6 m</button>
         <button id="gaze-toggle">Gaze cursor</button>
@@ -141,7 +142,7 @@
       <button id="hold-probe">Hold input probe</button>
       <button id="overlay-end-xr">End XR</button>
     </div>
-    <!-- The engine reads the camera through this canvas; nothing is drawn on it, and the room view covers it. -->
+    <!-- The engine reads the camera through this canvas and draws its image there, beneath the room view. -->
     <canvas id="engine-canvas" aria-hidden="true"></canvas>
     <script type="module" src="/src/main.ts"></script>
   </body>
