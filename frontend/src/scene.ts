@@ -10,7 +10,7 @@ import { applyPlacement, placeEntities } from './room';
 
 const emptyRoom = (): SessionState['room'] => ({
   available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
-  entities: [], splat_url: null, splat_placement: null, loaded_by: { mobile_master: null, vr_solver: null },
+  entities: [], splat_url: null, splat_phone_url: null, splat_placement: null, loaded_by: { mobile_master: null, vr_solver: null },
 });
 
 const OVERVIEW_FOV = 60;
@@ -30,6 +30,9 @@ export class DiagnosticScene {
   private roomGroup: THREE.Group | null = null;
   /** The room's splat, when it has one; Spark is loaded only for such rooms. */
   private splat: SplatMesh | null = null;
+  /** The splat file drawn and how many splats it holds, for the diagnostic report. */
+  splatDrawn: { file: string; splats: number } | null = null;
+  private resize: () => void = () => undefined;
   private sparkReady: Promise<typeof import('@sparkjsdev/spark')> | null = null;
   private presenting = false;
   /** The pose this phone's full-screen room view looks from. */
@@ -123,20 +126,24 @@ export class DiagnosticScene {
     this.scene.add(this.control);
     container.append(this.renderer.domElement);
     container.dataset.view = 'overview';
-    const resize = () => {
+    this.resize = () => {
       const width = container.clientWidth;
       const height = container.clientHeight;
       this.renderer.setSize(width, height);
       this.camera.aspect = width / Math.max(height, 1);
       this.camera.updateProjectionMatrix();
     };
-    new ResizeObserver(resize).observe(container);
-    resize();
+    new ResizeObserver(this.resize).observe(container);
+    this.resize();
   }
 
   /** This page's role, so its own presence marker stays hidden. */
   setLocalRole(role: Role | null): void {
     this.localRole = role;
+    // The phone draws one pixel per screen pixel: up to four times fewer than at two, which
+    // leaves 8th Wall the time to track (#109). Its splat is small on a phone's screen anyway.
+    this.renderer.setPixelRatio(role === 'mobile_master' ? 1 : Math.min(devicePixelRatio, 2));
+    this.resize();
   }
 
   apply(state: SessionState): void {
@@ -359,6 +366,8 @@ export class DiagnosticScene {
       this.loadingVersion = version;
       // Load every asset before showing any, so a failure never leaves a partial room.
       const urls = [...new Set(room.entities.map(entity => entity.asset_url))];
+      // A phone draws the lighter copy when the room has one.
+      const splatUrl = this.localRole === 'mobile_master' && room.splat_phone_url ? room.splat_phone_url : room.splat_url;
       let roots: Map<string, THREE.Object3D>;
       let splat: SplatMesh | null;
       try {
@@ -368,7 +377,7 @@ export class DiagnosticScene {
         )));
         const [scenes, loadedSplat] = await Promise.all([
           loading,
-          room.splat_url ? this.loadSplat(room.splat_url) : null,
+          splatUrl ? this.loadSplat(splatUrl) : null,
         ]);
         splat = loadedSplat;
         if (token !== this.loadToken) {
@@ -521,6 +530,7 @@ export class DiagnosticScene {
         raycastable: false,
       });
       await mesh.initialized;
+      this.splatDrawn = { file: url.split('/').pop() ?? url, splats: mesh.packedSplats?.numSplats ?? 0 };
       return mesh;
     } catch {
       throw failed;

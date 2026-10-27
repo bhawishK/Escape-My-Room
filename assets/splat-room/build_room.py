@@ -28,13 +28,20 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from backend.splat_file import visible_splats
+from backend.splat_file import read_splat, visible_splats
 
 ROOT = Path(__file__).resolve().parent
 FLOOR_HEIGHT = 0.02
 BOX_SIZE = 0.3
 MIN_FLOOR = 2.0
 CAMERA_HEIGHT = 1.4
+# A phone draws this many splats at most, so 8th Wall keeps its pace (#109): the hallway's
+# 400,000 left it about 5 poses a second on the iPhone.
+PHONE_SPLATS = 150_000
+PHONE_FILE = "room-phone.ply"
+# What Spark needs to draw a splat in its base colour; view-dependent colour is left out.
+PHONE_PROPERTIES = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity"]
+PHONE_PROPERTIES += ["scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"]
 
 _spec = importlib.util.spec_from_file_location(
     "multi_asset_room", ROOT.parent / "multi-asset-room" / "build_room.py"
@@ -231,6 +238,8 @@ def write_room(out: Path, splat: Path, report: Path, room_version: int) -> None:
             entity("box", "Box", "movable", (BOX_SIZE,) * 3, (box_x, 0.0, box_z)),
         ],
     }
+    write_phone_splat(out / "room.ply", out / PHONE_FILE, PHONE_SPLATS)
+    manifest["splat"]["phone_asset"] = PHONE_FILE
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(
         f"wrote {out}: levelled {place['tilt']:.1f} deg by the camera path, "
@@ -329,6 +338,45 @@ def rescale(room: Path, factor: float, source: str) -> None:
     print(f"rescaled {room} by x{factor:.3f}: {source}")
 
 
+def write_phone_splat(source: Path, out: Path, count: int) -> int:
+    """The `count` splats of `source` that show most, with base colours only, as a PLY at `out`.
+
+    A splat shows by how opaque it is and how much of the view it covers: its opacity after the
+    sigmoid times its area face-on, the product of its two largest sizes. (By volume, a large
+    see-through splat would outrank a small opaque one.) Returns how many were written.
+    """
+    names, values = read_splat(source)
+    stride = len(names)
+    columns = [names.index(name) for name in PHONE_PROPERTIES]
+    opacity = names.index("opacity")
+    scales = [names.index(f"scale_{axis}") for axis in range(3)]
+
+    def shows(start: int) -> float:
+        opaque = 1 / (1 + math.exp(-values[start + opacity]))
+        smaller, *largest = sorted(values[start + s] for s in scales)
+        return opaque * math.exp(min(sum(largest), 50.0))
+
+    starts = range(0, len(values), stride)
+    kept = sorted(sorted(starts, key=shows, reverse=True)[:count])
+    header = ["ply", "format binary_little_endian 1.0", f"element vertex {len(kept)}"]
+    header += [f"property float {name}" for name in PHONE_PROPERTIES] + ["end_header", ""]
+    row = struct.Struct(f"<{len(columns)}f")
+    rows = (row.pack(*(values[start + c] for c in columns)) for start in kept)
+    out.write_bytes("\n".join(header).encode() + b"".join(rows))
+    return len(kept)
+
+
+def add_phone_splat(room: Path, count: int = PHONE_SPLATS) -> None:
+    """Writes a built room's phone splat and names it in the manifest; devices reload the room."""
+    path = room / "manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    written = write_phone_splat(room / manifest["splat"]["asset"], room / PHONE_FILE, count)
+    manifest["splat"]["phone_asset"] = PHONE_FILE
+    manifest["room_version"] += 1
+    path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    print(f"wrote {room / PHONE_FILE}: {written} splats for phones")
+
+
 def main() -> None:
     if len(sys.argv) == 1:
         write_test_splat(ROOT / "room.ply")
@@ -336,6 +384,9 @@ def main() -> None:
         return
     if len(sys.argv) == 5 and sys.argv[1] == "--rescale":
         rescale(Path(sys.argv[2]), float(sys.argv[3]), sys.argv[4])
+        return
+    if len(sys.argv) in (3, 4) and sys.argv[1] == "--phone":
+        add_phone_splat(Path(sys.argv[2]), int(sys.argv[3]) if len(sys.argv) == 4 else PHONE_SPLATS)
         return
     if len(sys.argv) != 3:
         raise SystemExit(__doc__)

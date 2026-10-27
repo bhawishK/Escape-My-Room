@@ -201,11 +201,20 @@ Each rebuild counts the room version up, so devices still showing the earlier ro
 
 `assets/splat-room/` is the committed test room: a 107 KB synthetic splat of a checkered floor and a red block, with the same floor and box. It is rebuilt with `python assets/splat-room/build_room.py`.
 
+### The phone's lighter splat (issue 109)
+
+Drawing the hallway's 400,000 splats on the iPhone left 8th Wall only about 5 poses a second, so the view lagged behind the person and lost tracking more easily. The phone now draws less, and the Quest is unchanged.
+
+- **A lighter splat.** `build_room.py` also writes `room-phone.ply`, named as `phone_asset` in the manifest's `splat` entry and served as `splat_phone_url`. It holds the 150,000 splats that show most (opacity × area face-on) with base colours only: 8.4 MB instead of 42 MB for the hallway, and almost the same to look at. Phones load it; the headset loads the full splat. Add one to a room built earlier with `python assets/splat-room/build_room.py --phone data/splat-room [COUNT]`, which counts the room version up.
+- **One pixel per screen pixel.** In the phone's view, against up to two (four times the pixels) before.
+- **Drawing when needed.** In the room view, the phone draws when its pose changes, and otherwise ten times a second, so others' changes still show. It no longer draws the same picture sixty times a second.
+- **Reported.** The tracking summary (#66), in the diagnostic report and Send log, includes `frame_rate_hz` and `splat`: the file drawn and its splat count. The diagnostics line shows the frame rate next to the pose rate.
+
 **Limits:**
 - **No furniture entities.** Walking passes through the splat's furniture, since there are no furniture entities for it to stop at.
 - **Approximate scale.** It comes from the notebook's assumed 1.4 m camera height until the room is measured.
 - **Gaps away from the filming.** Away from where the video was filmed, the splat shows gaps and smears.
-- **Weight on phones.** A splat of 400,000 splats is about 42 MB and heavy for low-end phones.
+- **Weight on phones.** Even 150,000 splats can be heavy for low-end phones; `--phone ROOM COUNT` makes a smaller copy.
 
 ### Render-and-ask (issue 98)
 

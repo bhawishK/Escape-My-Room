@@ -44,6 +44,8 @@ let releasing: number | null = null;
 const motion = new MotionStats();
 /** How the phone's tracking behaved, for the diagnostic report. */
 const trackingStats = new TrackingStats();
+/** While nothing moves, the phone's room view still redraws this often to show others' changes. */
+const PHONE_REDRAW_MS = 100;
 /** How long a press on the selected object lasts before it is picked up, so a tap is not. */
 const PICK_UP_MS = 300;
 /** While carrying, the phone tells Python where it is and faces this often, so the object follows. */
@@ -461,7 +463,7 @@ const client = new SessionClient({
           delivery: { simulated_delay_ms: 0 },
           room: {
             available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
-            entities: [], splat_url: null, splat_placement: null, loaded_by: { mobile_master: null, vr_solver: null },
+            entities: [], splat_url: null, splat_phone_url: null, splat_placement: null, loaded_by: { mobile_master: null, vr_solver: null },
           },
         });
       }
@@ -598,6 +600,8 @@ try {
   }
   sceneView.onCorrection = meters => motion.correction(meters);
   let lastFrame: number | null = null;
+  let lastDrawn = -Infinity;
+  let drawnPose = '';
   sceneView.renderer.setAnimationLoop((time, frame) => {
     xr?.frame(frame);
     sceneView.tick(lastFrame === null ? 0 : time - lastFrame);
@@ -628,7 +632,16 @@ try {
         publishPose(pose);
       }
     }
-    sceneView.renderer.render(sceneView.scene, sceneView.camera);
+    // In the room view the phone draws when it has moved, and otherwise only often enough to
+    // show what others change: drawing the same picture sixty times a second takes time from
+    // 8th Wall, which then tracks fewer poses (#109).
+    const pose = roomViewOpen && role === 'mobile_master' ? JSON.stringify(tracking.pose()) : '';
+    if (!pose || pose !== drawnPose || time - lastDrawn >= PHONE_REDRAW_MS) {
+      drawnPose = pose;
+      lastDrawn = time;
+      sceneView.renderer.render(sceneView.scene, sceneView.camera);
+      trackingStats.frame(time);
+    }
   });
   void xr.inspect().catch(error => showError(xrError(error)));
 } catch {
@@ -878,7 +891,7 @@ element('send-log').addEventListener('click', () => {
   void fetch('/api/movement-logs', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     // With the report's tracking summary, so a device walk needs nothing downloaded on the phone.
-    body: JSON.stringify({ ...movementLog.report(), tracking: trackingStats.report() }),
+    body: JSON.stringify({ ...movementLog.report(), tracking: trackingStats.report(view?.splatDrawn ?? null) }),
   }).then(async response => {
     // A proxy in front of a stopped Python answers with text, not JSON.
     const answer = await response.json().catch(() => ({})) as { entries?: number; detail?: string };
@@ -895,7 +908,7 @@ element('download-report').addEventListener('click', () => {
       ...motion.report({
         smoothing_ms: view?.smoothingMs ?? null, simulated_delay_ms: state?.delivery.simulated_delay_ms ?? null,
       }),
-      tracking: trackingStats.report(),
+      tracking: trackingStats.report(view?.splatDrawn ?? null),
     },
     evidence: 'Browser observations only; complete the manual device smoke-test record separately.',
   };

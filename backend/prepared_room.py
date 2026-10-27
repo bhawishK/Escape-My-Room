@@ -93,6 +93,8 @@ class LoadedRoom(BaseModel):
     entities: list[SceneEntity]
     splat_url: str | None = None
     splat_placement: SplatPlacement | None = None
+    # A lighter splat for phones, when the room has one (#109); phones draw the full one otherwise.
+    splat_phone_url: str | None = None
 
 
 class _Entity(Protocol):
@@ -160,6 +162,8 @@ class SplatAsset(SplatPlacement):
     """The splat file, and its placement when it was trained tilted or at another scale."""
 
     asset: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}\.(ply|spz)$")
+    # A lighter copy for phones, so 8th Wall keeps its pace beside it (#109).
+    phone_asset: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}\.(ply|spz)$")
     # Where the scale came from, for people: assumed, suggested from objects, or measured (#33).
     scale_source: str | None = Field(default=None, max_length=200)
 
@@ -271,9 +275,14 @@ def _load_scene(directory: Path, scene: PreparedScene) -> LoadedRoom:
         _check_nodes(asset, nodes, {entity.id: entity.size for entity in entities})
     if scene.splat is not None:
         _check_splat(directory, scene.splat.asset)
+        if scene.splat.phone_asset is not None:
+            _check_splat(directory, scene.splat.phone_asset)
     return LoadedRoom(
         room_version=scene.room_version,
         splat_url=None if scene.splat is None else f"{ASSET_URL_PREFIX}/{scene.splat.asset}",
+        splat_phone_url=None
+        if scene.splat is None or scene.splat.phone_asset is None
+        else f"{ASSET_URL_PREFIX}/{scene.splat.phone_asset}",
         splat_placement=None
         if scene.splat is None
         else SplatPlacement.model_validate(
