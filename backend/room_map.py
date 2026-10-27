@@ -20,12 +20,11 @@ import tempfile
 from array import array
 from pathlib import Path
 
-from backend.prepared_room import SplatPlacement, load_prepared_room
+from backend.prepared_room import MAP_FILE, SplatPlacement, load_prepared_room
 from backend.room_views import View, in_room, render_views
 from backend.splat_file import read_splat
 
 MAP_IMAGE = "map.png"
-MAP_FILE = "map.json"
 LONG_SIDE = 512
 # How high above the floor the map is drawn from, in metres.
 ABOVE = 40.0
@@ -102,6 +101,7 @@ def _plan_splats(
 
 
 def _middle(values: list[float]) -> tuple[float, float]:
+    """The lowest and highest of the values, without the outer KEEP_OUT at each end."""
     ordered = sorted(values)
     cut = int(len(ordered) * KEEP_OUT)
     return ordered[cut], ordered[-1 - cut]
@@ -111,7 +111,7 @@ def _plan_room(room_dir: Path, out: Path, name: str, names: list[str], rows: byt
     """A copy of the room whose splat holds only the plan's splats, to render the map from."""
     count = len(rows) // (4 * len(names))
     header = ["ply", "format binary_little_endian 1.0", f"element vertex {count}"]
-    header += [f"property float {property}" for property in names] + ["end_header", ""]
+    header += [f"property float {column}" for column in names] + ["end_header", ""]
     (out / name).write_bytes("\n".join(header).encode() + rows)
     manifest = json.loads((room_dir / "manifest.json").read_text(encoding="utf-8"))
     # Only the splat is drawn; the rest of the room is not needed to render it.

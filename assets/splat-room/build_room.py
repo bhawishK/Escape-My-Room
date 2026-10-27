@@ -244,10 +244,10 @@ def write_room(out: Path, splat: Path, report: Path, room_version: int) -> None:
     manifest["splat"]["phone_asset"] = PHONE_FILE
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     # The room seen from above, for both devices' map (#124). It needs the renderer (Node and a
-    # built frontend), so a room is still written without it.
+    # built frontend) and enough splats near the floor, so a room is still written without it.
     try:
         make_map(out)
-    except RenderFailure as exc:
+    except (RenderFailure, ValueError) as exc:
         print(f"no map: {exc}")
     print(
         f"wrote {out}: levelled {place['tilt']:.1f} deg by the camera path, "

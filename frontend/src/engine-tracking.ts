@@ -577,6 +577,9 @@ export class EngineTracking implements PhoneTracking {
   /** Whether the first object has been stood at, and calibrating waits for the second. */
   get calibrating(): boolean { return this.standingAt !== null; }
 
+  /** Whether the phone was placed on the map, and a second tap after a walk would set the scale. */
+  get placedOnMap(): boolean { return this.standingAt?.mark.id === MAP_SPOT; }
+
   private uncalibrate(): void {
     this.standingAt = null;
     if (!this.calibration) return;

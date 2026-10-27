@@ -830,19 +830,22 @@ const phoneMap = new RoomMap(element('phone-map'), 'phone-map', { pick: placeOnM
 const pageMap = new RoomMap(element('page-map'), 'page-map', { pick: standOnMap });
 const phoneMapRoot = element('phone-map');
 function openPhoneMap(open: boolean): void {
+  const engine = tracking === measured && measured?.active ? measured : null;
   phoneMapRoot.classList.toggle('expanded', open);
-  phoneMapRoot.classList.toggle('picking', open);
+  phoneMapRoot.classList.toggle('picking', open && engine !== null);
   element('phone-map-close').hidden = !open;
   const prompt = element('phone-map-prompt');
   prompt.hidden = !open;
-  prompt.textContent = 'Tap where you stand, and drag the way you face';
+  prompt.textContent = !engine ? 'Placing on the map needs 8th Wall tracking' :
+    engine.placedOnMap ? 'Placed · walk 2 m or more and tap where you are, to set the scale' :
+    'Tap where you stand, and drag the way you face';
 }
 phoneMapRoot.addEventListener('click', () => {
   if (!phoneMapRoot.classList.contains('expanded')) openPhoneMap(true);
 });
 element('phone-map-close').addEventListener('click', event => {
   event.stopPropagation();
-  measured?.cancelCalibration();
+  // The first tap is kept: the person closes the map to walk, then opens it to tap again.
   openPhoneMap(false);
 });
 /** The person taps where they stand on the phone's map: the phone is placed there (#124). */
@@ -874,7 +877,9 @@ function placeOnMap(spot: Spot, heading: number | null): void {
 function standOnMap(spot: Spot, heading: number | null): void {
   if (role !== 'vr_solver' || !connected) return;
   const now = xr?.confirmedAlignment() ?? { yaw: 0, origin: { x: 0, y: 0, z: 0 } };
-  const turn = heading ?? 0;
+  // A tap without a drag keeps the way the player faces now, as the phone does.
+  const aligned = state?.alignment.vr_solver;
+  const turn = heading ?? (aligned?.status === 'aligned' ? aligned.yaw - now.yaw : 0);
   const cosine = Math.cos(turn);
   const sine = Math.sin(turn);
   const { x, y, z } = now.origin;
