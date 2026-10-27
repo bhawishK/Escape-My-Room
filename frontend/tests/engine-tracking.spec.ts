@@ -1,4 +1,4 @@
-import { type Page, expect, test } from '@playwright/test';
+import { type Browser, type Page, expect, test } from '@playwright/test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fakeCameras, liveCameras } from './fixtures/cameras';
@@ -516,7 +516,8 @@ async function holdStill(page: Page, position: { x: number; y: number; z: number
   }
 }
 
-async function phoneAndHeadset(browser: import('@playwright/test').Browser, link = '/') {
+/** A phone tracking with the fake engine, opened from `link`, and a connected headset. */
+async function phoneAndHeadset(browser: Browser, link = '/'): Promise<{ phone: Page; vr: Page }> {
   const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
   const vr = await browser.newPage();
   await useFakeEngine(phone);
@@ -566,4 +567,47 @@ test('the link can give the phone its real height', async ({ browser }) => {
   await expect(vr.getByTestId('marker-position')).toHaveText('0.60, 1.20, 1.60 m');
   await phone.close();
   await vr.close();
+});
+
+test('when the scale is measured the view does not jump: only the height rises to the real one', async ({ browser }) => {
+  const { phone, vr } = await phoneAndHeadset(browser);
+  // The person has stepped 0.3 m by 8th Wall's measure before the scale is known.
+  await holdStill(phone, { x: 0.3, y: 0.7, z: 1.6 }, 1700);
+  await engineFrame(phone, { x: 0.3, y: 0.7, z: 1.6 });
+  await expect(vr.getByTestId('marker-position')).toHaveText('0.30, 1.40, 1.60 m');
+
+  // From there, half a metre by 8th Wall is a metre in the room.
+  await engineFrame(phone, { x: 0.8, y: 0.7, z: 1.6 });
+  await expect(vr.getByTestId('marker-position')).toHaveText('1.30, 1.40, 1.60 m');
+  await phone.close();
+  await vr.close();
+});
+
+test('after a restart the room is lined up and the new scale takes over without a jump', async ({ browser }) => {
+  const { phone, vr } = await phoneAndHeadset(browser);
+  await holdStill(phone, { x: 0, y: 0.7, z: 1.6 }, 1700);
+  await engineFrame(phone, { x: 0.25, y: 0.7, z: 1.6 });
+  await expect(vr.getByTestId('marker-position')).toHaveText('0.50, 1.40, 1.60 m');
+  // Lost; 8th Wall restarts 0.3 m from its start by its own measure, now nearer the truth.
+  await engineFrame(phone, { x: 9, y: 9, z: 9 }, undefined, INITIALIZING);
+  await holdStill(phone, { x: 0.3, y: 1.4, z: 1.6 }, 1700);
+
+  // Lined up with the last good place, at the real height, with no jump when the scale changed.
+  await expect(vr.getByTestId('marker-position')).toHaveText('0.50, 1.40, 1.60 m');
+  // The new scale is 1: a 0.4 m move is 0.4 m.
+  await engineFrame(phone, { x: 0.7, y: 1.4, z: 1.6 });
+  await expect(vr.getByTestId('marker-position')).toHaveText('0.90, 1.40, 1.60 m');
+  await phone.close();
+  await vr.close();
+});
+
+test('a height given once in the link is kept on the phone', async ({ page }) => {
+  await useFakeEngine(page);
+  await page.goto('/?height=1.2');
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await holdStill(page, { x: 0, y: 0.6, z: 1.6 }, 1700);
+
+  const tracking = (await downloadReport(page)).motion.tracking;
+  expect(tracking.scale).toEqual({ factor: 2, engine_height_m: 0.6, real_height_m: 1.2, clamped: false });
 });
