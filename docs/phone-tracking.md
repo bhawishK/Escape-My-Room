@@ -55,6 +55,11 @@ Since Issue 59, a phone where the [8th Wall engine](https://github.com/8thwall/e
 - **Start:** it starts at the room view's starting place, facing the desk.
 - **Camera image:** never drawn.
 - **Fallback:** elsewhere, or before the engine loads, the phone counts steps as described above, and Back to start and the step length button appear only then.
+- **Scale (issue 112):** 8th Wall works its scale out from the camera and motion sensors, and was off on the iPhone: it put the phone 0.72 m and then 1.16 m above the floor against a real 1.3–1.4 m, so the room moved 50–85% as far as the person walked.
+  - **How it's measured:** over the first 1.5 s of unbroken tracking (at least 5 poses) after each start and each restart, the phone takes the median of the heights 8th Wall reports. The factor is the real height divided by that median, kept between 0.5 and 2.
+  - **How it's applied:** 8th Wall's movement is scaled by the factor about where it started, so distances and the phone's height come out in real metres.
+  - **The real height** is 1.4 m (the camera height splat rooms are scaled for) unless the link gives one, for example `?height=1.35`.
+  - **Reporting:** the tracking summary (Send log and diagnostic report) gives `scale`: the factor, both heights, and whether it was clamped. The movement log has a `scale` event.
 - **Choosing step counting:** add `?tracking=steps` to the link (for example `https://…trycloudflare.com/?tracking=steps`) to count steps even where the engine could track, to compare the two on the same phone. The tracking summary in Send log gives the reason as "step counting chosen in the link".
 - **Version:** the engine is pinned to `@8thwall/engine-binary@1.0.0`.
 - **Credits:** the room view carries the credits its licence requires.

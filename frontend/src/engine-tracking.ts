@@ -81,6 +81,8 @@ interface EngineEvents {
   status: (status: TrackingStatus, hint: string) => void;
   /** After a loss, the room was lined up again with where the phone was; `detail` says by how much. */
   realigned: (detail: string) => void;
+  /** The scale was measured: `factor` times 8th Wall's distances is the room's. */
+  scaled: (scale: EngineScale) => void;
   error: (message: string) => void;
 }
 
@@ -100,6 +102,27 @@ function yawOf(orientation: Rotation): number {
 }
 // Every loss on the iPhone came with the phone pointing this far down or more, at the plain floor.
 const STEEP_DOWN = -50 * Math.PI / 180;
+
+/** How 8th Wall's distances were corrected: its height for the phone against the real one. */
+export interface EngineScale {
+  factor: number;
+  engine_height_m: number;
+  real_height_m: number;
+  /** The measured factor was out of range, so the nearest believable one is used. */
+  clamped: boolean;
+}
+/**
+ * The phone's real height when the link gives none: the camera height splat rooms are scaled
+ * for. On the iPhone 8th Wall put the phone 0.72 m and then 1.16 m up, against a real 1.3-1.4 m
+ * (27 October 2026), so it walked the person 50-85% of the way.
+ */
+export const HELD_AT = 1.4;
+// The height is the median over this much normal tracking, after each start and restart.
+const SCALE_SAMPLE_MS = 1500;
+const SCALE_SAMPLES = 5;
+// A factor beyond these is a wrong height, not a scale error.
+const MIN_FACTOR = 0.5;
+const MAX_FACTOR = 2;
 
 export class EngineTracking implements PhoneTracking {
   private running = false;
@@ -133,7 +156,20 @@ export class EngineTracking implements PhoneTracking {
   /** The orientation sensor, which keeps measuring turns while the engine is lost. */
   private readonly look = new PhoneLook();
 
-  constructor(private readonly engine: Engine, private readonly canvas: HTMLCanvasElement, private readonly events: EngineEvents) {}
+  /** 8th Wall's distances times this are the room's; 1 until the first measurement. */
+  private factor = 1;
+  /** Heights 8th Wall reported since it started, while the scale is being measured. */
+  private heights: number[] = [];
+  private sampleSince: number | null = null;
+  private scaleKnown = false;
+
+  constructor(
+    private readonly engine: Engine,
+    private readonly canvas: HTMLCanvasElement,
+    private readonly events: EngineEvents,
+    /** How high the phone is really held, in metres. */
+    private readonly heldAt = HELD_AT,
+  ) {}
 
   get active(): boolean { return this.running; }
 
@@ -203,6 +239,8 @@ export class EngineTracking implements PhoneTracking {
     }
     this.starting = false;
     this.latest = null;
+    this.factor = 1;
+    this.measureScaleAgain();
     this.engineStatus = '';
     this.normal = false;
     this.everNormal = false;
@@ -231,13 +269,16 @@ export class EngineTracking implements PhoneTracking {
           // Limited poses are guesses, metres or tens of metres off on the iPhone; hold the last good one.
           const wasNormal = this.normal;
           this.normal = reality.trackingStatus !== 'LIMITED';
+          // The scale is measured over unbroken tracking: a loss before it is known starts again.
+          if (wasNormal && !this.normal && !this.scaleKnown) this.measureScaleAgain();
           if (wasNormal && !this.normal && this.latest) {
             this.lostFrom = this.latest;
             this.turnAtLoss = this.turnYaw();
           }
           if (this.normal) {
             this.everNormal = true;
-            const raw = { position: { x: p.x, y: p.y, z: p.z }, orientation: { x: r.x, y: r.y, z: r.z, w: r.w } };
+            this.sampleHeight(p.y, performance.now());
+            const raw = { position: this.toScale(p), orientation: { x: r.x, y: r.y, z: r.z, w: r.w } };
             if (this.lostFrom) this.recover(raw, this.lostFrom);
             this.latest = this.intoRoom(raw);
           }
@@ -314,7 +355,38 @@ export class EngineTracking implements PhoneTracking {
    * was, facing as far round from then as the turn sensor says it turned. Height is kept too, since
    * the restarted engine's height was 0.9-2.8 m off on the iPhone.
    */
+  /** 8th Wall's position in real metres: scaled about where it started, and its height too. */
+  private toScale(p: Position): Position {
+    const f = this.factor;
+    return { x: START_EYE.x + f * (p.x - START_EYE.x), y: f * p.y, z: START_EYE.z + f * (p.z - START_EYE.z) };
+  }
+
+  /** Collects 8th Wall's heights until there are enough to say how far off its scale is. */
+  private sampleHeight(height: number, now: number): void {
+    if (this.scaleKnown) return;
+    this.sampleSince ??= now;
+    this.heights.push(height);
+    if (now - this.sampleSince < SCALE_SAMPLE_MS || this.heights.length < SCALE_SAMPLES) return;
+    const sorted = [...this.heights].sort((a, b) => a - b);
+    const reported = sorted[Math.floor(sorted.length / 2)];
+    const measured = reported > 0 ? this.heldAt / reported : MAX_FACTOR;
+    this.factor = Math.min(MAX_FACTOR, Math.max(MIN_FACTOR, measured));
+    this.scaleKnown = true;
+    this.events.scaled({
+      factor: Number(this.factor.toFixed(3)), engine_height_m: Number(reported.toFixed(3)),
+      real_height_m: this.heldAt, clamped: this.factor !== measured,
+    });
+  }
+
+  /** A restarted engine works its scale out afresh, so it is measured again. */
+  private measureScaleAgain(): void {
+    this.scaleKnown = false;
+    this.heights = [];
+    this.sampleSince = null;
+  }
+
   private lineUp(raw: RoomPose, from: RoomPose): void {
+    this.measureScaleAgain();
     const now = this.turnYaw();
     const turned = now !== null && this.turnAtLoss !== null ? now - this.turnAtLoss : 0;
     this.yaw = yawOf(from.orientation) + turned - yawOf(raw.orientation);

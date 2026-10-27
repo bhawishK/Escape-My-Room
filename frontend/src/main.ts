@@ -7,7 +7,7 @@ import { floorPoint } from './aim';
 import { grabbedPosition, offsetOf, targetAlongRay } from './grab';
 import { MotionStats } from './motion-stats';
 import { TrackingStats } from './tracking-stats';
-import { EngineTracking, engineUnavailable, trackingEngine } from './engine-tracking';
+import { EngineTracking, HELD_AT, engineUnavailable, trackingEngine } from './engine-tracking';
 import { MovementLog, type TrackingMode } from './movement-log';
 import { StepTracking, type PhoneTracking } from './phone-tracking';
 import { START_EYE, headingOf, pitchOf, type RoomPose } from './phone-view';
@@ -113,8 +113,12 @@ function chooseTracking(): void {
         if (connected && ownHold() === null) publishTracking();
       },
       realigned: detail => movementLog.event('realigned', detail),
+      scaled: scale => {
+        trackingStats.scale(scale);
+        movementLog.event('scale', `x${scale.factor}: 8th Wall height ${scale.engine_height_m} m, real ${scale.real_height_m} m${scale.clamped ? ', clamped' : ''}`);
+      },
       error: message => movementLog.event('engine error', message),
-    });
+    }, heldAt());
     if (tracking !== measured) {
       steps.stop();
       tracking = measured;
@@ -125,6 +129,14 @@ function chooseTracking(): void {
   const mode = engine ? 'measured' : `steps · ${unavailable}`;
   if (mode !== loggedMode) movementLog.event('mode', mode);
   loggedMode = mode;
+}
+/**
+ * How high the phone is really held: `?height=1.35` in the link, or the height splat rooms are
+ * scaled for. 8th Wall's distances are corrected by it over the height 8th Wall reports (#112).
+ */
+function heldAt(): number {
+  const given = Number(new URLSearchParams(location.search).get('height'));
+  return given >= 0.5 && given <= 2.5 ? given : HELD_AT;
 }
 /** The mode last written to the movement log, so each change is logged once. */
 let loggedMode = '';
