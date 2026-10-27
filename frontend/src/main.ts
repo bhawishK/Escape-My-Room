@@ -97,9 +97,10 @@ function chooseTracking(): void {
   const engine = trackingEngine();
   if (engine) {
     measured ??= new EngineTracking(engine, element<HTMLCanvasElement>('engine-canvas'), {
-      moved: () => {
+      moved: pose => {
         measuredUnsent = true;
         trackingStats.pose();
+        showTilt(pitchOf(pose.orientation));
       },
       camera: status => movementLog.event('camera', status),
       tracking: (status, reason) => {
@@ -116,6 +117,13 @@ function chooseTracking(): void {
         if (connected && ownHold() === null) publishTracking();
       },
       realigned: detail => movementLog.event('realigned', detail),
+      restarted: () => {
+        // 8th Wall's new world has its own place and scale: the person places themselves again.
+        if (!roomViewOpen) return;
+        openPhoneMap(true);
+        mapReply = 'Tracking restarted · tap where you are';
+        showPhoneMap();
+      },
       placed: (spot, heading) => {
         trackingStats.placed(spot, heading);
         movementLog.event('placed', `at ${spot.x.toFixed(2)}, ${spot.z.toFixed(2)}${heading === null ? '' : `, heading ${heading.toFixed(2)} rad`}`);
@@ -128,9 +136,7 @@ function chooseTracking(): void {
         if (!calibration) {
           // A new world: the height scale is measured again too, and a calibration part done is void.
           trackingStats.rescaling();
-          element('view-status').textContent = measured?.hasStart ?
-            "Calibration undone · stand at your start and tap I'm at the start" :
-            'Calibration undone · place yourself on the map again';
+          element('view-status').textContent = 'Calibration undone · tap where you are on the map';
           // Tracking comes back in the same frame; this message, not the usual one, stays.
           trackingHint = '';
         }
@@ -180,6 +186,21 @@ const phoneHeight = heldAt();
 let loggedMode = '';
 /** What the status line says about tracking, or empty while tracking is fine. */
 let trackingHint = '';
+/**
+ * Both losses in the walk of 27 October came with the phone 40-60° down at the floor (#129): from
+ * TILT_WARN down the person is asked to raise it, until it is back above TILT_CLEAR.
+ */
+const TILT_WARN = -45 * Math.PI / 180;
+const TILT_CLEAR = -40 * Math.PI / 180;
+let tooSteep = false;
+/** Shows or hides the warning for the phone's pitch now, in radians; null hides it. */
+function showTilt(pitch: number | null): void {
+  const steep = pitch !== null && (tooSteep ? pitch < TILT_CLEAR : pitch < TILT_WARN);
+  if (steep === tooSteep) return;
+  tooSteep = steep;
+  element('tilt-hint').hidden = !steep;
+  if (pitch !== null) movementLog.event('tilt', steep ? `too steep: ${Math.round(pitch * 180 / Math.PI)}°` : 'raised');
+}
 /** What to do next in the room view, given the selection. */
 function viewInstruction(): string {
   if (selected === null) return 'Tap the box to select it';
@@ -334,7 +355,7 @@ function controls(): void {
   const engine = tracking === measured ? measured : null;
   const measuring = engine !== null;
   element('recentre').hidden = !engine?.active || engine.paused;
-  element('at-start').hidden = !engine?.active || engine.paused || !engine.hasStart;
+  if (!engine?.active || engine.paused || !roomViewOpen) showTilt(null);
   // The headset chooses where it stands on the page's map; the phone places itself on its own.
   element('page-map').classList.toggle('picking', role === 'vr_solver');
   element('tracking-mode').textContent = !engine ? 'Tracking · step counting' :
@@ -362,7 +383,8 @@ function setRoomView(open: boolean): void {
   if (open) movementLog.begin();
   else if (wasOpen) trackingStats.closed();
   // Opening the room view with 8th Wall, the person first places themselves on the map (#127).
-  if (open && !wasOpen && tracking === measured && !measured.hasStart) openPhoneMap(true);
+  // Each opening starts 8th Wall again from its own start, so the person is placed afresh.
+  if (open && !wasOpen && tracking === measured) openPhoneMap(true);
   if (!open) openPhoneMap(false);
   if (open !== wasOpen) movementLog.event('room view', open ? 'opened' : 'closed');
   roomViewHud.hidden = !open;
@@ -877,18 +899,6 @@ function standOnMap(spot: Spot, heading: number | null): void {
     origin: { x: cosine * x + sine * z + spot.x, y, z: -sine * x + cosine * z + spot.z },
   });
 }
-/** Standing at their start again, the person lines the room up with it once more (#127). */
-element('at-start').addEventListener('click', () => {
-  if (!measured) return;
-  try {
-    endHold();
-    measured.backAtStart();
-    element('view-status').textContent = 'Lined up with your start';
-  } catch (error) {
-    if (!(error instanceof CalibrationRefused)) throw error;
-    element('view-status').textContent = error.message;
-  }
-});
 element('walk-length').addEventListener('click', () => {
   steps.stepLength = STEP_LENGTHS[(STEP_LENGTHS.indexOf(steps.stepLength as typeof STEP_LENGTHS[number]) + 1) % STEP_LENGTHS.length];
   controls();

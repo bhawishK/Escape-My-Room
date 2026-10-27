@@ -81,9 +81,11 @@ interface EngineEvents {
   status: (status: TrackingStatus, hint: string) => void;
   /** After a loss, the room was lined up again with where the phone was; `detail` says by how much. */
   realigned: (detail: string) => void;
+  /** After a loss, 8th Wall started a new world: placing and calibrating on the map are void. */
+  restarted: () => void;
   /** The person placed the phone on the room's map, at `spot`, facing `heading` (null: unchanged). */
   placed: (spot: { x: number; z: number }, heading: number | null) => void;
-  /** Standing at two objects calibrated 8th Wall; null when a restart or recentring undid it. */
+  /** Two taps on the map calibrated 8th Wall; null when a restart or recentring undid it. */
   calibrated: (calibration: Calibration | null) => void;
   /** The scale was measured: `factor` times 8th Wall's distances is the room's. */
   scaled: (scale: EngineScale) => void;
@@ -267,11 +269,6 @@ export class EngineTracking implements PhoneTracking {
   /** The first tap on the map while calibrating, and where 8th Wall had the phone then. */
   private standingAt: { mark: RoomLandmark; at: Position } | null = null;
   private calibration: Calibration | null = null;
-  /**
-   * Where the person last placed themselves on the map, and the way they faced: their start, kept
-   * through restarts, to line the room up again there (#127).
-   */
-  private startSpot: { spot: { x: number; z: number }; heading: number } | null = null;
 
   constructor(
     private readonly engine: Engine,
@@ -433,8 +430,7 @@ export class EngineTracking implements PhoneTracking {
 
   /**
    * The person taps where they stand on the room's map (#124), and drags the way they face. The
-   * first tap places the phone there (keeping its heading for a tap without a drag), and is their
-   * start. A second, at least CALIBRATE_APART away after a walk, also sets 8th Wall's scale and
+   * first tap places the phone there (keeping its heading for a tap without a drag). A second, at least CALIBRATE_APART away after a walk, also sets 8th Wall's scale and
    * heading: the room distance between the taps over 8th Wall's gives its scale, the turn between
    * the two directions its heading. Returns the calibration after a second tap, null otherwise;
    * throws `CalibrationRefused` before 8th Wall tracks.
@@ -452,22 +448,6 @@ export class EngineTracking implements PhoneTracking {
     return null;
   }
 
-  /**
-   * The person stands at their start again, facing as they did (#127): the room is lined up with
-   * it once more, after drift or a loss, keeping the scale. A tap on the map after a walk then
-   * sets the scale again. Throws `CalibrationRefused` before 8th Wall tracks or with no start.
-   */
-  backAtStart(): void {
-    const engine = this.tracked();
-    const start = this.startSpot;
-    if (!start) throw new CalibrationRefused('Place yourself on the map first');
-    this.place(engine, start.spot, start.heading);
-    this.events.realigned(`back at the start (${start.spot.x.toFixed(2)}, ${start.spot.z.toFixed(2)}), heading ${start.heading.toFixed(2)} rad`);
-  }
-
-  /** Whether the person has placed themselves on the map, so has a start to go back to. */
-  get hasStart(): boolean { return this.startSpot !== null; }
-
   /** 8th Wall's pose now, or `CalibrationRefused` while it does not track. */
   private tracked(): RoomPose {
     const engine = this.engineAt;
@@ -477,7 +457,7 @@ export class EngineTracking implements PhoneTracking {
     return engine;
   }
 
-  /** Places the phone at `spot`, facing `heading` (or as it faces for null), as the person's start. */
+  /** Places the phone at `spot`, facing `heading`, or as it faces for null. */
   private place(engine: RoomPose, spot: { x: number; z: number }, heading: number | null): void {
     // 8th Wall's heading now is that heading in the room.
     if (heading !== null) {
@@ -491,7 +471,6 @@ export class EngineTracking implements PhoneTracking {
     this.turnAtLoss = null;
     this.standingAt = { mark: { id: MAP_SPOT, label: 'spot on the map', aliases: [], ...spot }, at: { ...engine.position } };
     this.latest = this.intoRoom({ position: scaled, orientation: engine.orientation });
-    this.startSpot = { spot: { ...spot }, heading: yawOf(this.latest.orientation) };
     this.events.moved(this.latest);
   }
 
@@ -583,6 +562,7 @@ export class EngineTracking implements PhoneTracking {
     this.scale.restart(false);
     this.uncalibrate();
     this.lineUp({ position: this.scale.toRoom(engine.position), orientation: engine.orientation }, from);
+    this.events.restarted();
   }
 
   /**

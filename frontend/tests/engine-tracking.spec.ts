@@ -225,6 +225,8 @@ test('in measured mode, Recentre makes where the phone is the start again; tappi
   await engineFrame(phone, { x: 1, y: 1.5, z: 0 }, undefined, INITIALIZING);
   await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 });
   await expect(vr.getByTestId('marker-position')).toHaveText('1.00, 1.50, 0.00 m');
+  // The restart opens the map to place the phone again (#129); closed, the room is tapped.
+  await closeMap(phone);
   await phone.mouse.click(195, 300);
   expect((await engineCalls(phone)).recenters).toBe(0);
   // Standing on the start facing the desk, the person recentres: the engine's start is the room's again.

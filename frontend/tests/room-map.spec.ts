@@ -185,37 +185,45 @@ async function placeAndCalibrate(phone: Page): Promise<void> {
   await expect(phone.getByTestId('view-status')).toHaveText('Calibrated · ×2.50 · turned -90°');
 }
 
-test("standing at the start again and tapping I'm at the start lines the room up with it, keeping the scale", async ({ browser }) => {
+test('when 8th Wall restarts, the map opens to place the phone again, and a walk and a tap set the scale again', async ({ browser }) => {
   const { phone, vr } = await phoneAndHeadset(browser);
-  const atStart = phone.getByRole('button', { name: "I'm at the start", exact: true });
-  await expect(atStart).toBeHidden();
   await placeAndCalibrate(phone);
+  await expect(phone.getByTestId('phone-map-prompt')).toBeHidden();
+  // Lost, and 8th Wall restarts at its start: its new world has its own place and scale.
+  await engineFrame(phone, { x: 9, y: 9, z: 9 }, undefined, INITIALIZING);
+  await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 });
 
-  // Back at the start, but 8th Wall has drifted: it puts the phone elsewhere, turned.
-  const turned = { x: 0, y: Math.sin(0.3 / 2), z: 0, w: Math.cos(0.3 / 2) };
-  await engineFrame(phone, { x: 0.4, y: 1.5, z: 1.2 }, turned);
-  await expect(vr.getByTestId('marker-position')).not.toHaveText('-1.00, 1.50, 1.00 m');
-  await atStart.click();
-
-  await expect(phone.getByTestId('view-status')).toHaveText('Lined up with your start');
+  await expect(phone.getByTestId('view-status')).toHaveText('Calibration undone · tap where you are on the map');
+  await expect(phone.getByTestId('phone-map-prompt')).toHaveText('Tracking restarted · tap where you are');
+  await pressOnMap(phone, 0.25, 0.75, { x: 60, y: 0 });
   await expect(vr.getByTestId('marker-position')).toHaveText('-1.00, 1.50, 1.00 m');
-  await expect(vr.getByTestId('presence-phone')).toContainText('heading -1.57 rad');
-  // 8th Wall's 0.2 m forward is still half a metre in the room, toward +x.
-  await engineFrame(phone, { x: 0.4 - 0.2 * Math.sin(0.3), y: 1.5, z: 1.2 - 0.2 * Math.cos(0.3) }, turned);
-  await expect(vr.getByTestId('marker-position')).toHaveText('-0.50, 1.50, 1.00 m');
+  await expect(phone.getByTestId('phone-map-prompt')).toHaveText('Placed · walk 2 m or more and tap where you are, to set the scale');
+  await engineFrame(phone, { x: 0, y: 1.5, z: 0.6 });
+  await pressOnMap(phone, 0.875, 0.75);
+  await expect(phone.getByTestId('view-status')).toHaveText('Calibrated · ×2.50 · turned -90°');
+  await expect(phone.getByRole('button', { name: "I'm at the start", exact: true })).toHaveCount(0);
   await phone.close();
   await vr.close();
 });
 
-test("a restart undoes the calibration, and says to go back to the start", async ({ browser }) => {
-  const { phone, vr } = await phoneAndHeadset(browser);
-  await placeAndCalibrate(phone);
-  await engineFrame(phone, { x: 9, y: 9, z: 9 }, undefined, INITIALIZING);
-  await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 });
+/** The phone pitched `degrees` up (negative: down), as an engine rotation. */
+const pitched = (degrees: number) => {
+  const half = degrees * Math.PI / 360;
+  return { x: Math.sin(half), y: 0, z: 0, w: Math.cos(half) };
+};
 
-  await expect(phone.getByTestId('view-status')).toHaveText("Calibration undone · stand at your start and tap I'm at the start");
-  await phone.getByRole('button', { name: "I'm at the start", exact: true }).click();
-  await expect(vr.getByTestId('marker-position')).toHaveText('-1.00, 1.50, 1.00 m');
+test('pointing the phone steeply at the floor asks to raise it, before tracking is lost', async ({ browser }) => {
+  const { phone, vr } = await phoneAndHeadset(browser);
+  const hint = phone.getByTestId('tilt-hint');
+  await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 }, pitched(-30));
+  await expect(hint).toBeHidden();
+  await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 }, pitched(-50));
+  await expect(hint).toHaveText('Raise the phone a little · pointing at the floor loses tracking');
+  // It stays until the phone is clearly raised, so it does not flicker at the edge.
+  await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 }, pitched(-43));
+  await expect(hint).toBeVisible();
+  await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 }, pitched(-35));
+  await expect(hint).toBeHidden();
   await phone.close();
   await vr.close();
 });
