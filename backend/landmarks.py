@@ -241,7 +241,7 @@ def _least_squares(
     r = residuals(p)
     cost = sum(v * v for v in r)
     for _ in range(steps):
-        columns = []
+        columns: list[list[float]] = []
         for i in range(len(p)):
             nudged = list(p)
             nudged[i] += 1e-6
@@ -396,12 +396,14 @@ def locate(
     shot: RenderedView,
     landmarks: list[Landmark],
     pitch: float,
+    near: Vector | None = None,
 ) -> Located:
-    """Where the camera that took `shot` was, from Qwen's boxes for the map's landmarks."""
+    """Where the camera that took `shot` was, from Qwen's boxes for the map's landmarks; `near`
+    is where it roughly is, as `solve_pose` takes it."""
     labels = sorted({mark.label for mark in landmarks})
     sightings = ask_about_views(client, [shot], find_objects(labels), box_format(labels), on_reply)
     view = shot.view
-    fix = solve_pose(sightings, landmarks, pitch, view.fov_degrees, view.width, view.height)
+    fix = solve_pose(sightings, landmarks, pitch, view.fov_degrees, view.width, view.height, near)
     return Located(fix, sightings)
 
 

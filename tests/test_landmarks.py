@@ -193,7 +193,9 @@ def test_one_object_qwen_names_two_ways_is_one_landmark_that_answers_to_both(mon
         for mark, label in ((cupboard, name), (other, "waste bin")):
             x, y = project(pose, mark.centre) or (0, 0)
             boxes.append((label, (x - 0.03, y - 0.05, x + 0.03, y + 0.05)))
-        fix = solve_pose([*sightings, *boxes], [cupboard, other], PITCH)
+        # Two landmarks: the rough place picks between the poses they fit.
+        near = (TRUE_POSE[0] + 0.3, TRUE_POSE[1], TRUE_POSE[2])
+        fix = solve_pose([*sightings, *boxes], [cupboard, other], PITCH, near=near)
         assert fix is not None and math.dist(fix.position, TRUE_POSE) < 0.01
 
 
