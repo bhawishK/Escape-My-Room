@@ -53,7 +53,11 @@ The pose message is unchanged: a tracked pose carries `reference_space: "room"` 
 Since Issue 59, a phone where the [8th Wall engine](https://github.com/8thwall/engine) can track uses it instead of turning and counted steps:
 - **Tracking:** the engine uses the back camera and motion sensors together, and gives position in metres and the phone's real height above the floor.
 - **Start:** it starts at the room view's starting place, facing the desk.
-- **Camera image:** never drawn.
+- **Camera image (issue 122):** the phone shows AR. The engine draws its back-camera image beneath the room view, which then draws only the room's objects over it: movable ones, presence and outlines. The splat and the furniture it stands for are hidden, since the camera shows the real room; hidden furniture still stops aiming and walking.
+  - **Projection:** the room view takes the engine's own camera projection (`reality.intrinsics`) every time it changes, and the engine is started with the room view's screen size and clipping distances (0.01–100 m), so objects land on their real places.
+  - **Show room model:** a toggle draws the splat faintly (35%) over the camera image, to check how well the room is lined up.
+  - **Room model instead:** counting steps, or while the gaze cursor has the camera, the phone shows the room model as before, never a frozen camera image.
+  - **Reporting:** the tracking summary gives `view_mode` (`ar`, `ghost` or `vr`), and the movement log has a `view` event at each change.
 - **Fallback:** elsewhere, or before the engine loads, the phone counts steps as described above, and Back to start and the step length button appear only then.
 - **Scale (issue 112):** 8th Wall works its scale out from the camera and motion sensors, and was off on the iPhone: it put the phone 0.72 m and then 1.16 m above the floor against a real 1.3–1.4 m, so the room moved 50–85% as far as the person walked.
   - **How it's measured:** over the first 1.5 s of unbroken tracking (at least 5 poses) after each start and each restart, the phone takes the median of the heights 8th Wall reports. The factor is the real height divided by that median, kept between 0.5 and 2.

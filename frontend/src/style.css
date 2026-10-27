@@ -79,7 +79,11 @@ label { display: block; font-size: .9375rem; font-weight: 600; margin-bottom: 6p
 html.room-view-open, html.room-view-open body { overflow: hidden; }
 /* Objects are picked up by pressing and holding: no scrolling, selecting or long-press menu. */
 #scene.room-view canvas { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
-#engine-canvas { position: fixed; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; }
+/* As large as the room view, so the camera image lies exactly beneath it. */
+#engine-canvas { position: fixed; inset: 0; width: 100vw; height: 100dvh; z-index: -1; pointer-events: none; }
+/* Over 8th Wall's camera image the room view draws only the room's objects (#122). */
+html.camera-view #engine-canvas { z-index: 29; }
+html.camera-view #scene.room-view { background: transparent; }
 
 .legend { list-style: none; margin: 0; padding: 0; display: flex; gap: 16px; font-size: .9375rem; color: var(--label-2); }
 .legend li { display: flex; align-items: center; gap: 6px; }

@@ -2,7 +2,7 @@ import type { SplatMesh } from '@sparkjsdev/spark';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { STANDING_EYE_HEIGHT } from './alignment';
-import type { RoomPose } from './phone-view';
+import { VIEW_FAR, VIEW_NEAR, type RoomPose } from './phone-view';
 import type { SplatDrawn } from './tracking-stats';
 import type {
   AlignmentState, Position, PresenceState, Role, RoomEntity, SessionState,
@@ -16,11 +16,21 @@ const emptyRoom = (): SessionState['room'] => ({
 
 const OVERVIEW_FOV = 60;
 const PHONE_VIEW_FOV = 70;
+// How strongly the room model shows over the camera image when it is shown to check the line-up.
+const GHOST_OPACITY = 0.35;
+
+/**
+ * How the phone shows the room: the room model (`vr`), only its objects over the camera image
+ * (`ar`), or those with the model faint over the camera to check the line-up (`ghost`).
+ */
+export type ViewMode = 'vr' | 'ar' | 'ghost';
+/** How each mode shows a room's splat, for tests and the report. */
+const SPLAT_SHOWN: Record<ViewMode, string> = { vr: 'shown', ar: 'hidden', ghost: 'ghost' };
 
 export class DiagnosticScene {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
-  readonly camera = new THREE.PerspectiveCamera(OVERVIEW_FOV, 1, 0.01, 100);
+  readonly camera = new THREE.PerspectiveCamera(OVERVIEW_FOV, 1, VIEW_NEAR, VIEW_FAR);
   private readonly marker: THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>;
   private readonly people = new Map<Role, THREE.Group>();
   private localRole: Role | null = null;
@@ -48,6 +58,12 @@ export class DiagnosticScene {
   private following: RoomPose | null = null;
   private alignment: AlignmentState = { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } };
   private entityRoots = new Map<string, THREE.Object3D>();
+  /** The furniture that never moves, which a splat or the camera image shows instead. */
+  private staticIds = new Set<string>();
+  private mode: ViewMode = 'vr';
+  private readonly backdrop = new THREE.Color('#f5f5f7');
+  /** The engine camera's projection, which the view takes over the camera image so the two match. */
+  private projection: THREE.Matrix4 | null = null;
   private loadedVersion: number | null = null;
   private loadingVersion: number | null = null;
   private loadToken = 0;
@@ -96,7 +112,7 @@ export class DiagnosticScene {
     this.renderer.xr.enabled = true;
     this.camera.position.set(0, 1.6, 2.4);
     this.camera.lookAt(0, 0.6, -1.2);
-    this.scene.background = new THREE.Color('#f5f5f7');
+    this.scene.background = this.backdrop;
     this.scene.add(new THREE.HemisphereLight(0xdff7ff, 0x344156, 2));
     const light = new THREE.DirectionalLight(0xffffff, 2);
     light.position.set(2, 4, 1);
@@ -135,12 +151,13 @@ export class DiagnosticScene {
     this.scene.add(this.control);
     container.append(this.renderer.domElement);
     container.dataset.view = 'overview';
+    container.dataset.mode = this.mode;
     this.resize = () => {
       const width = container.clientWidth;
       const height = container.clientHeight;
       this.renderer.setSize(width, height);
       this.camera.aspect = width / Math.max(height, 1);
-      this.camera.updateProjectionMatrix();
+      this.applyProjection();
     };
     new ResizeObserver(this.resize).observe(container);
     this.resize();
@@ -221,7 +238,7 @@ export class DiagnosticScene {
     const fov = pose ? PHONE_VIEW_FOV : OVERVIEW_FOV;
     if (this.camera.fov !== fov) {
       this.camera.fov = fov;
-      this.camera.updateProjectionMatrix();
+      this.applyProjection();
     }
     if (pose) {
       this.marker.visible = false;
@@ -231,6 +248,59 @@ export class DiagnosticScene {
     } else {
       this.applyView(this.alignment);
     }
+  }
+
+  /**
+   * Shows the room model, or only its objects over the camera image the engine draws beneath this
+   * view, which is then left clear.
+   */
+  setMode(mode: ViewMode): void {
+    if (mode === this.mode) return;
+    this.mode = mode;
+    this.scene.background = mode === 'vr' ? this.backdrop : null;
+    this.container.dataset.mode = mode;
+    this.changedAt = performance.now();
+    this.showModel();
+    this.applyProjection();
+  }
+
+  /**
+   * The engine camera's projection, a column-major 4×4, used over its camera image so the room's
+   * objects land where the image shows their places; null for none.
+   */
+  useProjection(intrinsics: readonly number[] | null): void {
+    this.projection = intrinsics ? new THREE.Matrix4().fromArray(intrinsics) : null;
+    this.changedAt = performance.now();
+    this.applyProjection();
+  }
+
+  private applyProjection(): void {
+    if (this.mode === 'vr' || !this.projection) {
+      this.camera.updateProjectionMatrix();
+      delete this.container.dataset.projection;
+      return;
+    }
+    this.camera.projectionMatrix.copy(this.projection);
+    this.camera.projectionMatrixInverse.copy(this.projection).invert();
+    this.container.dataset.projection = this.camera.projectionMatrix.elements.map(value => value.toFixed(4)).join(',');
+  }
+
+  /**
+   * Shows the splat, and the furniture it stands for, as the mode asks: over the camera image the
+   * real room shows them. Hidden furniture still stops aiming and walking.
+   */
+  private showModel(): void {
+    const model = this.mode !== 'ar';
+    if (this.splat) {
+      this.splat.visible = model;
+      this.splat.opacity = this.mode === 'ghost' ? GHOST_OPACITY : 1;
+    }
+    for (const id of this.staticIds) {
+      const root = this.entityRoots.get(id);
+      if (root) root.visible = model && !this.splat;
+    }
+    this.grid.visible = !this.roomGroup && this.mode === 'vr';
+    this.container.dataset.splat = this.splat ? SPLAT_SHOWN[this.mode] : '';
   }
 
   /** The room entity drawn at a point on the view, 0–1 across and down, or null where there is none. */
@@ -465,15 +535,15 @@ export class DiagnosticScene {
     this.roomGroup = null;
     this.splat?.dispose();
     this.splat = null;
-    this.container.dataset.splat = '';
     this.entityRoots = new Map();
+    this.staticIds = new Set();
     this.pointAt(null);
     this.predicted = null;
     this.smoothed = null;
     this.settling = null;
     this.select(null);
     this.showControl(null);
-    this.grid.visible = true;
+    this.showModel();
   }
 
   setPresenting(active: boolean): void {
@@ -580,21 +650,15 @@ export class DiagnosticScene {
     const group = new THREE.Group();
     group.name = 'prepared-room';
     group.add(...roots.values());
-    if (splat) {
-      // The splat shows the room. Static entities stay, unseen, so aiming still stops at
-      // furniture and walking still keeps to the floor; movable ones are drawn over it.
-      group.add(splat);
-      for (const entity of entities) {
-        const root = roots.get(entity.id);
-        if (root && entity.kind === 'static') root.visible = false;
-      }
-    }
+    // A splat shows the room. Static entities stay, unseen, so aiming still stops at furniture and
+    // walking still keeps to the floor; movable ones are drawn over it.
+    if (splat) group.add(splat);
     this.splat = splat;
-    this.container.dataset.splat = splat ? 'shown' : '';
     this.roomGroup = group;
     this.entityRoots = roots;
+    this.staticIds = new Set(entities.filter(entity => entity.kind === 'static').map(entity => entity.id));
     this.roomAnchor.add(group);
-    this.grid.visible = false;
+    this.showModel();
     // A splat room changes where the overview looks from.
     this.applyView(this.alignment);
   }

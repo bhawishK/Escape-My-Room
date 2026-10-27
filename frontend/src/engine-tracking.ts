@@ -1,10 +1,11 @@
 /**
  * Measured phone tracking from the 8th Wall engine: its back camera and motion sensors together
- * give where the phone is in metres and which way it faces. The camera image is never drawn.
+ * give where the phone is in metres and which way it faces. It draws the camera image on its own
+ * canvas, beneath the room view, which then draws the room's objects over it (#122).
  */
 import * as THREE from 'three';
 import type { PhoneTracking } from './phone-tracking';
-import { PhoneLook, START_EYE, START_VIEW, pitchOf, type RoomPose } from './phone-view';
+import { PhoneLook, START_EYE, START_VIEW, VIEW_FAR, VIEW_NEAR, pitchOf, type RoomPose } from './phone-view';
 import type { Position, RoomLandmark, Rotation, TrackingStatus } from './protocol';
 
 /** One frame of the engine's world tracking. */
@@ -15,6 +16,8 @@ interface Reality {
   trackingStatus?: string;
   /** Why tracking is limited, such as `INITIALIZING`. */
   trackingReason?: string;
+  /** The camera's projection, a column-major 4×4 in the convention Three.js uses. */
+  intrinsics?: number[];
 }
 
 interface PipelineModule {
@@ -33,10 +36,16 @@ export interface Engine {
   stop(): void;
   XrController: {
     configure(options: { scale: 'absolute' | 'responsive' }): void;
-    updateCameraProjectionMatrix(options: { origin: Position; facing: Rotation }): void;
+    updateCameraProjectionMatrix(options: {
+      cam?: { pixelRectWidth: number; pixelRectHeight: number; nearClipPlane: number; farClipPlane: number };
+      origin: Position;
+      facing: Rotation;
+    }): void;
     recenter(): void;
     pipelineModule(): PipelineModule;
   };
+  /** Draws the camera image on the canvas the engine runs on. */
+  GlTextureRenderer: { pipelineModule(): PipelineModule };
   XrDevice: {
     isDeviceBrowserCompatible(options: { allowedDevices: unknown }): boolean;
     incompatibleReasons(options: { allowedDevices: unknown }): unknown[];
@@ -73,6 +82,8 @@ const TOWARD_DESK = { w: 1, x: 0, y: 0, z: 0 };
 interface EngineEvents {
   /** The engine has measured a new pose. */
   moved: (pose: RoomPose) => void;
+  /** The engine's camera projection changed: the room's objects are drawn over its image with it. */
+  projection: (intrinsics: number[]) => void;
   /** Opening the camera: `requesting`, `hasStream`, `hasVideo` or `failed`. */
   camera: (status: string) => void;
   /** The engine's own tracking status and reason changed. */
@@ -232,6 +243,8 @@ export class EngineTracking implements PhoneTracking {
   /** Counts starts and stops, so a start that finishes after a stop does not run the engine. */
   private attempts = 0;
   private latest: RoomPose | null = null;
+  /** The camera projection last reported, to report each change once. */
+  private intrinsics = '';
   /** The engine's last status and reason, to report each change once. */
   private engineStatus = '';
   /** Whether the engine is tracking normally now, and whether it has since it started. */
@@ -275,6 +288,16 @@ export class EngineTracking implements PhoneTracking {
     heldAt = HELD_AT,
   ) {
     this.scale = new ScaleMeter(heldAt);
+    // A turned phone or a browser bar coming and going resizes the room view; the camera image
+    // follows, and the engine reports its camera again for the new size.
+    new ResizeObserver(() => { if (this.running) this.fitCanvas(); }).observe(canvas);
+  }
+
+  /** One canvas pixel to each screen pixel, as the room view draws over it (#109). */
+  private fitCanvas(): void {
+    const { canvas } = this;
+    if (canvas.width !== canvas.clientWidth) canvas.width = canvas.clientWidth;
+    if (canvas.height !== canvas.clientHeight) canvas.height = canvas.clientHeight;
   }
 
   get active(): boolean { return this.running; }
@@ -348,24 +371,37 @@ export class EngineTracking implements PhoneTracking {
     this.scale.restart(true);
     this.uncalibrate();
     this.engineStatus = '';
+    this.intrinsics = '';
     this.normal = false;
     this.everNormal = false;
     this.straighten();
-    const { engine } = this;
+    this.fitCanvas();
+    const { engine, canvas } = this;
     engine.XrController.configure({ scale: 'absolute' });
     engine.clearCameraPipelineModules();
     engine.addCameraPipelineModules([
+      engine.GlTextureRenderer.pipelineModule(),
       engine.XrController.pipelineModule(),
       {
         name: 'escape-room-tracking',
         onCameraStatusChange: ({ status }) => this.events.camera(status),
         onException: error => this.events.error(error instanceof Error ? error.message : String(error)),
         // In metres, x, z and facing start here once scale is known; the engine replaces this y
-        // with the phone's measured height above the floor.
-        onStart: () => engine.XrController.updateCameraProjectionMatrix({ origin: START_EYE, facing: TOWARD_DESK }),
+        // with the phone's measured height above the floor. Its camera covers the room view's
+        // screen and draws as near and far, so the two pictures match.
+        onStart: () => engine.XrController.updateCameraProjectionMatrix({
+          cam: { pixelRectWidth: canvas.width, pixelRectHeight: canvas.height, nearClipPlane: VIEW_NEAR, farClipPlane: VIEW_FAR },
+          origin: START_EYE,
+          facing: TOWARD_DESK,
+        }),
         onUpdate: ({ processCpuResult }) => {
           const reality = processCpuResult.reality;
           if (!reality) return;
+          const intrinsics = reality.intrinsics?.join(',') ?? '';
+          if (intrinsics && intrinsics !== this.intrinsics) {
+            this.intrinsics = intrinsics;
+            this.events.projection([...reality.intrinsics!]);
+          }
           const { position: p, rotation: r } = reality;
           const engineStatus = `${reality.trackingStatus ?? 'unknown'} ${reality.trackingReason ?? 'unknown'}`;
           if (engineStatus !== this.engineStatus) {
