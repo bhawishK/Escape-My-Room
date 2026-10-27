@@ -4,7 +4,7 @@
  * view took to its first measured pose, and how often measured poses arrive. Times are milliseconds
  * since the room view first opened, on this device's clock.
  */
-import type { EngineScale } from './engine-tracking';
+import type { Calibration, EngineScale } from './engine-tracking';
 import type { TrackingMode } from './movement-log';
 import type { TrackingStatus } from './protocol';
 
@@ -51,8 +51,13 @@ export class TrackingStats {
   private readonly openings: Opening[] = [];
   /** When recent measured poses arrived, within the rate window. */
   private readonly poses: number[] = [];
+  /** The calibration by two objects in force, or null (#120). */
+  private calibration: Calibration | null = null;
+  /** How often a restart or recentring undid a calibration. */
+  private undone = 0;
   /** How 8th Wall's distances were last corrected, or null before they were (#112). */
   private scaled: EngineScale | null = null;
+  private scaleStale = false;
   /** When recent frames were drawn, within the rate window. */
   private readonly frames: number[] = [];
 
@@ -110,8 +115,20 @@ export class TrackingStats {
     while (this.poses.length && now - this.poses[0] > RATE_WINDOW_MS) this.poses.shift();
   }
 
+  /** Standing at two objects calibrated 8th Wall, or a restart undid it (null). */
+  calibrated(calibration: Calibration | null): void {
+    if (!calibration && this.calibration) this.undone++;
+    this.calibration = calibration;
+  }
+
   /** 8th Wall's scale was measured. */
-  scale(scale: EngineScale): void { this.scaled = scale; }
+  scale(scale: EngineScale): void {
+    this.scaled = scale;
+    this.scaleStale = false;
+  }
+
+  /** 8th Wall started a new world: its last measured scale no longer applies until it is measured again. */
+  rescaling(): void { this.scaleStale = true; }
 
   /** A frame was drawn. */
   frame(now = performance.now()): void {
@@ -139,6 +156,10 @@ export class TrackingStats {
       pose_rate_hz: Number(this.rate(this.poses, now).toFixed(2)),
       frame_rate_hz: Number(this.rate(this.frames, now).toFixed(2)),
       scale: this.scaled,
+      calibration: this.calibration,
+      calibrations_undone: this.undone,
+      // Which correction 8th Wall's distances have now: two objects, its height, or none yet.
+      scale_in_force: this.calibration ? 'calibration' : this.scaled && !this.scaleStale ? 'height' : 'none',
       splat,
       time_note: 'Times are milliseconds since the room view first opened, on this device.',
     };

@@ -1,0 +1,7 @@
+{
+  "landmarks": [
+    {"id": "desk", "label": "desk", "centre": [0.0, 0.4, -1.2], "seen": 2, "aliases": [], "views": [1, 2]},
+    {"id": "cabinet", "label": "cabinet", "centre": [1.4, 0.6, -1.2], "seen": 2, "aliases": [], "views": [1, 2]},
+    {"id": "door", "label": "door", "centre": [-1.5, 1.0, 1.5], "seen": 2, "aliases": [], "views": [2, 3]}
+  ]
+}

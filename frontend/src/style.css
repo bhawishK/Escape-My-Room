@@ -232,3 +232,16 @@ textarea::placeholder { color: var(--label-2); }
   button, .file-button { transition: none; }
   button:active:not(:disabled), .file-button:active { transform: none; }
 }
+
+/* Calibrating by two objects (#120): the objects to stand at, over the room view. */
+.calibrate-panel {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(29, 29, 31, 0.86);
+  color: #f5f5f7;
+}
+.calibrate-panel[hidden] { display: none; }
+.calibrate-panel p { margin: 0; }
+.calibrate-objects { display: flex; flex-wrap: wrap; gap: 8px; }

@@ -88,6 +88,55 @@ class SplatPlacement(WireModel):
     scale: float = Field(default=1.0, gt=0, le=100)
 
 
+class RoomLandmark(WireModel):
+    """An object the phone can calibrate by (#120): where it stands on the floor."""
+
+    id: str = Field(min_length=1, max_length=64)
+    label: str = Field(min_length=1, max_length=64)
+    # Other names Qwen gave it, shown beside its label so two of one label can be told apart.
+    aliases: list[str] = Field(default_factory=lambda: list[str](), max_length=8)
+    x: float = Field(ge=-100, le=100)
+    z: float = Field(ge=-100, le=100)
+
+
+class _MappedLandmark(BaseModel):
+    """One landmark as `backend.landmarks.save_landmarks` writes it. Read here with validation,
+    rather than through that module, which brings the renderer and Qwen with it."""
+
+    id: str
+    label: str
+    centre: tuple[float, float, float]
+    aliases: list[str] = []
+
+
+class _LandmarkMap(BaseModel):
+    landmarks: list[_MappedLandmark]
+
+
+LANDMARKS_FILE = "landmarks.json"
+
+
+def _load_landmarks(directory: Path) -> list[RoomLandmark]:
+    """The room's landmarks from its landmark map (#110), or none when it has no map."""
+    path = directory / LANDMARKS_FILE
+    if not path.is_file():
+        return []
+    try:
+        mapped = _LandmarkMap.model_validate_json(path.read_text(encoding="utf-8"))
+        return [
+            RoomLandmark(
+                id=mark.id,
+                label=mark.label,
+                aliases=mark.aliases,
+                x=mark.centre[0],
+                z=mark.centre[2],
+            )
+            for mark in mapped.landmarks
+        ]
+    except (OSError, UnicodeError, ValidationError, ValueError) as exc:
+        raise PreparedRoomError(f"Prepared room {LANDMARKS_FILE} is invalid.") from exc
+
+
 class LoadedRoom(BaseModel):
     room_version: int
     entities: list[SceneEntity]
@@ -95,6 +144,8 @@ class LoadedRoom(BaseModel):
     splat_placement: SplatPlacement | None = None
     # A lighter splat for phones, when the room has one (#109); phones draw the full one otherwise.
     splat_phone_url: str | None = None
+    # Objects the phone can calibrate by standing at two of them (#120).
+    landmarks: list[RoomLandmark] = Field(default_factory=lambda: list[RoomLandmark]())
 
 
 class _Entity(Protocol):
@@ -209,11 +260,15 @@ def load_prepared_room(directory: Path) -> LoadedRoom:
     except (OSError, UnicodeError, ValidationError, ValueError, TypeError) as exc:
         raise PreparedRoomError("Prepared room manifest is invalid.") from exc
     try:
-        if isinstance(scene, PreparedScene):
-            return _load_scene(directory, scene)
-        return _load_legacy(directory, scene)
+        loaded = (
+            _load_scene(directory, scene)
+            if isinstance(scene, PreparedScene)
+            else _load_legacy(directory, scene)
+        )
     except AssetError as exc:
         raise PreparedRoomError(str(exc)) from exc
+    loaded.landmarks = _load_landmarks(directory)
+    return loaded
 
 
 def _load_legacy(directory: Path, room: PreparedRoom) -> LoadedRoom:

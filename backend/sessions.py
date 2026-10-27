@@ -11,7 +11,14 @@ from fastapi import WebSocket
 from backend.alignment import Alignment
 from backend.delivery import Outbox
 from backend.grab import grab_offset, grabbed_point, normalize
-from backend.prepared_room import FRAME, QUATERNION_ORDER, UNITS, SceneEntity, SplatPlacement
+from backend.prepared_room import (
+    FRAME,
+    QUATERNION_ORDER,
+    UNITS,
+    RoomLandmark,
+    SceneEntity,
+    SplatPlacement,
+)
 from backend.protocol import (
     MarkerState,
     PoseMessage,
@@ -78,6 +85,8 @@ class PrototypeRoom:
     splat_url: str | None = None
     # A lighter copy for phones, or None when phones draw the full one.
     splat_phone_url: str | None = None
+    # Objects the phone can calibrate by (#120).
+    landmarks: list[RoomLandmark] = field(default_factory=lambda: list[RoomLandmark]())
     splat_placement: SplatPlacement | None = None
     load_error: str | None = None
     loaded_versions: dict[Role, int | None] = field(
@@ -133,6 +142,7 @@ class PrototypeRoom:
                 "entities": [entity.model_dump() for entity in self.entities],
                 "splat_url": self.splat_url if available else None,
                 "splat_phone_url": self.splat_phone_url if available else None,
+                "landmarks": [mark.model_dump() for mark in self.landmarks] if available else [],
                 "splat_placement": self.splat_placement.model_dump()
                 if available and self.splat_placement is not None
                 else None,
