@@ -5,7 +5,6 @@
  * since the room view first opened, on this device's clock.
  */
 import type { Calibration, EngineScale } from './engine-tracking';
-import type { ViewMode } from './scene';
 import type { TrackingMode } from './movement-log';
 import type { TrackingStatus } from './protocol';
 
@@ -61,8 +60,6 @@ export class TrackingStats {
   /** How 8th Wall's distances were last corrected, or null before they were (#112). */
   private scaled: EngineScale | null = null;
   private scaleStale = false;
-  /** How the room view shows the room now, or null before it opened. */
-  private viewMode: ViewMode | null = null;
   /** When recent frames were drawn, within the rate window. */
   private readonly frames: number[] = [];
 
@@ -140,9 +137,6 @@ export class TrackingStats {
     this.scaleStale = false;
   }
 
-  /** The room view shows the room model, or its objects over the camera image. */
-  view(mode: ViewMode): void { this.viewMode = mode; }
-
   /** 8th Wall started a new world: its last measured scale no longer applies until it is measured again. */
   rescaling(): void { this.scaleStale = true; }
 
@@ -178,7 +172,6 @@ export class TrackingStats {
       // Which correction 8th Wall's distances have now: two objects, its height, or none yet.
       scale_in_force: this.calibration ? 'calibration' : this.scaled && !this.scaleStale ? 'height' : 'none',
       splat,
-      view_mode: this.viewMode,
       time_note: 'Times are milliseconds since the room view first opened, on this device.',
     };
   }

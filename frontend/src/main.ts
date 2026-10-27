@@ -13,11 +13,11 @@ import { MovementLog, type TrackingMode } from './movement-log';
 import { StepTracking, type PhoneTracking } from './phone-tracking';
 import { START_EYE, headingOf, pitchOf, type RoomPose } from './phone-view';
 import {
-  NO_PRESENCE, type Position, type PresenceInput, type Role, type RoomLandmark, type Rotation, type SessionState,
+  NO_PRESENCE, type Position, type PresenceInput, type Role, type Rotation, type SessionState,
 } from './protocol';
 import { showsRevision } from './revision';
 import { SessionClient } from './session';
-import { DiagnosticScene, type ViewMode } from './scene';
+import { DiagnosticScene } from './scene';
 import { STEP_LENGTHS } from './step-walk';
 import { floorplan, type Floorplan } from './steps';
 import { XRDiagnostic, xrError, type ControllerSample } from './xr';
@@ -101,7 +101,6 @@ function chooseTracking(): void {
         measuredUnsent = true;
         trackingStats.pose();
       },
-      projection: intrinsics => view?.useProjection(intrinsics),
       camera: status => movementLog.event('camera', status),
       tracking: (status, reason) => {
         trackingStats.engine(status, reason);
@@ -129,8 +128,9 @@ function chooseTracking(): void {
         if (!calibration) {
           // A new world: the height scale is measured again too, and a calibration part done is void.
           trackingStats.rescaling();
-          calibratePanel.hidden = true;
-          element('view-status').textContent = 'Calibration undone · calibrate again for the true scale';
+          element('view-status').textContent = measured?.hasStart ?
+            "Calibration undone · stand at your start and tap I'm at the start" :
+            'Calibration undone · place yourself on the map again';
           // Tracking comes back in the same frame; this message, not the usual one, stays.
           trackingHint = '';
         }
@@ -334,11 +334,12 @@ function controls(): void {
   const engine = tracking === measured ? measured : null;
   const measuring = engine !== null;
   element('recentre').hidden = !engine?.active || engine.paused;
-  element('calibrate').hidden = !engine?.active || engine.paused || roomLandmarks().length < 2;
+  element('at-start').hidden = !engine?.active || engine.paused || !engine.hasStart;
   // The headset chooses where it stands on the page's map; the phone places itself on its own.
   element('page-map').classList.toggle('picking', role === 'vr_solver');
   element('tracking-mode').textContent = !engine ? 'Tracking · step counting' :
     `Tracking · 8th Wall, ${engine.paused ? GAZE_PAUSE : 'measured'}`;
+  if (element('phone-map').classList.contains('expanded')) showPhoneMap();
   // Measured tracking measures the height itself; the depth model is for step counting.
   depthButton.hidden = measuring;
   element('walk-length').textContent = `Step ${steps.stepLength.toFixed(1)} m`;
@@ -352,32 +353,6 @@ function controls(): void {
   for (const id of ['gaze-mode', 'gaze-calibrate', 'gaze-test']) element(id).hidden = !pointing;
   element('aim-reticle').hidden = !roomViewOpen || ownHold() === null;
   gazeModeButton.textContent = gaze.getMode() === 'eyes' ? 'Switch to head' : 'Switch to eyes';
-  showViewMode();
-  ghostButton.hidden = shownMode === 'vr';
-  ghostButton.textContent = shownMode === 'ghost' ? 'Hide room model' : 'Show room model';
-}
-
-/** The room model is shown faintly over the camera image, to check the line-up. */
-let ghost = false;
-let shownMode: ViewMode = 'vr';
-const ghostButton = element<HTMLButtonElement>('ghost-toggle');
-ghostButton.addEventListener('click', () => {
-  ghost = !ghost;
-  controls();
-});
-/**
- * With 8th Wall running, the room view draws the room's objects over its camera image (#122).
- * Otherwise, counting steps or while another feature has the camera, it shows the room model.
- */
-function showViewMode(): void {
-  const camera = roomViewOpen && tracking === measured && measured.active && !measured.paused;
-  const mode: ViewMode = !camera ? 'vr' : ghost ? 'ghost' : 'ar';
-  if (mode === shownMode) return;
-  shownMode = mode;
-  view?.setMode(mode);
-  document.documentElement.classList.toggle('camera-view', mode !== 'vr');
-  trackingStats.view(mode);
-  movementLog.event('view', mode);
 }
 
 /** Shows the room full screen on the phone, looking from the phone's place in the room. */
@@ -386,6 +361,9 @@ function setRoomView(open: boolean): void {
   roomViewOpen = open;
   if (open) movementLog.begin();
   else if (wasOpen) trackingStats.closed();
+  // Opening the room view with 8th Wall, the person first places themselves on the map (#127).
+  if (open && !wasOpen && tracking === measured && !measured.hasStart) openPhoneMap(true);
+  if (!open) openPhoneMap(false);
   if (open !== wasOpen) movementLog.event('room view', open ? 'opened' : 'closed');
   roomViewHud.hidden = !open;
   element('scene').classList.toggle('room-view', open);
@@ -403,7 +381,6 @@ function setRoomView(open: boolean): void {
     if (wasTracking && connected) publishPose(null);
     view?.follow(null);
   }
-  showViewMode();
 }
 
 function presenceLabel(who: Role, next: SessionState): string {
@@ -483,13 +460,17 @@ function applyState(next: SessionState): void {
   roomStatus.textContent = roomLabel(next, false);
   void view?.syncRoom(next).then(result => {
     if (!result || state?.room.room_version !== result.version) return;
-    if (result.acknowledge) client.sendRoomLoaded(result.version);
+    if (result.acknowledge) {
+      client.sendRoomLoaded(result.version);
+      movementLog.event('room', `loaded version ${result.version}`);
+    }
     roomStatus.dataset.available = 'true';
     roomStatus.textContent = roomLabel(state ?? next, true);
   }).catch(error => {
     const message = error instanceof Error ? error.message : 'The prepared room could not be loaded.';
     roomStatus.dataset.available = 'false';
     roomStatus.textContent = message;
+    movementLog.event('room', message);
     showError(message);
   });
   const p = next.marker.position;
@@ -829,19 +810,29 @@ const phoneMap = new RoomMap(element('phone-map'), 'phone-map', { pick: placeOnM
 /** The room's map on the page, where the headset chooses where it stands. */
 const pageMap = new RoomMap(element('page-map'), 'page-map', { pick: standOnMap });
 const phoneMapRoot = element('phone-map');
+/** What the map last said after a tap, such as why it was refused; null for its usual prompt. */
+let mapReply: string | null = null;
 function openPhoneMap(open: boolean): void {
-  const engine = tracking === measured && measured?.active ? measured : null;
+  mapReply = null;
   phoneMapRoot.classList.toggle('expanded', open);
-  phoneMapRoot.classList.toggle('picking', open && engine !== null);
   element('phone-map-close').hidden = !open;
-  const prompt = element('phone-map-prompt');
-  prompt.hidden = !open;
-  prompt.textContent = !engine ? 'Placing on the map needs 8th Wall tracking' :
-    engine.placedOnMap ? 'Placed · walk 2 m or more and tap where you are, to set the scale' :
-    'Tap where you stand, and drag the way you face';
+  element('phone-map-prompt').hidden = !open;
+  if (open) showPhoneMap();
+  else phoneMapRoot.classList.remove('picking');
 }
+/** The open map's prompt, and whether it takes taps: 8th Wall may start after it opened. */
+function showPhoneMap(): void {
+  const engine = tracking === measured && measured?.active ? measured : null;
+  phoneMapRoot.classList.toggle('picking', engine !== null);
+  element('phone-map-prompt').textContent = !engine ? 'Placing on the map needs 8th Wall tracking' :
+    mapReply ?? (engine.placedOnMap ? 'Placed · walk 2 m or more and tap where you are, to set the scale' :
+      'Place yourself: tap where you stand, and drag the way you face');
+}
+// Only a tap begun on the small map opens it: the tap that calibrates closes it, then ends here.
+let mapTappedSmall = false;
+phoneMapRoot.addEventListener('pointerdown', () => { mapTappedSmall = !phoneMapRoot.classList.contains('expanded'); });
 phoneMapRoot.addEventListener('click', () => {
-  if (!phoneMapRoot.classList.contains('expanded')) openPhoneMap(true);
+  if (mapTappedSmall && !phoneMapRoot.classList.contains('expanded')) openPhoneMap(true);
 });
 element('phone-map-close').addEventListener('click', event => {
   event.stopPropagation();
@@ -850,24 +841,22 @@ element('phone-map-close').addEventListener('click', event => {
 });
 /** The person taps where they stand on the phone's map: the phone is placed there (#124). */
 function placeOnMap(spot: Spot, heading: number | null): void {
-  const prompt = element('phone-map-prompt');
-  if (tracking !== measured || !measured.active) {
-    prompt.textContent = 'Placing on the map needs 8th Wall tracking';
-    return;
-  }
+  if (tracking !== measured || !measured.active) return;
   try {
     // A held object stays where it was; the room moves to where the person says they are.
     endHold();
     const calibration = measured.placeAt(spot, heading);
+    mapReply = null;
     if (!calibration) {
-      prompt.textContent = 'Placed · walk 2 m or more and tap where you are, to set the scale';
+      showPhoneMap();
       return;
     }
     openPhoneMap(false);
     element('view-status').textContent = `Calibrated · ×${calibration.scale.toFixed(2)} · turned ${calibration.turn_deg}°`;
   } catch (error) {
     if (!(error instanceof CalibrationRefused)) throw error;
-    prompt.textContent = error.message;
+    mapReply = error.message;
+    showPhoneMap();
   }
 }
 /**
@@ -888,54 +877,17 @@ function standOnMap(spot: Spot, heading: number | null): void {
     origin: { x: cosine * x + sine * z + spot.x, y, z: -sine * x + cosine * z + spot.z },
   });
 }
-/** The room's objects to calibrate by. */
-function roomLandmarks(): RoomLandmark[] {
-  return state?.room.landmarks ?? [];
-}
-const calibratePanel = element('calibrate-panel');
-const calibratePrompt = element('calibrate-prompt');
-/** Shows the objects to stand at, one button each, with what to do now. */
-function showCalibration(prompt: string): void {
-  calibratePrompt.textContent = prompt;
-  const objects = element('calibrate-objects');
-  const names = roomLandmarks().map(mark => [mark.label, ...mark.aliases].join(' / '));
-  objects.replaceChildren(...roomLandmarks().map((mark, index) => {
-    const button = document.createElement('button');
-    button.className = 'secondary';
-    // Qwen named the hallway's cupboard a door too: its other names tell the two doors apart.
-    const name = names[index];
-    const same = names.slice(0, index).filter(other => other === name).length;
-    const shown = same ? `${name} ${same + 1}` : name;
-    button.textContent = `${shown.charAt(0).toUpperCase()}${shown.slice(1)}`;
-    button.addEventListener('click', () => standAt(mark));
-    return button;
-  }));
-  calibratePanel.hidden = false;
-}
-function standAt(mark: RoomLandmark): void {
+/** Standing at their start again, the person lines the room up with it once more (#127). */
+element('at-start').addEventListener('click', () => {
   if (!measured) return;
   try {
-    const calibration = measured.markAt(mark);
-    if (!calibration) {
-      calibratePrompt.textContent = 'Now walk to another and tap it';
-      return;
-    }
-    calibratePanel.hidden = true;
-    // A held object stays where it was; the room moves to its true place.
     endHold();
-    element('view-status').textContent = `Calibrated · ×${calibration.scale.toFixed(2)} · turned ${calibration.turn_deg}°`;
+    measured.backAtStart();
+    element('view-status').textContent = 'Lined up with your start';
   } catch (error) {
     if (!(error instanceof CalibrationRefused)) throw error;
-    calibratePrompt.textContent = error.message;
+    element('view-status').textContent = error.message;
   }
-}
-element('calibrate').addEventListener('click', () => {
-  measured?.cancelCalibration();
-  showCalibration('Stand at one of these, on the side facing the other you will walk to, and tap it');
-});
-element('calibrate-cancel').addEventListener('click', () => {
-  measured?.cancelCalibration();
-  calibratePanel.hidden = true;
 });
 element('walk-length').addEventListener('click', () => {
   steps.stepLength = STEP_LENGTHS[(STEP_LENGTHS.indexOf(steps.stepLength as typeof STEP_LENGTHS[number]) + 1) % STEP_LENGTHS.length];

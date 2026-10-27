@@ -1,5 +1,5 @@
 import { type Browser, type Page, expect, test } from '@playwright/test';
-import { engineFrame, grantMotionPermission, useFakeEngine } from './fixtures/fake-engine';
+import { INITIALIZING, engineFrame, grantMotionPermission, useFakeEngine } from './fixtures/fake-engine';
 
 /**
  * The room's 2D map (#124). The stand-in room (port 8771) has no map image, so its floor (4 m round
@@ -65,9 +65,10 @@ async function pressOnMap(page: Page, x: number, y: number, drag = { x: 0, y: 0 
 
 test('tapping where you stand and dragging the way you face places the phone there', async ({ browser }) => {
   const { phone, vr } = await phoneAndHeadset(browser);
+  // The phone view opens on the map, which asks the person to place themselves (#127).
+  await expect(phone.getByTestId('phone-map-prompt')).toHaveText('Place yourself: tap where you stand, and drag the way you face');
+  await expect(phone.getByRole('button', { name: 'Calibrate', exact: true })).toHaveCount(0);
   await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 });
-  await phone.getByTestId('phone-map').click();
-  await expect(phone.getByTestId('phone-map-prompt')).toHaveText('Tap where you stand, and drag the way you face');
 
   // A quarter of the way across and three quarters down is (-1, 1); dragging right faces +x.
   await pressOnMap(phone, 0.25, 0.75, { x: 60, y: 0 });
@@ -82,7 +83,6 @@ test('tapping where you stand and dragging the way you face places the phone the
 test('a second tap after walking sets the scale', async ({ browser }) => {
   const { phone, vr } = await phoneAndHeadset(browser);
   await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 });
-  await phone.getByTestId('phone-map').click();
   await pressOnMap(phone, 0.25, 0.75, { x: 60, y: 0 });
   // The map is closed to walk, and opened again to tap: the first tap is kept.
   await phone.getByRole('button', { name: 'Close map', exact: true }).click();
@@ -129,14 +129,12 @@ test('a player off the map is kept at its edge, so they never disappear', async 
 test('after tracking is lost and comes back, a tap on the map places the phone again', async ({ browser }) => {
   const { phone, vr } = await phoneAndHeadset(browser);
   await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 });
-  await phone.getByTestId('phone-map').click();
   await pressOnMap(phone, 0.25, 0.75, { x: 60, y: 0 });
   await expect(vr.getByTestId('marker-position')).toHaveText('-1.00, 1.50, 1.00 m');
   // Lost; 8th Wall restarts at its start, so the room is no longer where the person is.
   await engineFrame(phone, { x: 9, y: 9, z: 9 }, undefined, { trackingStatus: 'LIMITED', trackingReason: 'INITIALIZING' });
   await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 });
 
-  await phone.getByTestId('phone-map').click();
   await pressOnMap(phone, 0.5, 0.25, { x: 0, y: -60 });
   await expect(vr.getByTestId('marker-position')).toHaveText('0.00, 1.50, -1.00 m');
   await expect(vr.getByTestId('presence-phone')).toContainText('heading 0.00 rad');
@@ -167,4 +165,57 @@ test('a headset tap without a drag keeps the way it faces', async ({ page }) => 
   // ...then a plain tap elsewhere moves the player but keeps them facing +x.
   await page.mouse.click(box.x + 0.75 * box.width, box.y + 0.25 * box.height);
   await expect(page.getByTestId('alignment-status')).toHaveText('Aligned · yaw -1.57 rad · origin 1.00, 0.00, -1.00');
+});
+
+test('a tap before 8th Wall tracks says to wait', async ({ browser }) => {
+  const { phone, vr } = await phoneAndHeadset(browser);
+  await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 }, undefined, INITIALIZING);
+  await pressOnMap(phone, 0.25, 0.75);
+  await expect(phone.getByTestId('phone-map-prompt')).toHaveText('Wait until 8th Wall is tracking, then tap again');
+  await phone.close();
+  await vr.close();
+});
+
+/** Places the phone at (-1, 1) facing +x, walks 1 m forward, and taps (1.5, 1): ×2.5, turned -90°. */
+async function placeAndCalibrate(phone: Page): Promise<void> {
+  await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 });
+  await pressOnMap(phone, 0.25, 0.75, { x: 60, y: 0 });
+  await engineFrame(phone, { x: 0, y: 1.5, z: 0.6 });
+  await pressOnMap(phone, 0.875, 0.75);
+  await expect(phone.getByTestId('view-status')).toHaveText('Calibrated · ×2.50 · turned -90°');
+}
+
+test("standing at the start again and tapping I'm at the start lines the room up with it, keeping the scale", async ({ browser }) => {
+  const { phone, vr } = await phoneAndHeadset(browser);
+  const atStart = phone.getByRole('button', { name: "I'm at the start", exact: true });
+  await expect(atStart).toBeHidden();
+  await placeAndCalibrate(phone);
+
+  // Back at the start, but 8th Wall has drifted: it puts the phone elsewhere, turned.
+  const turned = { x: 0, y: Math.sin(0.3 / 2), z: 0, w: Math.cos(0.3 / 2) };
+  await engineFrame(phone, { x: 0.4, y: 1.5, z: 1.2 }, turned);
+  await expect(vr.getByTestId('marker-position')).not.toHaveText('-1.00, 1.50, 1.00 m');
+  await atStart.click();
+
+  await expect(phone.getByTestId('view-status')).toHaveText('Lined up with your start');
+  await expect(vr.getByTestId('marker-position')).toHaveText('-1.00, 1.50, 1.00 m');
+  await expect(vr.getByTestId('presence-phone')).toContainText('heading -1.57 rad');
+  // 8th Wall's 0.2 m forward is still half a metre in the room, toward +x.
+  await engineFrame(phone, { x: 0.4 - 0.2 * Math.sin(0.3), y: 1.5, z: 1.2 - 0.2 * Math.cos(0.3) }, turned);
+  await expect(vr.getByTestId('marker-position')).toHaveText('-0.50, 1.50, 1.00 m');
+  await phone.close();
+  await vr.close();
+});
+
+test("a restart undoes the calibration, and says to go back to the start", async ({ browser }) => {
+  const { phone, vr } = await phoneAndHeadset(browser);
+  await placeAndCalibrate(phone);
+  await engineFrame(phone, { x: 9, y: 9, z: 9 }, undefined, INITIALIZING);
+  await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 });
+
+  await expect(phone.getByTestId('view-status')).toHaveText("Calibration undone · stand at your start and tap I'm at the start");
+  await phone.getByRole('button', { name: "I'm at the start", exact: true }).click();
+  await expect(vr.getByTestId('marker-position')).toHaveText('-1.00, 1.50, 1.00 m');
+  await phone.close();
+  await vr.close();
 });

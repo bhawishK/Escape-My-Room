@@ -90,3 +90,13 @@ export const INITIALIZING = { trackingStatus: 'LIMITED', trackingReason: 'INITIA
 export async function engineCalls(page: Page): Promise<EngineCalls> {
   return page.evaluate(() => (window as unknown as { fakeEngine: { calls: EngineCalls } }).fakeEngine.calls);
 }
+
+/**
+ * Closes the room's map, which opens with the room view until the person has placed themselves
+ * on it (#127), so a test can reach the buttons beneath it.
+ */
+export async function closeMap(page: Page): Promise<void> {
+  await page.locator('#room-view-hud').waitFor();
+  const close = page.getByRole('button', { name: 'Close map', exact: true });
+  if (await close.isVisible()) await close.click();
+}
