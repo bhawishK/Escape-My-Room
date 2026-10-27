@@ -55,6 +55,7 @@ Since Issue 59, a phone where the [8th Wall engine](https://github.com/8thwall/e
 - **Start:** it starts at the room view's starting place, facing the desk.
 - **Camera image:** never drawn.
 - **Fallback:** elsewhere, or before the engine loads, the phone counts steps as described above, and Back to start and the step length button appear only then.
+- **Choosing step counting:** add `?tracking=steps` to the link (for example `https://…trycloudflare.com/?tracking=steps`) to count steps even where the engine could track, to compare the two on the same phone. The tracking summary in Send log gives the reason as "step counting chosen in the link".
 - **Version:** the engine is pinned to `@8thwall/engine-binary@1.0.0`.
 - **Credits:** the room view carries the credits its licence requires.
 
