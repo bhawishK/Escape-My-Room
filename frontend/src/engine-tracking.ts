@@ -108,6 +108,10 @@ export class EngineTracking implements PhoneTracking {
   private normal = false;
   private everNormal = false;
   private reported: TrackingStatus = 'inactive';
+  /** Stopped so another feature can use a camera, until `resume`. */
+  private pausedForCamera = false;
+  /** A start is waiting on its permission prompt. */
+  private starting = false;
   /**
    * Turns (about the vertical) and then shifts the engine's poses into the room. After a loss the
    * engine restarts at the starting viewpoint, wherever the phone really is, so this lines it up
@@ -129,13 +133,46 @@ export class EngineTracking implements PhoneTracking {
 
   get active(): boolean { return this.running; }
 
+  /** Stopped for another camera, until `resume`; the phone runs one camera at a time. */
+  get paused(): boolean { return this.pausedForCamera; }
+
   /**
    * `inactive` until the engine first tracks normally, since its poses mean nothing while it works
-   * out scale; then `tracked`, or `lost` while it is limited, with the view held where it was.
+   * out scale; then `tracked`, or `lost` while it is limited or paused, with the view held.
    */
   get status(): TrackingStatus {
+    if (this.pausedForCamera) return 'lost';
     if (!this.running || !this.everNormal) return 'inactive';
     return this.normal ? 'tracked' : 'lost';
+  }
+
+  /**
+   * Stops the engine so another feature can use a camera, including a start still waiting on its
+   * permission prompt. The phone counts as lost, holding the view where it was, until `resume`;
+   * `hint` says why.
+   */
+  pause(hint: string): void {
+    if (this.pausedForCamera || (!this.running && !this.starting)) return;
+    // A start still waiting on its prompt sees this and does not run the engine.
+    this.attempts++;
+    if (this.running) this.engine.stop();
+    this.starting = false;
+    // Still this phone's tracking, only stopped for now, so `stop` ends it.
+    this.running = true;
+    this.pausedForCamera = true;
+    this.reported = 'lost';
+    this.events.status('lost', hint);
+  }
+
+  /**
+   * Starts the engine again after a pause. It restarts at the starting viewpoint, so the room is
+   * recentred there.
+   */
+  async resume(): Promise<void> {
+    if (!this.pausedForCamera) return;
+    this.pausedForCamera = false;
+    this.running = false;
+    await this.start();
   }
 
   /**
@@ -145,6 +182,7 @@ export class EngineTracking implements PhoneTracking {
   async start(): Promise<void> {
     if (this.running) return;
     const attempt = ++this.attempts;
+    this.starting = true;
     const motion = (DeviceMotionEvent as unknown as { requestPermission?: () => Promise<string> }).requestPermission;
     await Promise.all([
       // Without turn readings, a loss is lined up again as if the phone had not turned.
@@ -159,6 +197,7 @@ export class EngineTracking implements PhoneTracking {
       if (!this.running) this.look.stop();
       return;
     }
+    this.starting = false;
     this.latest = null;
     this.engineStatus = '';
     this.normal = false;
@@ -225,9 +264,12 @@ export class EngineTracking implements PhoneTracking {
 
   stop(): void {
     this.attempts++;
+    this.starting = false;
     this.look.stop();
     if (!this.running) return;
-    this.engine.stop();
+    // A paused engine is stopped already.
+    if (!this.pausedForCamera) this.engine.stop();
+    this.pausedForCamera = false;
     this.running = false;
   }
 

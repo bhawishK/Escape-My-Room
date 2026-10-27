@@ -71,9 +71,20 @@ export class TrackingStats {
   /** The engine's own status and reason, such as `LIMITED EXCESSIVE_MOTION`. */
   engine(status: string, reason: string): void { this.engineReason = `${status} ${reason}`; }
 
-  /** Tracking is now `status`; without a reason, the engine's own is given. Only changes are kept. */
+  /** The reason for the engine's next status change, given before it happens, such as a pause. */
+  nextReason(reason: string): void { this.engineReason = reason; }
+
+  /** The engine starts again, so its earlier reasons no longer apply. */
+  restarted(): void { this.engineReason = ''; }
+
+  /**
+   * Tracking is now `status`; without a reason, the engine's own is given. A change of status or
+   * of reason is kept, so a pause while already lost is still recorded.
+   */
   status(status: TrackingStatus, reason = this.engineReason || 'starting', now = performance.now()): void {
-    if (status === this.trackingStatus || !this.current) return;
+    if (!this.current) return;
+    const last = this.statusChanges.at(-1);
+    if (status === this.trackingStatus && reason === last?.reason) return;
     this.trackingStatus = status;
     this.keep(this.statusChanges, { at_ms: this.time(now), mode: this.current.mode, status, reason });
   }

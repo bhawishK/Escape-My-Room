@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
+import { fakeCameras, liveCameras } from './fixtures/cameras';
 
 test('phone sees VR connect and disconnect without session IDs or simulator controls', async ({ browser }) => {
   const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -133,27 +134,6 @@ test('a refused camera permission for the gaze cursor is explained', async ({ pa
   await expect(page.getByRole('button', { name: 'Calibrate', exact: true })).toBeHidden();
   await expect(page.getByLabel('Front camera')).toBeHidden();
 });
-
-/** Cameras that play a blank picture, remembering which way each was asked to face. */
-function fakeCameras(): void {
-  // The canvas is kept, so its track only ends when the page stops it.
-  const opened: { facing: string; stream: MediaStream; canvas: HTMLCanvasElement }[] = [];
-  Object.assign(window, { openedCameras: opened });
-  Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { value: async (constraints: MediaStreamConstraints) => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 640;
-    canvas.height = 480;
-    canvas.getContext('2d')!.fillRect(0, 0, 640, 480);
-    const stream = canvas.captureStream(10);
-    opened.push({ facing: JSON.stringify((constraints.video as MediaTrackConstraints).facingMode), stream, canvas });
-    return stream;
-  } });
-}
-/** Which cameras are still running: "front", "back", or both. */
-const liveCameras = (page: Page) => page.evaluate(() =>
-  (window as unknown as { openedCameras: { facing: string; stream: MediaStream }[] }).openedCameras
-    .filter(camera => camera.stream.getTracks().some(track => track.readyState === 'live'))
-    .map(camera => (camera.facing.includes('environment') ? 'back' : 'front')));
 
 test('a refused back camera for measuring the height is explained', async ({ page }) => {
   await page.addInitScript(() => Object.defineProperty(navigator, 'mediaDevices', { value: {
