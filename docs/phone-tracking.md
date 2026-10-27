@@ -72,6 +72,12 @@ Since Issue 59, a phone where the [8th Wall engine](https://github.com/8thwall/e
   - **When it's undone:** a restart after a loss, or Recentre, undoes it, because 8th Wall starts a new world with a new scale. The phone says to calibrate again.
   - **Refusals:** taps before tracking, objects closer than 2 m (less than 1.2 m to measure on, once the standing step is taken off), or no walk between the taps are refused with what to do.
   - **Reporting:** the calibration is in the tracking summary and Send log, with `scale_in_force` (calibration, height or none) and how often one was undone.
+- **The room map (issue 124):** both devices always show a 2D map of the room. It has the room's objects as icons (from `landmarks.json`, plus the movable box) and the players as dots with an arrow the way each faces. A player off the map is kept at its edge, faded.
+  - **Where it appears:** on the phone, in the top right of the room view; on the page, as a card.
+  - **The map image:** a splat room's map is drawn from above when the room is built (`python -m backend.room_map ROOM`, or by `build_room.py`). It's cut at waist height and leaves out the large stray splats, so the floor, walls and objects show rather than the ceiling. A room without a map image shows its floor and furniture as outlines.
+  - **Placing the phone:** tap the phone's map to open it, then press where you stand and drag the way you face. The phone is placed there, which replaces the fixed start spot and works again after any loss. Walk at least 2 m and tap where you are again, and the two points also set 8th Wall's scale and heading, as two objects do (#120).
+  - **The headset:** on the page's map, press where you want to stand and drag the way to face; the headset's alignment puts the player there.
+  - **Reporting:** placements are in the tracking summary (`map_placements`) and the movement log.
 - **Choosing step counting:** add `?tracking=steps` to the link (for example `https://…trycloudflare.com/?tracking=steps`) to count steps even where the engine could track, to compare the two on the same phone. The tracking summary in Send log gives the reason as "step counting chosen in the link".
 - **Version:** the engine is pinned to `@8thwall/engine-binary@1.0.0`.
 - **Credits:** the room view carries the credits its licence requires.

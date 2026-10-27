@@ -16,6 +16,7 @@ from backend.prepared_room import (
     QUATERNION_ORDER,
     UNITS,
     RoomLandmark,
+    RoomMap,
     SceneEntity,
     SplatPlacement,
 )
@@ -85,6 +86,8 @@ class PrototypeRoom:
     splat_url: str | None = None
     # A lighter copy for phones, or None when phones draw the full one.
     splat_phone_url: str | None = None
+    # The room seen from above (#124).
+    map: RoomMap | None = None
     # Objects the phone can calibrate by (#120).
     landmarks: list[RoomLandmark] = field(default_factory=lambda: list[RoomLandmark]())
     splat_placement: SplatPlacement | None = None
@@ -143,6 +146,7 @@ class PrototypeRoom:
                 "splat_url": self.splat_url if available else None,
                 "splat_phone_url": self.splat_phone_url if available else None,
                 "landmarks": [mark.model_dump() for mark in self.landmarks] if available else [],
+                "map": self.map.model_dump() if available and self.map else None,
                 "splat_placement": self.splat_placement.model_dump()
                 if available and self.splat_placement is not None
                 else None,

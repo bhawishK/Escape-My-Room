@@ -64,6 +64,11 @@
             <p id="error" class="error-message" role="alert" hidden></p>
           </div>
           <div class="card">
+            <h3 class="card-title">Room map</h3>
+            <div id="page-map"></div>
+            <p class="hint">Objects are icons and players are dots. On the headset, press where you want to stand and drag the way to face.</p>
+          </div>
+          <div class="card">
             <h3 class="card-title">Status</h3>
             <dl class="status-list">
               <div><dt>Headset</dt><dd><p id="vr-status" data-testid="vr-status" class="device-status" role="status">Connect to see VR device status</p></dd></div>
@@ -100,6 +105,10 @@
           <p id="tracking-mode" data-testid="tracking-mode" class="hud-mode"></p>
         </div>
         <p id="view-status" data-testid="view-status" class="hud-status" role="status">Turning off</p>
+      </div>
+      <div id="phone-map" class="room-map mini">
+        <p id="phone-map-prompt" data-testid="phone-map-prompt" class="room-map-prompt" hidden></p>
+        <button id="phone-map-close" class="secondary" hidden>Close map</button>
       </div>
       <div class="hud-buttons">
         <button id="recentre" class="secondary" hidden>Recentre</button>

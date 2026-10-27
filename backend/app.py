@@ -135,6 +135,7 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
         room.splat_url = prepared.splat_url
         room.splat_phone_url = prepared.splat_phone_url
         room.landmarks = list(prepared.landmarks)
+        room.map = prepared.map
         room.splat_placement = prepared.splat_placement
 
     app = FastAPI(title="Escape My Room prototype")
