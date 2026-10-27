@@ -44,8 +44,6 @@ let releasing: number | null = null;
 const motion = new MotionStats();
 /** How the phone's tracking behaved, for the diagnostic report. */
 const trackingStats = new TrackingStats();
-/** The engine's own last status and reason, given as the reason for each tracking-status change. */
-let engineReason = '';
 /** How long a press on the selected object lasts before it is picked up, so a tap is not. */
 const PICK_UP_MS = 300;
 /** While carrying, the phone tells Python where it is and faces this often, so the object follows. */
@@ -93,11 +91,11 @@ function chooseTracking(): void {
       },
       camera: status => movementLog.event('camera', status),
       tracking: (status, reason) => {
-        engineReason = `${status} ${reason}`;
-        movementLog.event('engine tracking', engineReason);
+        trackingStats.engine(status, reason);
+        movementLog.event('engine tracking', `${status} ${reason}`);
       },
       status: (status, hint) => {
-        trackingStats.status(status, engineReason || 'starting');
+        trackingStats.status(status);
         // Only a tracking hint is replaced on recovery; other messages are left alone.
         if (hint) element('view-status').textContent = hint;
         else if (trackingHint) element('view-status').textContent = viewInstruction();
@@ -113,8 +111,9 @@ function chooseTracking(): void {
       tracking = measured;
     }
   }
-  trackingStats.mode(engine ? 'measured' : 'steps', engine ? null : engineUnavailable());
-  const mode = engine ? 'measured' : `steps · ${engineUnavailable()}`;
+  const unavailable = engine ? null : engineUnavailable();
+  trackingStats.mode(engine ? 'measured' : 'steps', unavailable);
+  const mode = engine ? 'measured' : `steps · ${unavailable}`;
   if (mode !== loggedMode) movementLog.event('mode', mode);
   loggedMode = mode;
 }
@@ -151,9 +150,9 @@ function publishPose(pose: RoomPose | null): void {
  * and only allows it during the tap that asks.
  */
 function startMotion(): void {
+  // Opening the room view starts tracking, so the time to the first pose counts from here.
+  trackingStats.opened();
   chooseTracking();
-  // The engine starts over, so its earlier reasons no longer apply.
-  engineReason = '';
   void tracking.start().then(() => {
     // The engine reports its own start, through its status event.
     if (tracking !== steps) return;
@@ -269,12 +268,8 @@ function controls(): void {
 function setRoomView(open: boolean): void {
   const wasOpen = roomViewOpen;
   roomViewOpen = open;
-  if (open) {
-    movementLog.begin();
-    trackingStats.opened();
-  } else if (wasOpen) {
-    trackingStats.status('inactive', 'room view closed');
-  }
+  if (open) movementLog.begin();
+  else if (wasOpen) trackingStats.closed();
   if (open !== wasOpen) movementLog.event('room view', open ? 'opened' : 'closed');
   roomViewHud.hidden = !open;
   element('scene').classList.toggle('room-view', open);

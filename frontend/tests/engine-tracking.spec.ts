@@ -1,7 +1,7 @@
 import { type Page, expect, test } from '@playwright/test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { INITIALIZING, engineCalls, engineFrame, useFakeEngine } from './fixtures/fake-engine';
+import { INITIALIZING, engineCalls, engineFrame, grantMotionPermission, useFakeEngine } from './fixtures/fake-engine';
 
 test('the phone sends its movement log to Python, which saves it for reading after a device check', async ({ page }) => {
   await useFakeEngine(page);
@@ -296,9 +296,7 @@ test('the diagnostic report records how measured tracking behaved', async ({ pag
 test('the diagnostic report says when the phone counts steps instead, and why', async ({ page }) => {
   // No engine: the phone falls back to turning and counted steps.
   await page.route('**/@8thwall/**', route => route.abort());
-  await page.addInitScript(() => {
-    for (const event of [DeviceOrientationEvent, DeviceMotionEvent]) Object.assign(event, { requestPermission: async () => 'granted' });
-  });
+  await grantMotionPermission(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
   await expect(page.locator('#scene')).toHaveAttribute('data-view', 'phone');
@@ -309,4 +307,37 @@ test('the diagnostic report says when the phone counts steps instead, and why', 
   expect(tracking.fallback_reason).toBe('engine not loaded');
   expect(tracking.first_tracked_pose_ms).toBeNull();
   expect(tracking.pose_rate_hz).toBe(0);
+});
+
+test('each opening of the room view is timed to its own first pose, and every mode is kept', async ({ page }) => {
+  await useFakeEngine(page);
+  await page.goto('/');
+  const before = (await downloadReport(page)).motion.tracking;
+  // Nothing has started: no mode is claimed yet.
+  expect(before.mode).toBeNull();
+  expect(before.mode_changes).toEqual([]);
+
+  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await expect(page.locator('#scene')).toHaveAttribute('data-view', 'phone');
+  await engineFrame(page, { x: 0, y: 1.6, z: 1.6 });
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
+  await page.getByRole('button', { name: 'Open room view', exact: true }).click();
+  await page.waitForTimeout(300);
+  await engineFrame(page, { x: 0, y: 1.6, z: 1.2 });
+
+  const tracking = (await downloadReport(page)).motion.tracking;
+  const openings = tracking.openings as { opened_at_ms: number; first_tracked_pose_ms: number | null }[];
+  expect(openings).toHaveLength(2);
+  expect(openings[1].opened_at_ms).toBeGreaterThan(openings[0].opened_at_ms);
+  // The second opening's first pose came 300 ms or more after it opened, not counted from the first.
+  expect(openings[1].first_tracked_pose_ms).toBeGreaterThanOrEqual(300);
+  expect(tracking.first_tracked_pose_ms).toBe(openings[1].first_tracked_pose_ms);
+  const changes = tracking.status_changes as { status: string; reason: string; mode: string }[];
+  expect(changes.map(({ mode, status, reason }) => `${mode} ${status}: ${reason}`)).toEqual([
+    'measured inactive: starting',
+    'measured tracked: NORMAL UNSPECIFIED',
+    'measured inactive: room view closed',
+    'measured tracked: NORMAL UNSPECIFIED',
+  ]);
+  expect((tracking.mode_changes as { mode: string }[]).map(change => change.mode)).toEqual(['measured']);
 });
