@@ -7,7 +7,7 @@ import { floorPoint } from './aim';
 import { grabbedPosition, offsetOf, targetAlongRay } from './grab';
 import { MotionStats } from './motion-stats';
 import { TrackingStats } from './tracking-stats';
-import { EngineTracking, engineUnavailable, trackingEngine } from './engine-tracking';
+import { EngineTracking, HELD_AT, engineUnavailable, trackingEngine } from './engine-tracking';
 import { MovementLog, type TrackingMode } from './movement-log';
 import { StepTracking, type PhoneTracking } from './phone-tracking';
 import { START_EYE, headingOf, pitchOf, type RoomPose } from './phone-view';
@@ -113,8 +113,12 @@ function chooseTracking(): void {
         if (connected && ownHold() === null) publishTracking();
       },
       realigned: detail => movementLog.event('realigned', detail),
+      scaled: scale => {
+        trackingStats.scale(scale);
+        movementLog.event('scale', `x${scale.factor}: 8th Wall height ${scale.engine_height_m} m, real ${scale.real_height_m} m${scale.clamped ? ', clamped' : ''}`);
+      },
       error: message => movementLog.event('engine error', message),
-    });
+    }, phoneHeight);
     if (tracking !== measured) {
       steps.stop();
       tracking = measured;
@@ -126,6 +130,29 @@ function chooseTracking(): void {
   if (mode !== loggedMode) movementLog.event('mode', mode);
   loggedMode = mode;
 }
+/**
+ * How high the phone is really held: `?height=1.35` in the link, or the height splat rooms are
+ * scaled for. 8th Wall's distances are corrected by it over the height 8th Wall reports (#112).
+ */
+function heldAt(): number {
+  const believable = (height: number) => height >= LOWEST_HELD && height <= HIGHEST_HELD;
+  const given = Number(new URLSearchParams(location.search).get('height'));
+  try {
+    // Given once, it is kept on the phone, so links without it still use it.
+    if (believable(given)) localStorage.setItem(HEIGHT_KEY, String(given));
+    const kept = Number(localStorage.getItem(HEIGHT_KEY));
+    if (believable(kept)) return kept;
+  } catch {
+    // Storage can be off, as in private browsing: the link alone then decides.
+  }
+  return believable(given) ? given : HELD_AT;
+}
+const HEIGHT_KEY = 'escape-my-room.phone-height';
+/** Heights a phone may really be held at, in metres; anything else in the link is ignored. */
+const LOWEST_HELD = 0.5;
+const HIGHEST_HELD = 2.5;
+/** Read when the page opens, so a link that gives it is kept even before connecting. */
+const phoneHeight = heldAt();
 /** The mode last written to the movement log, so each change is logged once. */
 let loggedMode = '';
 /** What the status line says about tracking, or empty while tracking is fine. */
