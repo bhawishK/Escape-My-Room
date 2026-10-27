@@ -64,6 +64,11 @@ export async function useFakeEngine(page: Page): Promise<void> {
   // The page loads the real engine from the CDN; keep it from replacing the fake.
   await page.route('**/@8thwall/**', route => route.abort());
   await page.addInitScript(installFakeEngine);
+  await grantMotionPermission(page);
+}
+
+/** Grants motion and orientation permission when the page asks, as iPhone does after a tap. */
+export async function grantMotionPermission(page: Page): Promise<void> {
   await page.addInitScript(() => {
     for (const event of [DeviceOrientationEvent, DeviceMotionEvent]) Object.assign(event, { requestPermission: async () => 'granted' });
   });

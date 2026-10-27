@@ -6,6 +6,7 @@ import { GazeCursor } from './gaze-cursor';
 import { floorPoint } from './aim';
 import { grabbedPosition, offsetOf, targetAlongRay } from './grab';
 import { MotionStats } from './motion-stats';
+import { TrackingStats } from './tracking-stats';
 import { EngineTracking, engineUnavailable, trackingEngine } from './engine-tracking';
 import { MovementLog, type TrackingMode } from './movement-log';
 import { StepTracking, type PhoneTracking } from './phone-tracking';
@@ -41,6 +42,8 @@ let holding = false;
 let releasing: number | null = null;
 /** How motion reaches this device, for the diagnostic report. */
 const motion = new MotionStats();
+/** How the phone's tracking behaved, for the diagnostic report. */
+const trackingStats = new TrackingStats();
 /** How long a press on the selected object lasts before it is picked up, so a tap is not. */
 const PICK_UP_MS = 300;
 /** While carrying, the phone tells Python where it is and faces this often, so the object follows. */
@@ -82,10 +85,17 @@ function chooseTracking(): void {
   const engine = trackingEngine();
   if (engine) {
     measured ??= new EngineTracking(engine, element<HTMLCanvasElement>('engine-canvas'), {
-      moved: () => { measuredUnsent = true; },
+      moved: () => {
+        measuredUnsent = true;
+        trackingStats.pose();
+      },
       camera: status => movementLog.event('camera', status),
-      tracking: (status, reason) => movementLog.event('engine tracking', `${status} ${reason}`),
-      status: (_, hint) => {
+      tracking: (status, reason) => {
+        trackingStats.engine(status, reason);
+        movementLog.event('engine tracking', `${status} ${reason}`);
+      },
+      status: (status, hint) => {
+        trackingStats.status(status);
         // Only a tracking hint is replaced on recovery; other messages are left alone.
         if (hint) element('view-status').textContent = hint;
         else if (trackingHint) element('view-status').textContent = viewInstruction();
@@ -101,7 +111,9 @@ function chooseTracking(): void {
       tracking = measured;
     }
   }
-  const mode = engine ? 'measured' : `steps · ${engineUnavailable()}`;
+  const unavailable = engine ? null : engineUnavailable();
+  trackingStats.mode(engine ? 'measured' : 'steps', unavailable);
+  const mode = engine ? 'measured' : `steps · ${unavailable}`;
   if (mode !== loggedMode) movementLog.event('mode', mode);
   loggedMode = mode;
 }
@@ -138,13 +150,17 @@ function publishPose(pose: RoomPose | null): void {
  * and only allows it during the tap that asks.
  */
 function startMotion(): void {
+  // Opening the room view starts tracking, so the time to the first pose counts from here.
+  trackingStats.opened();
   chooseTracking();
   void tracking.start().then(() => {
     // The engine reports its own start, through its status event.
     if (tracking !== steps) return;
+    trackingStats.status('tracked', 'counting steps');
     element('view-status').textContent = 'Tap the box to select it';
     publishTracking();
   }).catch(error => {
+    trackingStats.status('inactive', error instanceof Error ? error.message : 'motion access could not start');
     showRoomViewError(error, 'Motion access could not start.');
   }).finally(controls);
 }
@@ -253,6 +269,7 @@ function setRoomView(open: boolean): void {
   const wasOpen = roomViewOpen;
   roomViewOpen = open;
   if (open) movementLog.begin();
+  else if (wasOpen) trackingStats.closed();
   if (open !== wasOpen) movementLog.event('room view', open ? 'opened' : 'closed');
   roomViewHud.hidden = !open;
   element('scene').classList.toggle('room-view', open);
@@ -843,9 +860,12 @@ element('download-report').addEventListener('click', () => {
     recorded_at: new Date().toISOString(), role, xr: xr?.getReport() ?? null,
     gaze: gaze.report(), floor_height: depth.report(), user_agent: navigator.userAgent,
     dom_overlay_hold_events: holdEvents, marker: state?.marker ?? null,
-    motion: motion.report({
-      smoothing_ms: view?.smoothingMs ?? null, simulated_delay_ms: state?.delivery.simulated_delay_ms ?? null,
-    }),
+    motion: {
+      ...motion.report({
+        smoothing_ms: view?.smoothingMs ?? null, simulated_delay_ms: state?.delivery.simulated_delay_ms ?? null,
+      }),
+      tracking: trackingStats.report(),
+    },
     evidence: 'Browser observations only; complete the manual device smoke-test record separately.',
   };
   const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
@@ -856,5 +876,8 @@ element('download-report').addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 window.addEventListener('pagehide', () => client.leave());
-window.setInterval(() => { element('motion-stats').textContent = motion.summary(); }, 1000);
+window.setInterval(() => {
+  element('motion-stats').textContent = motion.summary();
+  element('tracking-stats').textContent = trackingStats.summary();
+}, 1000);
 controls();

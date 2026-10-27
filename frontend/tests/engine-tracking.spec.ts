@@ -1,7 +1,7 @@
-import { expect, test } from '@playwright/test';
+import { type Page, expect, test } from '@playwright/test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { INITIALIZING, engineCalls, engineFrame, useFakeEngine } from './fixtures/fake-engine';
+import { INITIALIZING, engineCalls, engineFrame, grantMotionPermission, useFakeEngine } from './fixtures/fake-engine';
 
 test('the phone sends its movement log to Python, which saves it for reading after a device check', async ({ page }) => {
   await useFakeEngine(page);
@@ -253,4 +253,91 @@ test('turning while tracking is lost is measured by the orientation sensor and k
   await expect(vr.getByTestId('presence-phone')).toContainText('heading 1.57 rad');
   await phone.close();
   await vr.close();
+});
+
+/** The diagnostic report the page offers for download, as JSON. */
+async function downloadReport(page: Page): Promise<{ motion: { tracking: Record<string, unknown> } }> {
+  const download = page.waitForEvent('download');
+  // The room view covers the diagnostics while it is open; the report is still the same.
+  await page.evaluate(() => document.getElementById('download-report')!.click());
+  return JSON.parse(readFileSync(await (await download).path(), 'utf-8'));
+}
+
+test('the diagnostic report records how measured tracking behaved', async ({ page }) => {
+  await useFakeEngine(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await expect(page.locator('#scene')).toHaveAttribute('data-view', 'phone');
+  await engineFrame(page, { x: 3, y: 0.4, z: -2 }, undefined, INITIALIZING);
+  await page.waitForTimeout(200);
+  // Tracked, then lost while moving too fast, then tracked again: ten poses in all.
+  for (let step = 0; step < 5; step++) await engineFrame(page, { x: 0, y: 1.6, z: 1.6 - step * 0.1 });
+  await engineFrame(page, { x: 9, y: 9, z: 9 }, undefined, { trackingStatus: 'LIMITED', trackingReason: 'EXCESSIVE_MOTION' });
+  for (let step = 0; step < 5; step++) await engineFrame(page, { x: 0, y: 1.6, z: 1.1 - step * 0.1 });
+
+  await expect(page.getByTestId('tracking-stats')).toHaveText('Measured · tracked · 2.0 poses/s');
+  const tracking = (await downloadReport(page)).motion.tracking;
+  expect(tracking.mode).toBe('measured');
+  expect(tracking.fallback_reason).toBeNull();
+  const changes = tracking.status_changes as { at_ms: number; status: string; reason: string }[];
+  expect(changes.map(({ status, reason }) => `${status}: ${reason}`)).toEqual([
+    'inactive: starting',
+    'tracked: NORMAL UNSPECIFIED',
+    'lost: LIMITED EXCESSIVE_MOTION',
+    'tracked: NORMAL UNSPECIFIED',
+  ]);
+  // Times count from when the room view opened; the first pose came after the starting frame.
+  expect(changes.map(change => change.at_ms)).toEqual([...changes.map(change => change.at_ms)].sort((a, b) => a - b));
+  expect(Math.abs((tracking.first_tracked_pose_ms as number) - changes[1].at_ms)).toBeLessThanOrEqual(1);
+  expect(tracking.first_tracked_pose_ms).toBeGreaterThanOrEqual(200);
+  expect(tracking.pose_rate_hz).toBe(2);
+});
+
+test('the diagnostic report says when the phone counts steps instead, and why', async ({ page }) => {
+  // No engine: the phone falls back to turning and counted steps.
+  await page.route('**/@8thwall/**', route => route.abort());
+  await grantMotionPermission(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await expect(page.locator('#scene')).toHaveAttribute('data-view', 'phone');
+
+  await expect(page.getByTestId('tracking-stats')).toHaveText('Steps · engine not loaded · tracked');
+  const tracking = (await downloadReport(page)).motion.tracking;
+  expect(tracking.mode).toBe('steps');
+  expect(tracking.fallback_reason).toBe('engine not loaded');
+  expect(tracking.first_tracked_pose_ms).toBeNull();
+  expect(tracking.pose_rate_hz).toBe(0);
+});
+
+test('each opening of the room view is timed to its own first pose, and every mode is kept', async ({ page }) => {
+  await useFakeEngine(page);
+  await page.goto('/');
+  const before = (await downloadReport(page)).motion.tracking;
+  // Nothing has started: no mode is claimed yet.
+  expect(before.mode).toBeNull();
+  expect(before.mode_changes).toEqual([]);
+
+  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await expect(page.locator('#scene')).toHaveAttribute('data-view', 'phone');
+  await engineFrame(page, { x: 0, y: 1.6, z: 1.6 });
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
+  await page.getByRole('button', { name: 'Open room view', exact: true }).click();
+  await page.waitForTimeout(300);
+  await engineFrame(page, { x: 0, y: 1.6, z: 1.2 });
+
+  const tracking = (await downloadReport(page)).motion.tracking;
+  const openings = tracking.openings as { opened_at_ms: number; first_tracked_pose_ms: number | null }[];
+  expect(openings).toHaveLength(2);
+  expect(openings[1].opened_at_ms).toBeGreaterThan(openings[0].opened_at_ms);
+  // The second opening's first pose came 300 ms or more after it opened, not counted from the first.
+  expect(openings[1].first_tracked_pose_ms).toBeGreaterThanOrEqual(300);
+  expect(tracking.first_tracked_pose_ms).toBe(openings[1].first_tracked_pose_ms);
+  const changes = tracking.status_changes as { status: string; reason: string; mode: string }[];
+  expect(changes.map(({ mode, status, reason }) => `${mode} ${status}: ${reason}`)).toEqual([
+    'measured inactive: starting',
+    'measured tracked: NORMAL UNSPECIFIED',
+    'measured inactive: room view closed',
+    'measured tracked: NORMAL UNSPECIFIED',
+  ]);
+  expect((tracking.mode_changes as { mode: string }[]).map(change => change.mode)).toEqual(['measured']);
 });
