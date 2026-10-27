@@ -81,6 +81,8 @@ interface EngineEvents {
   status: (status: TrackingStatus, hint: string) => void;
   /** After a loss, the room was lined up again with where the phone was; `detail` says by how much. */
   realigned: (detail: string) => void;
+  /** Standing at two objects calibrated 8th Wall; null when a restart or recentring undid it. */
+  calibrated: (calibration: Calibration | null) => void;
   /** The scale was measured: `factor` times 8th Wall's distances is the room's. */
   scaled: (scale: EngineScale) => void;
   error: (message: string) => void;
@@ -111,6 +113,34 @@ export interface EngineScale {
   /** The measured factor was out of range, so the nearest believable one is used. */
   clamped: boolean;
 }
+/** An object the room knows the place of, on the floor (#120). */
+export interface Landmark {
+  id: string;
+  label: string;
+  x: number;
+  z: number;
+}
+
+/** Calibrating by standing at two objects: their distance by 8th Wall and in the room. */
+export interface Calibration {
+  from: string;
+  to: string;
+  engine_distance_m: number;
+  room_distance_m: number;
+  scale: number;
+  turn_deg: number;
+}
+
+/** Why a tap while calibrating was not taken; its message says what to do. */
+export class CalibrationRefused extends Error {}
+
+// Objects closer than this give too short a line to measure a scale on.
+const CALIBRATE_APART = 1.5;
+// Less walked between the taps than this by 8th Wall is no walk at all.
+const CALIBRATE_WALKED = 0.3;
+// A person stands about this far from an object's middle, toward where they came from.
+const STANDING_OFF = 0.4;
+
 /**
  * The phone's real height when the link gives none: the camera height splat rooms are scaled
  * for. On the iPhone 8th Wall put the phone 0.72 m and then 1.16 m up, against a real 1.3-1.4 m
@@ -171,6 +201,17 @@ class ScaleMeter {
   }
 
   /** Takes 8th Wall's height at `p`; returns the scale once there is enough to measure it. */
+  /**
+   * A scale found by calibrating: it stands until the engine starts a new world. Positions are
+   * scaled about `at`, 8th Wall's position now, so the view does not move.
+   */
+  calibrate(factor: number, at: Position): void {
+    this.factor = factor;
+    this.known = true;
+    this.anchorEngine = { ...at };
+    this.anchorRoom = { ...at };
+  }
+
   sample(p: Position, now: number): EngineScale | null {
     if (this.known) return null;
     this.since ??= now;
@@ -226,6 +267,11 @@ export class EngineTracking implements PhoneTracking {
 
   /** Corrects 8th Wall's distances by its scale error (#112). */
   private readonly scale: ScaleMeter;
+  /** 8th Wall's own pose at the last normal frame, before scaling. */
+  private engineAt: RoomPose | null = null;
+  /** The first object stood at while calibrating, and where 8th Wall had the phone then. */
+  private standingAt: { mark: Landmark; at: Position } | null = null;
+  private calibration: Calibration | null = null;
 
   constructor(
     private readonly engine: Engine,
@@ -306,6 +352,7 @@ export class EngineTracking implements PhoneTracking {
     this.starting = false;
     this.latest = null;
     this.scale.restart(true);
+    this.uncalibrate();
     this.engineStatus = '';
     this.normal = false;
     this.everNormal = false;
@@ -342,6 +389,7 @@ export class EngineTracking implements PhoneTracking {
           if (this.normal) {
             this.everNormal = true;
             const engine = { position: { x: p.x, y: p.y, z: p.z }, orientation: { x: r.x, y: r.y, z: r.z, w: r.w } };
+            this.engineAt = engine;
             if (this.lostFrom) this.recover(engine, this.lostFrom);
             const measured = this.scale.sample(engine.position, performance.now());
             if (measured) this.events.scaled(measured);
@@ -383,12 +431,83 @@ export class EngineTracking implements PhoneTracking {
     this.running = false;
   }
 
+  /**
+   * The person stands at `mark`. The first tap remembers where 8th Wall has them; the second, at
+   * another object, calibrates: the room distance between the two over 8th Wall's gives its scale,
+   * the turn between the two directions its heading, and the second object the place. Returns the
+   * calibration after the second tap, null after the first. Throws `CalibrationRefused`, with what
+   * to do, when it cannot be taken.
+   */
+  markAt(mark: Landmark): Calibration | null {
+    const engine = this.engineAt;
+    if (this.status !== 'tracked' || !engine) {
+      throw new CalibrationRefused('Wait until 8th Wall is tracking, then tap again');
+    }
+    const first = this.standingAt;
+    if (!first || first.mark.id === mark.id) {
+      this.standingAt = { mark, at: { ...engine.position } };
+      return null;
+    }
+    const apart = Math.hypot(mark.x - first.mark.x, mark.z - first.mark.z);
+    if (apart < CALIBRATE_APART) {
+      throw new CalibrationRefused(`Those are ${apart.toFixed(1)} m apart: choose two at least ${CALIBRATE_APART} m apart`);
+    }
+    const from = first.at;
+    const to = { ...engine.position };
+    const walked = Math.hypot(to.x - from.x, to.z - from.z);
+    if (walked < CALIBRATE_WALKED) {
+      throw new CalibrationRefused(`Walk from the ${first.mark.label} to the ${mark.label}, then tap it`);
+    }
+    // Where the person stood: a step from each object toward the other.
+    const ux = (mark.x - first.mark.x) / apart;
+    const uz = (mark.z - first.mark.z) / apart;
+    const there = { x: mark.x - STANDING_OFF * ux, z: mark.z - STANDING_OFF * uz };
+    const roomApart = apart - 2 * STANDING_OFF;
+    const factor = roomApart / walked;
+    // The turn about the vertical that takes 8th Wall's direction of the walk to the room's.
+    const vx = to.x - from.x;
+    const vz = to.z - from.z;
+    const turn = Math.atan2(vz * ux - vx * uz, vx * ux + vz * uz);
+    this.scale.calibrate(factor, to);
+    this.yaw = turn;
+    this.turn.setFromAxisAngle(UP, turn);
+    const turned = this.scratch.set(to.x, to.y, to.z).applyQuaternion(this.turn);
+    this.shift.set(there.x - turned.x, (this.latest?.position.y ?? to.y) - to.y, there.z - turned.z);
+    this.lostFrom = null;
+    this.turnAtLoss = null;
+    this.standingAt = null;
+    // The phone is where the second object puts it now, not at its next frame.
+    this.latest = this.intoRoom({ position: this.scale.toRoom(to), orientation: engine.orientation });
+    this.events.moved(this.latest);
+    this.calibration = {
+      from: first.mark.id, to: mark.id, engine_distance_m: Number(walked.toFixed(3)),
+      room_distance_m: Number(roomApart.toFixed(3)), scale: Number(factor.toFixed(3)),
+      turn_deg: Math.round(turn * 180 / Math.PI),
+    };
+    this.events.calibrated(this.calibration);
+    return this.calibration;
+  }
+
+  /** Forgets the first object stood at, when calibrating is cancelled. */
+  cancelCalibration(): void { this.standingAt = null; }
+
+  /** Whether the first object has been stood at, and calibrating waits for the second. */
+  get calibrating(): boolean { return this.standingAt !== null; }
+
+  private uncalibrate(): void {
+    this.standingAt = null;
+    if (!this.calibration) return;
+    this.calibration = null;
+    this.events.calibrated(null);
+  }
+
   /** Makes where the phone is now the starting viewpoint facing the desk. */
   recenter(): void {
     if (!this.running) return;
     this.straighten();
     // The engine starts its world again here: scaled from that start, and measured again.
     this.scale.restart(false);
+    this.uncalibrate();
     this.engine.XrController.recenter();
   }
 
@@ -416,8 +535,10 @@ export class EngineTracking implements PhoneTracking {
       this.events.realigned(`kept: the engine found its place again, ${away.toFixed(2)} m from the start`);
       return;
     }
-    // A new world, scaled from its own start, and its scale measured again.
+    // A new world, scaled from its own start, and its scale measured again: a calibration of the
+    // old world no longer holds.
     this.scale.restart(false);
+    this.uncalibrate();
     this.lineUp({ position: this.scale.toRoom(engine.position), orientation: engine.orientation }, from);
   }
 

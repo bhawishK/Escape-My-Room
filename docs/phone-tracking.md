@@ -61,6 +61,13 @@ Since Issue 59, a phone where the [8th Wall engine](https://github.com/8thwall/e
   - **Restarts:** after a loss, a restarted 8th Wall is lined up with the last good place, keeping the last factor until it's measured again. A "found its place again" recovery is the same world, so its factor stands. Recentring starts the measuring over too.
   - **The real height** is 1.4 m (the camera height splat rooms are scaled for) unless the link gives one, for example `?height=1.35`. A height given once is kept on the phone, so later links without it still use it.
   - **Reporting:** the tracking summary (Send log and diagnostic report) gives `scale`: the factor, both heights, and whether it was clamped. The movement log has a `scale` event.
+- **Calibrating by two objects (issue 120):** the height correction was not enough. Walking 5–6 m to the hallway's sink moved the scene about 3.3 m, because 8th Wall's wrong height doesn't fully reflect its wrong distances. When the room has a landmark map (`landmarks.json`, #110), **Calibrate** in the room view lists its objects.
+  - **Steps:** the person stands at one and taps it, walks to another at least 1.5 m away, and taps that.
+  - **What the phone works out:** 8th Wall's **scale** is the room distance between the two over 8th Wall's distance between the taps, its **heading** is the turn between the two directions, and the person is **placed** at the second object. Each object's point is taken 0.4 m toward the other, where a person stands.
+  - **Effect:** this replaces the height-based scale. It also removes the need to start on one spot facing one way.
+  - **When it's undone:** a restart after a loss, or Recentre, undoes it, because 8th Wall starts a new world with a new scale. The phone says to calibrate again.
+  - **Refusals:** taps before tracking, objects closer than 1.5 m, or no walk between the taps are refused with what to do.
+  - **Reporting:** the calibration is in the tracking summary and Send log.
 - **Choosing step counting:** add `?tracking=steps` to the link (for example `https://…trycloudflare.com/?tracking=steps`) to count steps even where the engine could track, to compare the two on the same phone. The tracking summary in Send log gives the reason as "step counting chosen in the link".
 - **Version:** the engine is pinned to `@8thwall/engine-binary@1.0.0`.
 - **Credits:** the room view carries the credits its licence requires.

@@ -4,7 +4,7 @@
  * view took to its first measured pose, and how often measured poses arrive. Times are milliseconds
  * since the room view first opened, on this device's clock.
  */
-import type { EngineScale } from './engine-tracking';
+import type { Calibration, EngineScale } from './engine-tracking';
 import type { TrackingMode } from './movement-log';
 import type { TrackingStatus } from './protocol';
 
@@ -51,6 +51,8 @@ export class TrackingStats {
   private readonly openings: Opening[] = [];
   /** When recent measured poses arrived, within the rate window. */
   private readonly poses: number[] = [];
+  /** The calibration by two objects in force, or null (#120). */
+  private calibration: Calibration | null = null;
   /** How 8th Wall's distances were last corrected, or null before they were (#112). */
   private scaled: EngineScale | null = null;
   /** When recent frames were drawn, within the rate window. */
@@ -110,6 +112,9 @@ export class TrackingStats {
     while (this.poses.length && now - this.poses[0] > RATE_WINDOW_MS) this.poses.shift();
   }
 
+  /** Standing at two objects calibrated 8th Wall, or a restart undid it (null). */
+  calibrated(calibration: Calibration | null): void { this.calibration = calibration; }
+
   /** 8th Wall's scale was measured. */
   scale(scale: EngineScale): void { this.scaled = scale; }
 
@@ -139,6 +144,7 @@ export class TrackingStats {
       pose_rate_hz: Number(this.rate(this.poses, now).toFixed(2)),
       frame_rate_hz: Number(this.rate(this.frames, now).toFixed(2)),
       scale: this.scaled,
+      calibration: this.calibration,
       splat,
       time_note: 'Times are milliseconds since the room view first opened, on this device.',
     };

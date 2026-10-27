@@ -611,3 +611,66 @@ test('a height given once in the link is kept on the phone', async ({ page }) =>
   const tracking = (await downloadReport(page)).motion.tracking;
   expect(tracking.scale).toEqual({ factor: 2, engine_height_m: 0.6, real_height_m: 1.2, clamped: false });
 });
+
+/** Where calibrating places a landmark: 0.4 m from it toward the other one, where a person stands. */
+function standingSpots(a: { x: number; z: number }, b: { x: number; z: number }) {
+  const length = Math.hypot(b.x - a.x, b.z - a.z);
+  const u = { x: (b.x - a.x) / length, z: (b.z - a.z) / length };
+  return {
+    from: { x: a.x + 0.4 * u.x, z: a.z + 0.4 * u.z },
+    to: { x: b.x - 0.4 * u.x, z: b.z - 0.4 * u.z },
+    apart: length - 0.8,
+    u,
+  };
+}
+const DESK = { x: 0, z: -1.2 };
+const DOOR = { x: -1.5, z: 1.5 };
+
+test('standing at two objects calibrates scale, place and heading', async ({ browser }) => {
+  const { phone, vr } = await phoneAndHeadset(browser);
+  await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 });
+  await phone.getByRole('button', { name: 'Calibrate', exact: true }).click();
+  await expect(phone.getByTestId('calibrate-prompt')).toHaveText('Stand at one of these and tap it');
+  await phone.getByRole('button', { name: 'Desk', exact: true }).click();
+  await expect(phone.getByTestId('calibrate-prompt')).toHaveText('Now walk to another and tap it');
+
+  // 8th Wall sees the walk from the desk to the door as 2.5 times too short, and along its +x.
+  const { to, apart, u } = standingSpots(DESK, DOOR);
+  const walked = apart / 2.5;
+  await engineFrame(phone, { x: walked, y: 1.5, z: 1.6 });
+  await phone.getByRole('button', { name: 'Door', exact: true }).click();
+
+  // 8th Wall's +x is the room's direction from the desk to the door, (-0.49, 0.87): a turn of -119°.
+  await expect(phone.getByTestId('view-status')).toHaveText('Calibrated · ×2.50 · turned -119°');
+  const at = (x: number, z: number) => `${x.toFixed(2)}, 1.50, ${z.toFixed(2)} m`;
+  await expect(vr.getByTestId('marker-position')).toHaveText(at(to.x, to.z));
+  // From here 8th Wall's 0.2 m along its +x is half a metre on, toward where the door lies.
+  await engineFrame(phone, { x: walked + 0.2, y: 1.5, z: 1.6 });
+  await expect(vr.getByTestId('marker-position')).toHaveText(at(to.x + 0.5 * u.x, to.z + 0.5 * u.z));
+
+  await phone.getByRole('button', { name: 'Send log', exact: true }).click();
+  await expect(phone.getByTestId('view-status')).toHaveText(/^Log sent/);
+  const folder = join(process.env.ESCAPE_ROOM_TEST_DATA!, '8771', 'movement-logs');
+  const log = JSON.parse(readFileSync(join(folder, readdirSync(folder).sort().at(-1)!), 'utf-8'));
+  expect(log.tracking.calibration).toMatchObject({ from: 'desk', to: 'door', scale: 2.5, turn_deg: -119 });
+  await phone.close();
+  await vr.close();
+});
+
+test('calibrating is refused with a reason before tracking, and for objects too close together', async ({ page }) => {
+  await useFakeEngine(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await engineFrame(page, { x: 0, y: 1.5, z: 1.6 }, undefined, INITIALIZING);
+  await page.getByRole('button', { name: 'Calibrate', exact: true }).click();
+  await page.getByRole('button', { name: 'Desk', exact: true }).click();
+  await expect(page.getByTestId('calibrate-prompt')).toHaveText('Wait until 8th Wall is tracking, then tap again');
+
+  await engineFrame(page, { x: 0, y: 1.5, z: 1.6 });
+  await page.getByRole('button', { name: 'Desk', exact: true }).click();
+  await engineFrame(page, { x: 0.6, y: 1.5, z: 1.6 });
+  await page.getByRole('button', { name: 'Cabinet', exact: true }).click();
+  await expect(page.getByTestId('calibrate-prompt')).toHaveText('Those are 1.4 m apart: choose two at least 1.5 m apart');
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(page.getByTestId('calibrate-prompt')).toBeHidden();
+});

@@ -90,6 +90,11 @@
     </main>
     <div id="room-view-hud" hidden>
       <div class="hud-top">
+        <div id="calibrate-panel" class="calibrate-panel" hidden>
+          <p id="calibrate-prompt" data-testid="calibrate-prompt"></p>
+          <div id="calibrate-objects" class="calibrate-objects"></div>
+          <button id="calibrate-cancel" class="secondary">Cancel</button>
+        </div>
         <div class="hud-bar">
           <button id="close-room-view">Close</button>
           <p id="tracking-mode" data-testid="tracking-mode" class="hud-mode"></p>
@@ -98,6 +103,7 @@
       </div>
       <div class="hud-buttons">
         <button id="recentre" class="secondary" hidden>Recentre</button>
+        <button id="calibrate" class="secondary" hidden>Calibrate</button>
         <button id="walk-reset" class="secondary" hidden>Back to start</button>
         <button id="walk-length" class="secondary" hidden>Step 0.6 m</button>
         <button id="gaze-toggle">Gaze cursor</button>
