@@ -24,6 +24,8 @@ const GHOST_OPACITY = 0.35;
  * (`ar`), or those with the model faint over the camera to check the line-up (`ghost`).
  */
 export type ViewMode = 'vr' | 'ar' | 'ghost';
+/** How each mode shows a room's splat, for tests and the report. */
+const SPLAT_SHOWN: Record<ViewMode, string> = { vr: 'shown', ar: 'hidden', ghost: 'ghost' };
 
 export class DiagnosticScene {
   readonly renderer: THREE.WebGLRenderer;
@@ -280,7 +282,7 @@ export class DiagnosticScene {
     }
     this.camera.projectionMatrix.copy(this.projection);
     this.camera.projectionMatrixInverse.copy(this.projection).invert();
-    this.container.dataset.projection = this.projection.elements.map(value => value.toFixed(4)).join(',');
+    this.container.dataset.projection = this.camera.projectionMatrix.elements.map(value => value.toFixed(4)).join(',');
   }
 
   /**
@@ -298,7 +300,7 @@ export class DiagnosticScene {
       if (root) root.visible = model && !this.splat;
     }
     this.grid.visible = !this.roomGroup && this.mode === 'vr';
-    this.container.dataset.splat = !this.splat ? '' : this.mode === 'vr' ? 'shown' : this.mode === 'ar' ? 'hidden' : 'ghost';
+    this.container.dataset.splat = this.splat ? SPLAT_SHOWN[this.mode] : '';
   }
 
   /** The room entity drawn at a point on the view, 0–1 across and down, or null where there is none. */

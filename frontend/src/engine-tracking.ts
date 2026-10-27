@@ -288,6 +288,16 @@ export class EngineTracking implements PhoneTracking {
     heldAt = HELD_AT,
   ) {
     this.scale = new ScaleMeter(heldAt);
+    // A turned phone or a browser bar coming and going resizes the room view; the camera image
+    // follows, and the engine reports its camera again for the new size.
+    new ResizeObserver(() => { if (this.running) this.fitCanvas(); }).observe(canvas);
+  }
+
+  /** One canvas pixel to each screen pixel, as the room view draws over it (#109). */
+  private fitCanvas(): void {
+    const { canvas } = this;
+    if (canvas.width !== canvas.clientWidth) canvas.width = canvas.clientWidth;
+    if (canvas.height !== canvas.clientHeight) canvas.height = canvas.clientHeight;
   }
 
   get active(): boolean { return this.running; }
@@ -365,10 +375,7 @@ export class EngineTracking implements PhoneTracking {
     this.normal = false;
     this.everNormal = false;
     this.straighten();
-    // One canvas pixel to each screen pixel, as the room view draws over it (#109). The size is
-    // set once: the engine works out its camera for it at the start.
-    this.canvas.width = this.canvas.clientWidth;
-    this.canvas.height = this.canvas.clientHeight;
+    this.fitCanvas();
     const { engine, canvas } = this;
     engine.XrController.configure({ scale: 'absolute' });
     engine.clearCameraPipelineModules();
