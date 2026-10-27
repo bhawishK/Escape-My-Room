@@ -98,4 +98,4 @@ A separate spike tests pointing at objects with the eyes or head through the fro
 - **Issue 19:** choose and build a way to measure the phone's position.
 - **Issue 33, room scale:** the user chose to confirm reconstructed room scale with markers. A tag of known size visible in the capture photos can fix the scene's scale. This is separate from phone tracking.
 - **Issue 4:** show each person to the other, including which way they face. See [participant presence](participant-presence.md).
-- **Issue 10:** tracking loss during object manipulation.
+- **Issue 10:** a tracking loss while carrying lets go where the box is. A new hold starts only after tracking returns. See [the connection contract](diagnostic-protocol.md).

@@ -61,6 +61,12 @@ class CalibrateMessage(WireModel):
     origin: Position
 
 
+class ClearAlignmentMessage(WireModel):
+    """The headset's saved room alignment no longer matches its reference space."""
+
+    type: Literal["clear_alignment"]
+
+
 class EntityTransformMessage(WireModel):
     type: Literal["entity_transform"]
     id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")

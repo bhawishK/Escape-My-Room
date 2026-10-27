@@ -196,6 +196,12 @@ A phone pose moves only the phone's current hold. It does not move an object the
 
 The page shows a shared state only when its `revision` is the newest it has. An older revision is ignored. A refused grab clears that device's local drawing of a hold it does not own.
 
+## Tracking loss and a reset
+
+Issue #10. When the phone loses tracking while it is carrying the box, it lets go. The box stays at the last accepted place. The status line says how to get tracking back, and a new press-and-hold starts only after tracking returns, so the bad pose does not move the box. Hiding the page or closing the room view lets go the same way.
+
+When the headset loses positional tracking while it is holding, it lets go and the object stays. Leaving VR, or a reset of the `local` reference space, also lets go and sends `clear_alignment`, so the saved yaw and origin are forgotten. The person presses A again before the next grab. A new squeeze starts a new hold from the grip, with no offset from the old one.
+
 ## Motion delivery
 
 Issue #9. While the phone moves a held object, the headset should see continuous motion and the exact final placement, even on a slow network, without anything queueing up during a long hold.

@@ -56,6 +56,7 @@ export class XRDiagnostic {
     private readonly overlay: HTMLElement,
     private readonly changed: (report: XRReport, active: boolean) => void,
     private readonly confirm: () => void,
+    private readonly reset: () => void = () => {},
   ) {}
 
   async inspect(): Promise<XRReport> {
@@ -102,6 +103,12 @@ export class XRDiagnostic {
     try {
       // A stable local reference exposes translation; viewer space does not.
       this.reference = await session.requestReferenceSpace('local');
+      this.reference.addEventListener('reset', () => {
+        // The origin moved, so the saved yaw and origin describe a different place.
+        this.latest = null;
+        this.viewer = null;
+        this.reset();
+      });
       this.report.mode = mode;
       this.report.reference_space = 'local';
       this.report.dom_overlay = session.domOverlayState?.type ?? 'unavailable';

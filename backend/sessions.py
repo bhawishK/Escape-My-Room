@@ -167,6 +167,11 @@ class PrototypeRoom:
         self.revision += 1
         return "ok"
 
+    def clear_alignment(self, role: Role) -> None:
+        """Drop a device's alignment after its reference space resets or its VR session ends."""
+        self.alignment[role] = Alignment()
+        self.revision += 1
+
     def select(
         self, room_version: int, entity_id: str | None
     ) -> Literal["ok", "unavailable", "mismatch", "unknown", "not_selectable", "held"]:
