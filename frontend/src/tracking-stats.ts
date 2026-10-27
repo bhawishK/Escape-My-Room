@@ -54,6 +54,8 @@ export class TrackingStats {
   private readonly poses: number[] = [];
   /** The calibration by two objects in force, or null (#120). */
   private calibration: Calibration | null = null;
+  /** Where the person placed the phone on the room's map (#124), latest last. */
+  private readonly placements: { at_ms: number; x: number; z: number; heading_deg: number | null }[] = [];
   /** How often a restart or recentring undid a calibration. */
   private undone = 0;
   /** How 8th Wall's distances were last corrected, or null before they were (#112). */
@@ -124,6 +126,14 @@ export class TrackingStats {
     this.calibration = calibration;
   }
 
+  /** The person placed the phone on the room's map. */
+  placed(spot: { x: number; z: number }, heading: number | null, now = performance.now()): void {
+    this.keep(this.placements, {
+      at_ms: this.time(now), x: Number(spot.x.toFixed(3)), z: Number(spot.z.toFixed(3)),
+      heading_deg: heading === null ? null : Math.round(heading * 180 / Math.PI),
+    });
+  }
+
   /** 8th Wall's scale was measured. */
   scale(scale: EngineScale): void {
     this.scaled = scale;
@@ -164,6 +174,7 @@ export class TrackingStats {
       scale: this.scaled,
       calibration: this.calibration,
       calibrations_undone: this.undone,
+      map_placements: [...this.placements],
       // Which correction 8th Wall's distances have now: two objects, its height, or none yet.
       scale_in_force: this.calibration ? 'calibration' : this.scaled && !this.scaleStale ? 'height' : 'none',
       splat,

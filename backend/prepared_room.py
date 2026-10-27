@@ -137,6 +137,54 @@ def _load_landmarks(directory: Path) -> list[RoomLandmark]:
         raise PreparedRoomError(f"Prepared room {LANDMARKS_FILE} is invalid.") from exc
 
 
+class RoomMap(WireModel):
+    """The room seen from above (#124): its image, and the floor area it shows in room metres;
+    the image's top is -z and its right +x."""
+
+    url: str
+    min_x: float = Field(ge=-100, le=100)
+    max_x: float = Field(ge=-100, le=100)
+    min_z: float = Field(ge=-100, le=100)
+    max_z: float = Field(ge=-100, le=100)
+
+
+class _MapFile(BaseModel):
+    """`map.json` as `backend.room_map.make_map` writes it."""
+
+    image: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}\.png$")
+    min_x: float
+    max_x: float
+    min_z: float
+    max_z: float
+
+
+MAP_FILE = "map.json"
+
+
+def _load_map(directory: Path) -> RoomMap | None:
+    """The room's map, or None when it has none."""
+    path = directory / MAP_FILE
+    if not path.is_file():
+        return None
+    try:
+        drawn = _MapFile.model_validate_json(path.read_text(encoding="utf-8"))
+        if (
+            not (directory / drawn.image).is_file()
+            or drawn.min_x >= drawn.max_x
+            or drawn.min_z >= drawn.max_z
+        ):
+            raise ValueError("map image missing or empty bounds")
+        return RoomMap(
+            url=f"{ASSET_URL_PREFIX}/{drawn.image}",
+            min_x=drawn.min_x,
+            max_x=drawn.max_x,
+            min_z=drawn.min_z,
+            max_z=drawn.max_z,
+        )
+    except (OSError, UnicodeError, ValidationError, ValueError) as exc:
+        raise PreparedRoomError(f"Prepared room {MAP_FILE} is invalid.") from exc
+
+
 class LoadedRoom(BaseModel):
     room_version: int
     entities: list[SceneEntity]
@@ -144,6 +192,8 @@ class LoadedRoom(BaseModel):
     splat_placement: SplatPlacement | None = None
     # A lighter splat for phones, when the room has one (#109); phones draw the full one otherwise.
     splat_phone_url: str | None = None
+    # The room seen from above, when it has a map (#124).
+    map: RoomMap | None = None
     # Objects the phone can calibrate by standing at two of them (#120).
     landmarks: list[RoomLandmark] = Field(default_factory=lambda: list[RoomLandmark]())
 
@@ -268,6 +318,7 @@ def load_prepared_room(directory: Path) -> LoadedRoom:
     except AssetError as exc:
         raise PreparedRoomError(str(exc)) from exc
     loaded.landmarks = _load_landmarks(directory)
+    loaded.map = _load_map(directory)
     return loaded
 
 

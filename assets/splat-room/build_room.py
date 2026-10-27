@@ -28,6 +28,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from backend.room_map import make_map
+from backend.room_views import RenderFailure
 from backend.splat_file import read_splat, visible_splats
 
 ROOT = Path(__file__).resolve().parent
@@ -241,6 +243,12 @@ def write_room(out: Path, splat: Path, report: Path, room_version: int) -> None:
     write_phone_splat(out / "room.ply", out / PHONE_FILE, PHONE_SPLATS)
     manifest["splat"]["phone_asset"] = PHONE_FILE
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    # The room seen from above, for both devices' map (#124). It needs the renderer (Node and a
+    # built frontend), so a room is still written without it.
+    try:
+        make_map(out)
+    except RenderFailure as exc:
+        print(f"no map: {exc}")
     print(
         f"wrote {out}: levelled {place['tilt']:.1f} deg by the camera path, "
         f"scale x{place['scale']:.2f}, floor {width:.1f} x {depth:.1f} m, "

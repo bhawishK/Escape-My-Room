@@ -8,6 +8,7 @@ import { grabbedPosition, offsetOf, targetAlongRay } from './grab';
 import { MotionStats } from './motion-stats';
 import { TrackingStats } from './tracking-stats';
 import { CalibrationRefused, EngineTracking, HELD_AT, engineUnavailable, trackingEngine } from './engine-tracking';
+import { RoomMap, type Spot } from './room-map';
 import { MovementLog, type TrackingMode } from './movement-log';
 import { StepTracking, type PhoneTracking } from './phone-tracking';
 import { START_EYE, headingOf, pitchOf, type RoomPose } from './phone-view';
@@ -116,6 +117,10 @@ function chooseTracking(): void {
         if (connected && ownHold() === null) publishTracking();
       },
       realigned: detail => movementLog.event('realigned', detail),
+      placed: (spot, heading) => {
+        trackingStats.placed(spot, heading);
+        movementLog.event('placed', `at ${spot.x.toFixed(2)}, ${spot.z.toFixed(2)}${heading === null ? '' : `, heading ${heading.toFixed(2)} rad`}`);
+      },
       calibrated: calibration => {
         trackingStats.calibrated(calibration);
         movementLog.event('calibration', calibration ?
@@ -330,6 +335,8 @@ function controls(): void {
   const measuring = engine !== null;
   element('recentre').hidden = !engine?.active || engine.paused;
   element('calibrate').hidden = !engine?.active || engine.paused || roomLandmarks().length < 2;
+  // The headset chooses where it stands on the page's map; the phone places itself on its own.
+  element('page-map').classList.toggle('picking', role === 'vr_solver');
   element('tracking-mode').textContent = !engine ? 'Tracking · step counting' :
     `Tracking · 8th Wall, ${engine.paused ? GAZE_PAUSE : 'measured'}`;
   // Measured tracking measures the height itself; the depth model is for step counting.
@@ -440,6 +447,10 @@ function applyState(next: SessionState): void {
   const before = ownHold();
   state = next;
   view?.setLocalRole(role);
+  for (const map of [phoneMap, pageMap]) {
+    map.showRoom(next.room);
+    map.showPlayers(next.participants, role);
+  }
   motion.state();
   const held = next.manipulation;
   view?.showControl(held?.entity ?? null);
@@ -543,7 +554,7 @@ const client = new SessionClient({
           delivery: { simulated_delay_ms: 0 },
           room: {
             available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
-            entities: [], splat_url: null, splat_phone_url: null, splat_placement: null, landmarks: [], loaded_by: { mobile_master: null, vr_solver: null },
+            entities: [], splat_url: null, splat_phone_url: null, splat_placement: null, landmarks: [], map: null, loaded_by: { mobile_master: null, vr_solver: null },
           },
         });
       }
@@ -813,6 +824,65 @@ element('recentre').addEventListener('click', () => {
   // While lost, the loss hint stays: it says what to do first.
   if (tracking.status === 'tracked') element('view-status').textContent = 'Recentred · this is now the start, facing the desk';
 });
+/** The room's map in a corner of the phone's room view; tapping it opens it to place the phone. */
+const phoneMap = new RoomMap(element('phone-map'), 'phone-map', { pick: placeOnMap });
+/** The room's map on the page, where the headset chooses where it stands. */
+const pageMap = new RoomMap(element('page-map'), 'page-map', { pick: standOnMap });
+const phoneMapRoot = element('phone-map');
+function openPhoneMap(open: boolean): void {
+  phoneMapRoot.classList.toggle('expanded', open);
+  phoneMapRoot.classList.toggle('picking', open);
+  element('phone-map-close').hidden = !open;
+  const prompt = element('phone-map-prompt');
+  prompt.hidden = !open;
+  prompt.textContent = 'Tap where you stand, and drag the way you face';
+}
+phoneMapRoot.addEventListener('click', () => {
+  if (!phoneMapRoot.classList.contains('expanded')) openPhoneMap(true);
+});
+element('phone-map-close').addEventListener('click', event => {
+  event.stopPropagation();
+  measured?.cancelCalibration();
+  openPhoneMap(false);
+});
+/** The person taps where they stand on the phone's map: the phone is placed there (#124). */
+function placeOnMap(spot: Spot, heading: number | null): void {
+  const prompt = element('phone-map-prompt');
+  if (tracking !== measured || !measured.active) {
+    prompt.textContent = 'Placing on the map needs 8th Wall tracking';
+    return;
+  }
+  try {
+    // A held object stays where it was; the room moves to where the person says they are.
+    endHold();
+    const calibration = measured.placeAt(spot, heading);
+    if (!calibration) {
+      prompt.textContent = 'Placed · walk 2 m or more and tap where you are, to set the scale';
+      return;
+    }
+    openPhoneMap(false);
+    element('view-status').textContent = `Calibrated · ×${calibration.scale.toFixed(2)} · turned ${calibration.turn_deg}°`;
+  } catch (error) {
+    if (!(error instanceof CalibrationRefused)) throw error;
+    prompt.textContent = error.message;
+  }
+}
+/**
+ * The headset player chooses where they stand in the room's copy: their alignment is turned and
+ * moved so that where they are now is `spot`, facing `heading`.
+ */
+function standOnMap(spot: Spot, heading: number | null): void {
+  if (role !== 'vr_solver' || !connected) return;
+  const now = xr?.confirmedAlignment() ?? { yaw: 0, origin: { x: 0, y: 0, z: 0 } };
+  const turn = heading ?? 0;
+  const cosine = Math.cos(turn);
+  const sine = Math.sin(turn);
+  const { x, y, z } = now.origin;
+  client.sendCalibration({
+    yaw: Math.atan2(Math.sin(now.yaw + turn), Math.cos(now.yaw + turn)),
+    origin: { x: cosine * x + sine * z + spot.x, y, z: -sine * x + cosine * z + spot.z },
+  });
+}
 /** The room's objects to calibrate by. */
 function roomLandmarks(): RoomLandmark[] {
   return state?.room.landmarks ?? [];

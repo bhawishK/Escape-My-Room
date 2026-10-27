@@ -11,7 +11,7 @@ import { applyPlacement, placeEntities } from './room';
 
 const emptyRoom = (): SessionState['room'] => ({
   available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
-  entities: [], splat_url: null, splat_phone_url: null, splat_placement: null, landmarks: [], loaded_by: { mobile_master: null, vr_solver: null },
+  entities: [], splat_url: null, splat_phone_url: null, splat_placement: null, landmarks: [], map: null, loaded_by: { mobile_master: null, vr_solver: null },
 });
 
 const OVERVIEW_FOV = 60;

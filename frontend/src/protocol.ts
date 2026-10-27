@@ -42,6 +42,8 @@ export interface RoomState {
   splat_phone_url: string | null;
   /** Objects the phone can calibrate by standing at two of them (#120); none without a map. */
   landmarks: RoomLandmark[];
+  /** The room seen from above, and the floor area it shows; null without a map image (#124). */
+  map: { url: string; min_x: number; max_x: number; min_z: number; max_z: number } | null;
   /** Where the splat sits: scaled, rotated, then moved; it levels a splat trained tilted. */
   splat_placement: { position: Position; rotation: Rotation; scale: number } | null;
   loaded_by: { mobile_master: number | null; vr_solver: number | null };
