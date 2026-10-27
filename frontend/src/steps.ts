@@ -106,10 +106,15 @@ export function floorplan(entities: readonly RoomEntity[]): Floorplan {
 /** How close the person's center may come to furniture or the floor's edge. */
 const BODY_RADIUS = 0.25;
 
-function walkable(plan: Floorplan, x: number, z: number): boolean {
+function onFloor(plan: Floorplan, x: number, z: number): boolean {
   const { floor } = plan;
-  if (floor && (x < floor.minX + BODY_RADIUS || x > floor.maxX - BODY_RADIUS
-    || z < floor.minZ + BODY_RADIUS || z > floor.maxZ - BODY_RADIUS)) return false;
+  return !floor || (x >= floor.minX + BODY_RADIUS && x <= floor.maxX - BODY_RADIUS
+    && z >= floor.minZ + BODY_RADIUS && z <= floor.maxZ - BODY_RADIUS);
+}
+
+/** Whether a person may stand here: clear of furniture, and on the floor when `bounded`. */
+function walkable(plan: Floorplan, x: number, z: number, bounded: boolean): boolean {
+  if (bounded && !onFloor(plan, x, z)) return false;
   return !plan.obstacles.some(o => x > o.minX - BODY_RADIUS && x < o.maxX + BODY_RADIUS
     && z > o.minZ - BODY_RADIUS && z < o.maxZ + BODY_RADIUS);
 }
@@ -117,12 +122,16 @@ function walkable(plan: Floorplan, x: number, z: number): boolean {
 /**
  * Where one step of `length` meters toward `heading` lands: 0 faces the desk (-Z) and positive
  * turns left. A step into furniture or off the floor slides along it, or stays put.
+ * A person off the floor may walk anywhere clear of furniture, so they can walk onto it.
  */
 export function stepFrom(from: Position, heading: number, length: number, plan: Floorplan): Position {
   const dx = -Math.sin(heading) * length;
   const dz = -Math.cos(heading) * length;
+  // A person off the floor, such as at a splat room's start outside its floor, is not held back
+  // by the floor's edge, or no step would ever land; once on the floor, its edge holds.
+  const bounded = onFloor(plan, from.x, from.z);
   for (const [x, z] of [[from.x + dx, from.z + dz], [from.x + dx, from.z], [from.x, from.z + dz]]) {
-    if (walkable(plan, x, z)) return { x, y: from.y, z };
+    if (walkable(plan, x, z, bounded)) return { x, y: from.y, z };
   }
   return from;
 }
