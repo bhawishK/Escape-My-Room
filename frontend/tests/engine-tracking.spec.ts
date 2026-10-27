@@ -24,6 +24,10 @@ test('the phone sends its movement log to Python, which saves it for reading aft
   const newest = readdirSync(folder).filter(name => name.endsWith('.json')).sort().at(-1)!;
   const log = JSON.parse(readFileSync(join(folder, newest), 'utf-8'));
   expect(log.user_agent).toContain('Mozilla');
+  // The diagnostic report's tracking summary comes along, so nothing has to be downloaded on the phone.
+  expect(log.tracking).toMatchObject({ mode: 'measured', fallback_reason: null, pose_rate_hz: expect.any(Number) });
+  expect(log.tracking.status_changes.map((change: { status: string }) => change.status)).toEqual(['inactive', 'tracked']);
+  expect(log.tracking.first_tracked_pose_ms).toEqual(expect.any(Number));
   const events = log.entries.filter((entry: { kind: string }) => entry.kind === 'event').map((entry: { name: string; detail: string }) => `${entry.name}: ${entry.detail}`);
   expect(events).toEqual(expect.arrayContaining([
     'mode: measured', 'camera: requesting', 'camera: hasVideo', 'engine tracking: LIMITED INITIALIZING',

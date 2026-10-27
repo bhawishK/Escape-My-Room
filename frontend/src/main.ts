@@ -847,7 +847,9 @@ overlay.addEventListener('beforexrselect', event => event.preventDefault());
 element('send-log').addEventListener('click', () => {
   // Python saves it on the computer it runs on, so nothing has to be copied off the phone.
   void fetch('/api/movement-logs', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(movementLog.report()),
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    // With the report's tracking summary, so a device walk needs nothing downloaded on the phone.
+    body: JSON.stringify({ ...movementLog.report(), tracking: trackingStats.report() }),
   }).then(async response => {
     // A proxy in front of a stopped Python answers with text, not JSON.
     const answer = await response.json().catch(() => ({})) as { entries?: number; detail?: string };
