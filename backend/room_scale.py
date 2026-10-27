@@ -7,17 +7,15 @@ as tall as a typical interior door. The master confirms it, gives a measured hei
 keeps the approximation (`backend/room_scale_check.py`).
 """
 
-import json
 import math
-import re
 import statistics
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
+from backend.boxes import Box, read_boxes
 from backend.grab import Vector
-from backend.openrouter import AnswerFormat, OpenRouterClient, Reply, Unreadable, without_thinking
+from backend.openrouter import AnswerFormat, OpenRouterClient, Reply
 from backend.prepared_room import load_prepared_room
 from backend.room_views import (
     View,
@@ -30,9 +28,6 @@ from backend.room_views import (
     render_views,
 )
 from backend.splat_file import visible_splats
-
-# Fractions of a view: left, top, right, bottom.
-type Box = tuple[float, float, float, float]
 
 # A typical interior door: 2.03 m (6 ft 8 in) in the US, 1.98-2.04 m in Europe.
 DOOR_HEIGHT = 2.03
@@ -76,9 +71,12 @@ class Measurement:
     splats: int
 
 
-def measure_height(splats: list[Vector], view: View, box: Box) -> Measurement | None:
-    """How high the top edge of the object in `box` is above the floor, or None when the box
-    shows too little of the splat to measure."""
+def box_depth(
+    splats: list[Vector], view: View, box: Box, near_share: float = NEAR_SHARE
+) -> tuple[float, int] | None:
+    """How far in front of the camera the object in `box` is, and how many splats the box's
+    middle held; None when it held too few to tell. The depth is the median of the nearest
+    `near_share` of them: further splats show past or through the object."""
     left, top, right, bottom = box
     inset = (right - left) * SIDE_MARGIN
     depths: list[float] = []
@@ -89,40 +87,24 @@ def measure_height(splats: list[Vector], view: View, box: Box) -> Measurement | 
     if len(depths) < MIN_SPLATS:
         return None
     depths.sort()
-    ahead = statistics.median(depths[: max(1, int(len(depths) * NEAR_SHARE))])
+    return statistics.median(depths[: max(1, int(len(depths) * near_share))]), len(depths)
+
+
+def measure_height(splats: list[Vector], view: View, box: Box) -> Measurement | None:
+    """How high the top edge of the object in `box` is above the floor, or None when the box
+    shows too little of the splat to measure."""
+    found = box_depth(splats, view, box)
+    if found is None:
+        return None
+    ahead, count = found
+    left, top, right, _ = box
     top_point = point_at(view, (left + right) / 2, top, ahead)
-    return Measurement(height=top_point[1], depth=ahead, splats=len(depths))
+    return Measurement(height=top_point[1], depth=ahead, splats=count)
 
 
 def read_door_boxes(text: str) -> list[Box]:
     """Qwen's door boxes, as fractions of the view; its coordinates run from 0 to 1000."""
-    answer = re.sub(r"^```(?:json)?\s*|\s*```$", "", without_thinking(text).strip())
-    try:
-        items: object = json.loads(answer)
-    except json.JSONDecodeError as exc:
-        raise Unreadable("the answer is not a JSON list") from exc
-    if not isinstance(items, list):
-        raise Unreadable("the answer is not a JSON list")
-    boxes: list[Box] = []
-    for item in cast(list[object], items):
-        if not isinstance(item, dict):
-            raise Unreadable("every item must be a door")
-        fields = cast(dict[str, object], item)
-        if str(fields.get("label", "")).casefold() != "door":
-            raise Unreadable("every item must be a door")
-        edges = fields.get("bbox_2d")
-        numbers = [
-            float(edge)
-            for edge in (cast(list[object], edges) if isinstance(edges, list) else [])
-            if isinstance(edge, int | float) and 0 <= edge <= 1000
-        ]
-        if len(numbers) != 4 or len(cast(list[object], edges)) != 4:
-            raise Unreadable("bbox_2d must be four numbers from 0 to 1000")
-        left, top, right, bottom = (edge / 1000 for edge in numbers)
-        if left >= right or top >= bottom:
-            raise Unreadable("bbox_2d must be [x1, y1, x2, y2] with x1 < x2 and y1 < y2")
-        boxes.append((left, top, right, bottom))
-    return boxes
+    return [box for _, box in read_boxes(text, ["door"])]
 
 
 DOOR_BOXES = AnswerFormat(
@@ -169,7 +151,14 @@ def scan_views(room_dir: Path) -> list[View]:
     """
     cameras = filmed(room_dir)
     picks = sorted({0, len(cameras) // 2, len(cameras) - 1}) if cameras else []
-    spots = [(cameras[i].position[0], cameras[i].position[2]) for i in picks] or [(0.0, 0.0)]
+    return views_round(
+        [(cameras[i].position[0], cameras[i].position[2]) for i in picks] or [(0.0, 0.0)]
+    )
+
+
+def views_round(spots: list[tuple[float, float]]) -> list[View]:
+    """Eight level views round each spot (x, z on the floor), wide enough to see a whole door
+    from a step or two away."""
     return [
         View(
             position=(x, SCAN_EYE, z),
