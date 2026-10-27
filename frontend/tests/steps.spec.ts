@@ -72,3 +72,15 @@ test('a step moves toward where the phone faces, and slides along or stops at fu
   const back = stepFrom(start, Math.PI, 0.6, ROOM);
   expect(back.z).toBeCloseTo(1.6, 9);
 });
+
+test('a person starting off the floor still walks, onto it, and the floor holds them once there', () => {
+  // The hallway room's floor ends at z = -1.2, but the phone starts at z = 1.6 (27 October 2026):
+  // every step was refused, and the view never moved.
+  const hallway = { floor: { minX: -7.2, maxX: 0.3, minZ: -6.4, maxZ: -1.2 }, obstacles: [] };
+  let at = { x: 0, y: 1.5, z: 1.6 };
+  for (let step = 0; step < 6; step++) at = stepFrom(at, 0, 0.6, hallway);
+  expect(at.z).toBeCloseTo(-2.0, 9);
+  // Back toward the start, the floor's edge now holds.
+  const back = stepFrom({ x: -1, y: 1.5, z: -1.5 }, Math.PI, 0.6, hallway);
+  expect(back.z).toBeCloseTo(-1.5, 9);
+});
