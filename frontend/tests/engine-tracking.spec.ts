@@ -494,3 +494,16 @@ test('hiding the page stops the gaze cursor but starts the engine only once the 
     'inactive: starting',
   ]);
 });
+
+test('a link can choose step counting even where 8th Wall could track, and the report says so', async ({ page }) => {
+  await useFakeEngine(page);
+  await page.goto('/?tracking=steps');
+  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+
+  await expect(page.getByTestId('tracking-mode')).toHaveText('Tracking · step counting');
+  expect((await engineCalls(page)).runs).toBe(0);
+  await expect(page.getByRole('button', { name: 'Measure height', exact: true })).toBeVisible();
+  const tracking = (await downloadReport(page)).motion.tracking;
+  expect(tracking.mode).toBe('steps');
+  expect(tracking.fallback_reason).toBe('step counting chosen in the link');
+});

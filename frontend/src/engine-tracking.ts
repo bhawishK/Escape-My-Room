@@ -49,8 +49,12 @@ export function trackingEngine(): Engine | null {
   return engineUnavailable() === null ? (window as unknown as { XR8: Engine }).XR8 : null;
 }
 
-/** Why the engine cannot track here, or null when it can. */
+/**
+ * Why the engine cannot track here, or null when it can. `?tracking=steps` in the link turns it
+ * off, to compare step counting with measured tracking on the same phone.
+ */
 export function engineUnavailable(): string | null {
+  if (new URLSearchParams(location.search).get('tracking') === 'steps') return 'step counting chosen in the link';
   const engine = (window as unknown as { XR8?: Engine }).XR8;
   if (!engine) return 'engine not loaded';
   try {
