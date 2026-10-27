@@ -186,6 +186,16 @@ The shared state uses the same `manipulation` object. `owner` is `vr_solver` whi
 | `already_held` | This headset already holds something |
 | `stale_manipulation` | `release` or `grip` names a hold that is not current |
 
+## Competing and late commands
+
+Issue #8. Python takes one command at a time. When both people acquire together, the first command in wins and the other gets `controlled_by_other`. Both devices are then sent that one hold.
+
+A `grip` or `release` names its hold. One that names an earlier hold returns `stale_manipulation` and does not move the object or change who holds it. Acquiring again, while that same person already holds it, returns `already_held` and does not start a second hold. Releasing again returns `stale_manipulation` and leaves the object where the first release put it.
+
+A phone pose moves only the phone's current hold. It does not move an object the headset has taken, and a pose with no position drops only the phone's hold.
+
+The page shows a shared state only when its `revision` is the newest it has. An older revision is ignored. A refused grab clears that device's local drawing of a hold it does not own.
+
 ## Motion delivery
 
 Issue #9. While the phone moves a held object, the headset should see continuous motion and the exact final placement, even on a slow network, without anything queueing up during a long hold.
