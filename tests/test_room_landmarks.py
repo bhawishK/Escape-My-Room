@@ -28,8 +28,8 @@ def test_the_rooms_landmarks_reach_both_devices_on_the_floor(tmp_path):
 
     served = client.get("/api/room").json()
     assert served["landmarks"] == [
-        {"id": "sink", "label": "sink", "x": -3.5, "z": -3.5},
-        {"id": "waste_bin", "label": "waste bin", "x": -0.47, "z": -1.57},
+        {"id": "sink", "label": "sink", "aliases": [], "x": -3.5, "z": -3.5},
+        {"id": "waste_bin", "label": "waste bin", "aliases": [], "x": -0.47, "z": -1.57},
     ]
     with client.websocket_connect("/api/ws?role=mobile_master") as phone:
         assert phone.receive_json()["state"]["room"]["landmarks"] == served["landmarks"]

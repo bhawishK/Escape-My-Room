@@ -3,6 +3,15 @@ export type TrackingStatus = 'inactive' | 'tracked' | 'lost';
 /** Phone positions arrive in room coordinates. */
 export type ReferenceSpace = 'room';
 export interface Position { x: number; y: number; z: number }
+
+/** An object the room knows the place of, on the floor, with the other names Qwen gave it (#120). */
+export interface RoomLandmark {
+  id: string;
+  label: string;
+  aliases: string[];
+  x: number;
+  z: number;
+}
 /** A unit quaternion in (x, y, z, w) order. */
 export interface Rotation { x: number; y: number; z: number; w: number }
 
@@ -32,7 +41,7 @@ export interface RoomState {
   /** A lighter copy of the splat for phones, or null when they draw the full one (#109). */
   splat_phone_url: string | null;
   /** Objects the phone can calibrate by standing at two of them (#120); none without a map. */
-  landmarks: { id: string; label: string; x: number; z: number }[];
+  landmarks: RoomLandmark[];
   /** Where the splat sits: scaled, rotated, then moved; it levels a splat trained tilted. */
   splat_placement: { position: Position; rotation: Rotation; scale: number } | null;
   loaded_by: { mobile_master: number | null; vr_solver: number | null };

@@ -11,7 +11,9 @@ import { CalibrationRefused, EngineTracking, HELD_AT, engineUnavailable, trackin
 import { MovementLog, type TrackingMode } from './movement-log';
 import { StepTracking, type PhoneTracking } from './phone-tracking';
 import { START_EYE, headingOf, pitchOf, type RoomPose } from './phone-view';
-import { NO_PRESENCE, type Position, type PresenceInput, type Role, type Rotation, type SessionState } from './protocol';
+import {
+  NO_PRESENCE, type Position, type PresenceInput, type Role, type RoomLandmark, type Rotation, type SessionState,
+} from './protocol';
 import { showsRevision } from './revision';
 import { SessionClient } from './session';
 import { DiagnosticScene } from './scene';
@@ -118,7 +120,14 @@ function chooseTracking(): void {
         movementLog.event('calibration', calibration ?
           `${calibration.from} to ${calibration.to}: x${calibration.scale}, turned ${calibration.turn_deg} deg` :
           'undone: 8th Wall restarted or was recentred');
-        if (!calibration) element('view-status').textContent = 'Calibration undone · calibrate again for the true scale';
+        if (!calibration) {
+          // A new world: the height scale is measured again too, and a calibration part done is void.
+          trackingStats.rescaling();
+          calibratePanel.hidden = true;
+          element('view-status').textContent = 'Calibration undone · calibrate again for the true scale';
+          // Tracking comes back in the same frame; this message, not the usual one, stays.
+          trackingHint = '';
+        }
         controls();
       },
       scaled: scale => {
@@ -777,7 +786,7 @@ element('recentre').addEventListener('click', () => {
   if (tracking.status === 'tracked') element('view-status').textContent = 'Recentred · this is now the start, facing the desk';
 });
 /** The room's objects to calibrate by. */
-function roomLandmarks(): SessionState['room']['landmarks'] {
+function roomLandmarks(): RoomLandmark[] {
   return state?.room.landmarks ?? [];
 }
 const calibratePanel = element('calibrate-panel');
@@ -786,16 +795,21 @@ const calibratePrompt = element('calibrate-prompt');
 function showCalibration(prompt: string): void {
   calibratePrompt.textContent = prompt;
   const objects = element('calibrate-objects');
-  objects.replaceChildren(...roomLandmarks().map(mark => {
+  const names = roomLandmarks().map(mark => [mark.label, ...mark.aliases].join(' / '));
+  objects.replaceChildren(...roomLandmarks().map((mark, index) => {
     const button = document.createElement('button');
     button.className = 'secondary';
-    button.textContent = `${mark.label.charAt(0).toUpperCase()}${mark.label.slice(1)}`;
+    // Qwen named the hallway's cupboard a door too: its other names tell the two doors apart.
+    const name = names[index];
+    const same = names.slice(0, index).filter(other => other === name).length;
+    const shown = same ? `${name} ${same + 1}` : name;
+    button.textContent = `${shown.charAt(0).toUpperCase()}${shown.slice(1)}`;
     button.addEventListener('click', () => standAt(mark));
     return button;
   }));
   calibratePanel.hidden = false;
 }
-function standAt(mark: SessionState['room']['landmarks'][number]): void {
+function standAt(mark: RoomLandmark): void {
   if (!measured) return;
   try {
     const calibration = measured.markAt(mark);
@@ -814,7 +828,7 @@ function standAt(mark: SessionState['room']['landmarks'][number]): void {
 }
 element('calibrate').addEventListener('click', () => {
   measured?.cancelCalibration();
-  showCalibration('Stand at one of these and tap it');
+  showCalibration('Stand at one of these, on the side facing the other you will walk to, and tap it');
 });
 element('calibrate-cancel').addEventListener('click', () => {
   measured?.cancelCalibration();

@@ -630,7 +630,8 @@ test('standing at two objects calibrates scale, place and heading', async ({ bro
   const { phone, vr } = await phoneAndHeadset(browser);
   await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 });
   await phone.getByRole('button', { name: 'Calibrate', exact: true }).click();
-  await expect(phone.getByTestId('calibrate-prompt')).toHaveText('Stand at one of these and tap it');
+  await expect(phone.getByTestId('calibrate-prompt')).toHaveText(
+    'Stand at one of these, on the side facing the other you will walk to, and tap it');
   await phone.getByRole('button', { name: 'Desk', exact: true }).click();
   await expect(phone.getByTestId('calibrate-prompt')).toHaveText('Now walk to another and tap it');
 
@@ -653,6 +654,7 @@ test('standing at two objects calibrates scale, place and heading', async ({ bro
   const folder = join(process.env.ESCAPE_ROOM_TEST_DATA!, '8771', 'movement-logs');
   const log = JSON.parse(readFileSync(join(folder, readdirSync(folder).sort().at(-1)!), 'utf-8'));
   expect(log.tracking.calibration).toMatchObject({ from: 'desk', to: 'door', scale: 2.5, turn_deg: -119 });
+  expect(log.tracking.scale_in_force).toBe('calibration');
   await phone.close();
   await vr.close();
 });
@@ -670,7 +672,31 @@ test('calibrating is refused with a reason before tracking, and for objects too 
   await page.getByRole('button', { name: 'Desk', exact: true }).click();
   await engineFrame(page, { x: 0.6, y: 1.5, z: 1.6 });
   await page.getByRole('button', { name: 'Cabinet', exact: true }).click();
-  await expect(page.getByTestId('calibrate-prompt')).toHaveText('Those are 1.4 m apart: choose two at least 1.5 m apart');
+  await expect(page.getByTestId('calibrate-prompt')).toHaveText('Those are 1.4 m apart: choose two at least 2 m apart');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(page.getByTestId('calibrate-prompt')).toBeHidden();
+});
+
+test('a restart undoes the calibration and says so, closing a calibration part done', async ({ browser }) => {
+  const { phone } = await phoneAndHeadset(browser);
+  await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 });
+  await phone.getByRole('button', { name: 'Calibrate', exact: true }).click();
+  await phone.getByRole('button', { name: 'Desk', exact: true }).click();
+  await engineFrame(phone, { x: 1, y: 1.5, z: 1.6 });
+  await phone.getByRole('button', { name: 'Door', exact: true }).click();
+  await expect(phone.getByTestId('view-status')).toHaveText(/^Calibrated/);
+
+  // Half way through calibrating again, 8th Wall is lost and restarts at its start.
+  await phone.getByRole('button', { name: 'Calibrate', exact: true }).click();
+  await phone.getByRole('button', { name: 'Desk', exact: true }).click();
+  await engineFrame(phone, { x: 9, y: 9, z: 9 }, undefined, INITIALIZING);
+  await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 });
+
+  await expect(phone.getByTestId('view-status')).toHaveText('Calibration undone · calibrate again for the true scale');
+  await expect(phone.getByTestId('calibrate-prompt')).toBeHidden();
+  const tracking = (await downloadReport(phone)).motion.tracking;
+  expect(tracking.calibration).toBeNull();
+  expect(tracking.calibrations_undone).toBe(1);
+  expect(tracking.scale_in_force).toBe('none');
+  await phone.close();
 });

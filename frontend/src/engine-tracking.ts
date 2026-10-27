@@ -5,7 +5,7 @@
 import * as THREE from 'three';
 import type { PhoneTracking } from './phone-tracking';
 import { PhoneLook, START_EYE, START_VIEW, pitchOf, type RoomPose } from './phone-view';
-import type { Position, Rotation, TrackingStatus } from './protocol';
+import type { Position, RoomLandmark, Rotation, TrackingStatus } from './protocol';
 
 /** One frame of the engine's world tracking. */
 interface Reality {
@@ -113,13 +113,6 @@ export interface EngineScale {
   /** The measured factor was out of range, so the nearest believable one is used. */
   clamped: boolean;
 }
-/** An object the room knows the place of, on the floor (#120). */
-export interface Landmark {
-  id: string;
-  label: string;
-  x: number;
-  z: number;
-}
 
 /** Calibrating by standing at two objects: their distance by 8th Wall and in the room. */
 export interface Calibration {
@@ -134,8 +127,9 @@ export interface Calibration {
 /** Why a tap while calibrating was not taken; its message says what to do. */
 export class CalibrationRefused extends Error {}
 
-// Objects closer than this give too short a line to measure a scale on.
-const CALIBRATE_APART = 1.5;
+// Objects closer than this give too short a line to measure a scale on: 2 m apart leaves 1.2 m
+// between where a person stands at each.
+const CALIBRATE_APART = 2;
 // Less walked between the taps than this by 8th Wall is no walk at all.
 const CALIBRATE_WALKED = 0.3;
 // A person stands about this far from an object's middle, toward where they came from.
@@ -200,7 +194,6 @@ class ScaleMeter {
     return { x: r.x + f * (p.x - e.x), y: r.y + f * (p.y - e.y), z: r.z + f * (p.z - e.z) };
   }
 
-  /** Takes 8th Wall's height at `p`; returns the scale once there is enough to measure it. */
   /**
    * A scale found by calibrating: it stands until the engine starts a new world. Positions are
    * scaled about `at`, 8th Wall's position now, so the view does not move.
@@ -212,6 +205,7 @@ class ScaleMeter {
     this.anchorRoom = { ...at };
   }
 
+  /** Takes 8th Wall's height at `p`; returns the scale once there is enough to measure it. */
   sample(p: Position, now: number): EngineScale | null {
     if (this.known) return null;
     this.since ??= now;
@@ -270,7 +264,7 @@ export class EngineTracking implements PhoneTracking {
   /** 8th Wall's own pose at the last normal frame, before scaling. */
   private engineAt: RoomPose | null = null;
   /** The first object stood at while calibrating, and where 8th Wall had the phone then. */
-  private standingAt: { mark: Landmark; at: Position } | null = null;
+  private standingAt: { mark: RoomLandmark; at: Position } | null = null;
   private calibration: Calibration | null = null;
 
   constructor(
@@ -438,7 +432,7 @@ export class EngineTracking implements PhoneTracking {
    * calibration after the second tap, null after the first. Throws `CalibrationRefused`, with what
    * to do, when it cannot be taken.
    */
-  markAt(mark: Landmark): Calibration | null {
+  markAt(mark: RoomLandmark): Calibration | null {
     const engine = this.engineAt;
     if (this.status !== 'tracked' || !engine) {
       throw new CalibrationRefused('Wait until 8th Wall is tracking, then tap again');

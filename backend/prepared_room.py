@@ -93,16 +93,20 @@ class RoomLandmark(WireModel):
 
     id: str = Field(min_length=1, max_length=64)
     label: str = Field(min_length=1, max_length=64)
+    # Other names Qwen gave it, shown beside its label so two of one label can be told apart.
+    aliases: list[str] = Field(default_factory=lambda: list[str](), max_length=8)
     x: float = Field(ge=-100, le=100)
     z: float = Field(ge=-100, le=100)
 
 
 class _MappedLandmark(BaseModel):
-    """One landmark as `backend.landmarks.save_landmarks` writes it; only its place is used."""
+    """One landmark as `backend.landmarks.save_landmarks` writes it. Read here with validation,
+    rather than through that module, which brings the renderer and Qwen with it."""
 
     id: str
     label: str
     centre: tuple[float, float, float]
+    aliases: list[str] = []
 
 
 class _LandmarkMap(BaseModel):
@@ -120,7 +124,13 @@ def _load_landmarks(directory: Path) -> list[RoomLandmark]:
     try:
         mapped = _LandmarkMap.model_validate_json(path.read_text(encoding="utf-8"))
         return [
-            RoomLandmark(id=mark.id, label=mark.label, x=mark.centre[0], z=mark.centre[2])
+            RoomLandmark(
+                id=mark.id,
+                label=mark.label,
+                aliases=mark.aliases,
+                x=mark.centre[0],
+                z=mark.centre[2],
+            )
             for mark in mapped.landmarks
         ]
     except (OSError, UnicodeError, ValidationError, ValueError) as exc:
