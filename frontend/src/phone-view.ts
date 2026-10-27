@@ -17,9 +17,6 @@ export interface RoomPose {
 export const START_EYE: Position = { x: 0, y: STANDING_EYE_HEIGHT, z: 1.6 };
 // Facing the desk and tilted 20° down toward it, as a phone is held when looking at it.
 const FACING_DESK: Rotation = { x: Math.sin(-20 * Math.PI / 360), y: 0, z: 0, w: Math.cos(-20 * Math.PI / 360) };
-/** How near and far the room view's camera draws, in metres; the engine's camera is set to match. */
-export const VIEW_NEAR = 0.01;
-export const VIEW_FAR = 100;
 /** Where the room view looks from before the phone's tracking has a reading. */
 export const START_VIEW: RoomPose = { position: START_EYE, orientation: FACING_DESK };
 

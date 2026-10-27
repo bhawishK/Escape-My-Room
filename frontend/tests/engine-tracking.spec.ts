@@ -2,12 +2,13 @@ import { type Browser, type Page, expect, test } from '@playwright/test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fakeCameras, liveCameras } from './fixtures/cameras';
-import { INITIALIZING, engineCalls, engineFrame, grantMotionPermission, useFakeEngine } from './fixtures/fake-engine';
+import { INITIALIZING, closeMap, engineCalls, engineFrame, grantMotionPermission, useFakeEngine } from './fixtures/fake-engine';
 
 test('the phone sends its movement log to Python, which saves it for reading after a device check', async ({ page }) => {
   await useFakeEngine(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(page);
   await expect(page.locator('#scene')).toHaveAttribute('data-view', 'phone');
   // Tracking starts, then the person walks a metre toward the desk over a second.
   await page.evaluate(() => {
@@ -54,6 +55,7 @@ test('8th Wall poses move the phone, and the headset sees where it really is', a
   await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
   await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(phone);
   await expect(phone.locator('#scene')).toHaveAttribute('data-view', 'phone');
   // The person stands 1.62 m tall at the phone, a step to the right and toward the desk, turned a quarter left.
   const quarterLeft = { x: 0, y: Math.sin(Math.PI / 4), z: 0, w: Math.cos(Math.PI / 4) };
@@ -64,17 +66,18 @@ test('8th Wall poses move the phone, and the headset sees where it really is', a
   await vr.close();
 });
 
-test('the engine starts in metres at the room view’s starting place, facing the desk, with the camera shown under the room', async ({ page }) => {
+test('the engine starts in metres at the room view’s starting place, facing the desk, with the camera hidden', async ({ page }) => {
   await useFakeEngine(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(page);
   await expect(page.locator('#scene')).toHaveAttribute('data-view', 'phone');
   const calls = await engineCalls(page);
   expect(calls.runs).toBe(1);
   expect(calls.configure).toContainEqual(expect.objectContaining({ scale: 'absolute' }));
-  expect(calls.origins.at(-1)).toMatchObject({ origin: { x: 0, y: 1.5, z: 1.6 }, facing: { w: 1, x: 0, y: 0, z: 0 } });
+  expect(calls.origins.at(-1)).toEqual({ origin: { x: 0, y: 1.5, z: 1.6 }, facing: { w: 1, x: 0, y: 0, z: 0 } });
   expect(calls.modules).toContain('reality');
-  expect(calls.cameraFeed).toBe(true);
+  expect(calls.cameraFeed).toBe(false);
   // Step-counting controls belong to the fallback.
   await expect(page.getByRole('button', { name: 'Back to start', exact: true })).toBeHidden();
   await expect(page.getByTestId('engine-credits')).toContainText('Niantic Spatial');
@@ -90,6 +93,7 @@ test('while the engine starts, the phone asks for gentle movement and the headse
   await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
   await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(phone);
   // Working out scale, the engine reports poses that mean nothing yet.
   await engineFrame(phone, { x: 3, y: 0.4, z: -2 }, undefined, INITIALIZING);
   await expect(phone.getByTestId('view-status')).toHaveText('Starting tracking · move the phone gently');
@@ -110,6 +114,7 @@ test('a loss holds the view, tells the headset the phone is lost, and recovery t
   await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
   await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(phone);
   await engineFrame(phone, { x: 0.5, y: 1.5, z: 1 });
   await expect(vr.getByTestId('marker-position')).toHaveText('0.50, 1.50, 1.00 m');
   await expect(vr.getByTestId('presence-phone')).toHaveText('Phone · here · 0.50, 1.50, 1.00 m · heading 0.00 rad');
@@ -132,6 +137,7 @@ test('lost while pointing steeply at the floor, the hint says to raise the phone
   await useFakeEngine(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(page);
   // Tilted 60° down, as before every loss on the iPhone.
   const down = { x: Math.sin(-Math.PI / 6), y: 0, z: 0, w: Math.cos(-Math.PI / 6) };
   await engineFrame(page, { x: 0, y: 1.5, z: 1 }, down);
@@ -147,6 +153,7 @@ test('a loss while carrying the box keeps the hold, and letting go then drops it
   await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
   await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(phone);
   await expect(phone.getByTestId('room-status')).toHaveAttribute('data-available', 'true');
   // 1.2 m back and up, tilted 45° down: the screen centre meets the floor at the box, which fills the
   // middle of the screen, and holding it aims at its own place, so dropping it leaves it there. Its
@@ -184,6 +191,7 @@ test('after a loss the engine restarts at the start, so the room is lined up aga
   await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
   await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(phone);
   // Standing beside the cabinet, facing a quarter left, when tracking is lost.
   const quarterLeft = { x: 0, y: Math.sin(Math.PI / 4), z: 0, w: Math.cos(Math.PI / 4) };
   await engineFrame(phone, { x: 1.4, y: 1.46, z: -0.6 }, quarterLeft);
@@ -208,6 +216,7 @@ test('in measured mode, Recentre makes where the phone is the start again; tappi
   await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
   await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(phone);
   await expect(phone.getByTestId('tracking-mode')).toHaveText('Tracking · 8th Wall, measured');
   await expect(phone.getByRole('button', { name: 'Back to start', exact: true })).toBeHidden();
   await expect(phone.getByRole('button', { name: 'Step 0.6 m', exact: true })).toBeHidden();
@@ -234,6 +243,7 @@ test('counting steps, the phone says so and shows Back to start and step length,
   });
   await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(page);
   await expect(page.getByTestId('tracking-mode')).toHaveText('Tracking · step counting');
   await expect(page.getByRole('button', { name: 'Back to start', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Step 0.6 m', exact: true })).toBeVisible();
@@ -248,6 +258,7 @@ test('turning while tracking is lost is measured by the orientation sensor and k
   await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
   await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(phone);
   const turnSensor = (alpha: number) => phone.evaluate(alpha => {
     window.dispatchEvent(new DeviceOrientationEvent('deviceorientation', { alpha, beta: 90, gamma: 0 }));
   }, alpha);
@@ -276,6 +287,7 @@ test('the diagnostic report records how measured tracking behaved', async ({ pag
   await useFakeEngine(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(page);
   await expect(page.locator('#scene')).toHaveAttribute('data-view', 'phone');
   await engineFrame(page, { x: 3, y: 0.4, z: -2 }, undefined, INITIALIZING);
   await page.waitForTimeout(200);
@@ -308,6 +320,7 @@ test('the diagnostic report says when the phone counts steps instead, and why', 
   await grantMotionPermission(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(page);
   await expect(page.locator('#scene')).toHaveAttribute('data-view', 'phone');
 
   await expect(page.getByTestId('tracking-stats')).toHaveText('Steps · engine not loaded · tracked');
@@ -327,10 +340,12 @@ test('each opening of the room view is timed to its own first pose, and every mo
   expect(before.mode_changes).toEqual([]);
 
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(page);
   await expect(page.locator('#scene')).toHaveAttribute('data-view', 'phone');
   await engineFrame(page, { x: 0, y: 1.6, z: 1.6 });
   await page.getByRole('button', { name: 'Close', exact: true }).click();
   await page.getByRole('button', { name: 'Open room view', exact: true }).click();
+  await closeMap(page);
   await page.waitForTimeout(300);
   await engineFrame(page, { x: 0, y: 1.6, z: 1.2 });
 
@@ -363,6 +378,7 @@ test('the gaze cursor pauses measured tracking, which the headset sees as lost, 
   await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
   await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(phone);
   await engineFrame(phone, { x: 0.5, y: 1.5, z: 1 });
   await expect(vr.getByTestId('tracking')).toHaveText('Tracked');
 
@@ -377,7 +393,7 @@ test('the gaze cursor pauses measured tracking, which the headset sees as lost, 
   // Stopping the gaze cursor releases the front camera and starts the engine again, from the start.
   await phone.getByRole('button', { name: 'Stop gaze cursor', exact: true }).click();
   await expect.poll(async () => (await engineCalls(phone)).runs).toBe(2);
-  expect((await engineCalls(phone)).origins.at(-1)).toMatchObject(START);
+  expect((await engineCalls(phone)).origins.at(-1)).toEqual(START);
   expect(await liveCameras(phone)).toEqual([]);
   await expect(phone.getByTestId('tracking-mode')).toHaveText('Tracking · 8th Wall, measured');
   await engineFrame(phone, { x: 0.2, y: 1.5, z: 1.4 });
@@ -392,6 +408,7 @@ test('measuring the height is offered only while counting steps: measured tracki
   await useFakeEngine(measuring);
   await measuring.goto('/');
   await measuring.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(measuring);
   await expect(measuring.getByTestId('tracking-mode')).toHaveText('Tracking · 8th Wall, measured');
   await expect(measuring.getByRole('button', { name: 'Measure height', exact: true })).toBeHidden();
   await expect(measuring.getByRole('button', { name: 'Gaze cursor', exact: true })).toBeVisible();
@@ -402,6 +419,7 @@ test('measuring the height is offered only while counting steps: measured tracki
   await grantMotionPermission(counting);
   await counting.goto('/');
   await counting.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(counting);
   await expect(counting.getByTestId('tracking-mode')).toHaveText('Tracking · step counting');
   await expect(counting.getByRole('button', { name: 'Measure height', exact: true })).toBeVisible();
   await counting.close();
@@ -415,6 +433,7 @@ test('closing the room view stops the engine, and reopening starts it again from
   await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
   await phone.goto('/');
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(phone);
   await engineFrame(phone, { x: 0.8, y: 1.5, z: 0.3 });
   await expect(vr.getByTestId('marker-position')).toHaveText('0.80, 1.50, 0.30 m');
 
@@ -423,8 +442,9 @@ test('closing the room view stops the engine, and reopening starts it again from
   await expect(vr.getByTestId('tracking')).toHaveText('Inactive · no positional input');
 
   await phone.getByRole('button', { name: 'Open room view', exact: true }).click();
+  await closeMap(phone);
   await expect.poll(async () => (await engineCalls(phone)).runs).toBe(2);
-  expect((await engineCalls(phone)).origins.at(-1)).toMatchObject(START);
+  expect((await engineCalls(phone)).origins.at(-1)).toEqual(START);
   await engineFrame(phone, { x: 0, y: 1.5, z: 1.5 });
   await expect(vr.getByTestId('marker-position')).toHaveText('0.00, 1.50, 1.50 m');
   await phone.close();
@@ -441,6 +461,7 @@ async function trackingPhone(page: Page): Promise<void> {
   await page.context().route('**/face_landmarker.task', () => undefined);
   await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(page);
   await engineFrame(page, { x: 0.5, y: 1.5, z: 1 });
 }
 
@@ -454,8 +475,9 @@ test('closing the room view while the gaze cursor has the camera does not start 
   expect(await engineCalls(page)).toMatchObject({ runs: 1, stops: 1 });
 
   await page.getByRole('button', { name: 'Open room view', exact: true }).click();
+  await closeMap(page);
   await expect.poll(async () => (await engineCalls(page)).runs).toBe(2);
-  expect((await engineCalls(page)).origins.at(-1)).toMatchObject(START);
+  expect((await engineCalls(page)).origins.at(-1)).toEqual(START);
   await engineFrame(page, { x: 0, y: 1.5, z: 1.5 });
   const changes = (await downloadReport(page)).motion.tracking.status_changes as { status: string; reason: string }[];
   expect(changes.map(({ status, reason }) => `${status}: ${reason}`)).toEqual([
@@ -485,7 +507,7 @@ test('hiding the page stops the gaze cursor but starts the engine only once the 
 
   await visibility('visible');
   await expect.poll(async () => (await engineCalls(page)).runs).toBe(2);
-  expect((await engineCalls(page)).origins.at(-1)).toMatchObject(START);
+  expect((await engineCalls(page)).origins.at(-1)).toEqual(START);
   await expect(page.getByTestId('tracking-mode')).toHaveText('Tracking · 8th Wall, measured');
   // The restarted engine has no reason of its own yet: the old engine's is not carried over.
   const changes = (await downloadReport(page)).motion.tracking.status_changes as { status: string; reason: string }[];
@@ -499,6 +521,7 @@ test('a link can choose step counting even where 8th Wall could track, and the r
   await useFakeEngine(page);
   await page.goto('/?tracking=steps');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(page);
 
   await expect(page.getByTestId('tracking-mode')).toHaveText('Tracking · step counting');
   expect((await engineCalls(page)).runs).toBe(0);
@@ -525,6 +548,7 @@ async function phoneAndHeadset(browser: Browser, link = '/'): Promise<{ phone: P
   await vr.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
   await phone.goto(link);
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(phone);
   return { phone, vr };
 }
 
@@ -606,97 +630,9 @@ test('a height given once in the link is kept on the phone', async ({ page }) =>
   await page.goto('/?height=1.2');
   await page.goto('/');
   await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await closeMap(page);
   await holdStill(page, { x: 0, y: 0.6, z: 1.6 }, 1700);
 
   const tracking = (await downloadReport(page)).motion.tracking;
   expect(tracking.scale).toEqual({ factor: 2, engine_height_m: 0.6, real_height_m: 1.2, clamped: false });
-});
-
-/** Where calibrating places a landmark: 0.4 m from it toward the other one, where a person stands. */
-function standingSpots(a: { x: number; z: number }, b: { x: number; z: number }) {
-  const length = Math.hypot(b.x - a.x, b.z - a.z);
-  const u = { x: (b.x - a.x) / length, z: (b.z - a.z) / length };
-  return {
-    from: { x: a.x + 0.4 * u.x, z: a.z + 0.4 * u.z },
-    to: { x: b.x - 0.4 * u.x, z: b.z - 0.4 * u.z },
-    apart: length - 0.8,
-    u,
-  };
-}
-const DESK = { x: 0, z: -1.2 };
-const DOOR = { x: -1.5, z: 1.5 };
-
-test('standing at two objects calibrates scale, place and heading', async ({ browser }) => {
-  const { phone, vr } = await phoneAndHeadset(browser);
-  await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 });
-  await phone.getByRole('button', { name: 'Calibrate', exact: true }).click();
-  await expect(phone.getByTestId('calibrate-prompt')).toHaveText(
-    'Stand at one of these, on the side facing the other you will walk to, and tap it');
-  await phone.getByRole('button', { name: 'Desk', exact: true }).click();
-  await expect(phone.getByTestId('calibrate-prompt')).toHaveText('Now walk to another and tap it');
-
-  // 8th Wall sees the walk from the desk to the door as 2.5 times too short, and along its +x.
-  const { to, apart, u } = standingSpots(DESK, DOOR);
-  const walked = apart / 2.5;
-  await engineFrame(phone, { x: walked, y: 1.5, z: 1.6 });
-  await phone.getByRole('button', { name: 'Door', exact: true }).click();
-
-  // 8th Wall's +x is the room's direction from the desk to the door, (-0.49, 0.87): a turn of -119°.
-  await expect(phone.getByTestId('view-status')).toHaveText('Calibrated · ×2.50 · turned -119°');
-  const at = (x: number, z: number) => `${x.toFixed(2)}, 1.50, ${z.toFixed(2)} m`;
-  await expect(vr.getByTestId('marker-position')).toHaveText(at(to.x, to.z));
-  // From here 8th Wall's 0.2 m along its +x is half a metre on, toward where the door lies.
-  await engineFrame(phone, { x: walked + 0.2, y: 1.5, z: 1.6 });
-  await expect(vr.getByTestId('marker-position')).toHaveText(at(to.x + 0.5 * u.x, to.z + 0.5 * u.z));
-
-  await phone.getByRole('button', { name: 'Send log', exact: true }).click();
-  await expect(phone.getByTestId('view-status')).toHaveText(/^Log sent/);
-  const folder = join(process.env.ESCAPE_ROOM_TEST_DATA!, '8771', 'movement-logs');
-  const log = JSON.parse(readFileSync(join(folder, readdirSync(folder).sort().at(-1)!), 'utf-8'));
-  expect(log.tracking.calibration).toMatchObject({ from: 'desk', to: 'door', scale: 2.5, turn_deg: -119 });
-  expect(log.tracking.scale_in_force).toBe('calibration');
-  await phone.close();
-  await vr.close();
-});
-
-test('calibrating is refused with a reason before tracking, and for objects too close together', async ({ page }) => {
-  await useFakeEngine(page);
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Connect phone', exact: true }).click();
-  await engineFrame(page, { x: 0, y: 1.5, z: 1.6 }, undefined, INITIALIZING);
-  await page.getByRole('button', { name: 'Calibrate', exact: true }).click();
-  await page.getByRole('button', { name: 'Desk', exact: true }).click();
-  await expect(page.getByTestId('calibrate-prompt')).toHaveText('Wait until 8th Wall is tracking, then tap again');
-
-  await engineFrame(page, { x: 0, y: 1.5, z: 1.6 });
-  await page.getByRole('button', { name: 'Desk', exact: true }).click();
-  await engineFrame(page, { x: 0.6, y: 1.5, z: 1.6 });
-  await page.getByRole('button', { name: 'Cabinet', exact: true }).click();
-  await expect(page.getByTestId('calibrate-prompt')).toHaveText('Those are 1.4 m apart: choose two at least 2 m apart');
-  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await expect(page.getByTestId('calibrate-prompt')).toBeHidden();
-});
-
-test('a restart undoes the calibration and says so, closing a calibration part done', async ({ browser }) => {
-  const { phone } = await phoneAndHeadset(browser);
-  await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 });
-  await phone.getByRole('button', { name: 'Calibrate', exact: true }).click();
-  await phone.getByRole('button', { name: 'Desk', exact: true }).click();
-  await engineFrame(phone, { x: 1, y: 1.5, z: 1.6 });
-  await phone.getByRole('button', { name: 'Door', exact: true }).click();
-  await expect(phone.getByTestId('view-status')).toHaveText(/^Calibrated/);
-
-  // Half way through calibrating again, 8th Wall is lost and restarts at its start.
-  await phone.getByRole('button', { name: 'Calibrate', exact: true }).click();
-  await phone.getByRole('button', { name: 'Desk', exact: true }).click();
-  await engineFrame(phone, { x: 9, y: 9, z: 9 }, undefined, INITIALIZING);
-  await engineFrame(phone, { x: 0, y: 1.5, z: 1.6 });
-
-  await expect(phone.getByTestId('view-status')).toHaveText('Calibration undone · calibrate again for the true scale');
-  await expect(phone.getByTestId('calibrate-prompt')).toBeHidden();
-  const tracking = (await downloadReport(phone)).motion.tracking;
-  expect(tracking.calibration).toBeNull();
-  expect(tracking.calibrations_undone).toBe(1);
-  expect(tracking.scale_in_force).toBe('none');
-  await phone.close();
 });

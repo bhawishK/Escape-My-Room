@@ -1,11 +1,10 @@
 /**
  * Measured phone tracking from the 8th Wall engine: its back camera and motion sensors together
- * give where the phone is in metres and which way it faces. It draws the camera image on its own
- * canvas, beneath the room view, which then draws the room's objects over it (#122).
+ * give where the phone is in metres and which way it faces. The camera image is never drawn.
  */
 import * as THREE from 'three';
 import type { PhoneTracking } from './phone-tracking';
-import { PhoneLook, START_EYE, START_VIEW, VIEW_FAR, VIEW_NEAR, pitchOf, type RoomPose } from './phone-view';
+import { PhoneLook, START_EYE, START_VIEW, pitchOf, type RoomPose } from './phone-view';
 import type { Position, RoomLandmark, Rotation, TrackingStatus } from './protocol';
 
 /** One frame of the engine's world tracking. */
@@ -16,8 +15,6 @@ interface Reality {
   trackingStatus?: string;
   /** Why tracking is limited, such as `INITIALIZING`. */
   trackingReason?: string;
-  /** The camera's projection, a column-major 4×4 in the convention Three.js uses. */
-  intrinsics?: number[];
 }
 
 interface PipelineModule {
@@ -36,16 +33,10 @@ export interface Engine {
   stop(): void;
   XrController: {
     configure(options: { scale: 'absolute' | 'responsive' }): void;
-    updateCameraProjectionMatrix(options: {
-      cam?: { pixelRectWidth: number; pixelRectHeight: number; nearClipPlane: number; farClipPlane: number };
-      origin: Position;
-      facing: Rotation;
-    }): void;
+    updateCameraProjectionMatrix(options: { origin: Position; facing: Rotation }): void;
     recenter(): void;
     pipelineModule(): PipelineModule;
   };
-  /** Draws the camera image on the canvas the engine runs on. */
-  GlTextureRenderer: { pipelineModule(): PipelineModule };
   XrDevice: {
     isDeviceBrowserCompatible(options: { allowedDevices: unknown }): boolean;
     incompatibleReasons(options: { allowedDevices: unknown }): unknown[];
@@ -82,8 +73,6 @@ const TOWARD_DESK = { w: 1, x: 0, y: 0, z: 0 };
 interface EngineEvents {
   /** The engine has measured a new pose. */
   moved: (pose: RoomPose) => void;
-  /** The engine's camera projection changed: the room's objects are drawn over its image with it. */
-  projection: (intrinsics: number[]) => void;
   /** Opening the camera: `requesting`, `hasStream`, `hasVideo` or `failed`. */
   camera: (status: string) => void;
   /** The engine's own tracking status and reason changed. */
@@ -140,14 +129,11 @@ export interface Calibration {
 /** Why a tap while calibrating was not taken; its message says what to do. */
 export class CalibrationRefused extends Error {}
 
-// Objects closer than this give too short a line to measure a scale on: 2 m apart leaves 1.2 m
-// between where a person stands at each.
+// Two taps on the room's map closer than this give too short a line to measure a scale on.
 const CALIBRATE_APART = 2;
 // Less walked between the taps than this by 8th Wall is no walk at all.
 const CALIBRATE_WALKED = 0.3;
-// A person stands about this far from an object's middle, toward where they came from.
-const STANDING_OFF = 0.4;
-// The first of two taps on the room's map, rather than at an object (#124).
+// The first of two taps on the room's map (#124).
 const MAP_SPOT = 'map';
 
 /**
@@ -247,8 +233,6 @@ export class EngineTracking implements PhoneTracking {
   /** Counts starts and stops, so a start that finishes after a stop does not run the engine. */
   private attempts = 0;
   private latest: RoomPose | null = null;
-  /** The camera projection last reported, to report each change once. */
-  private intrinsics = '';
   /** The engine's last status and reason, to report each change once. */
   private engineStatus = '';
   /** Whether the engine is tracking normally now, and whether it has since it started. */
@@ -280,9 +264,14 @@ export class EngineTracking implements PhoneTracking {
   private readonly scale: ScaleMeter;
   /** 8th Wall's own pose at the last normal frame, before scaling. */
   private engineAt: RoomPose | null = null;
-  /** The first object stood at while calibrating, and where 8th Wall had the phone then. */
+  /** The first tap on the map while calibrating, and where 8th Wall had the phone then. */
   private standingAt: { mark: RoomLandmark; at: Position } | null = null;
   private calibration: Calibration | null = null;
+  /**
+   * Where the person last placed themselves on the map, and the way they faced: their start, kept
+   * through restarts, to line the room up again there (#127).
+   */
+  private startSpot: { spot: { x: number; z: number }; heading: number } | null = null;
 
   constructor(
     private readonly engine: Engine,
@@ -292,16 +281,6 @@ export class EngineTracking implements PhoneTracking {
     heldAt = HELD_AT,
   ) {
     this.scale = new ScaleMeter(heldAt);
-    // A turned phone or a browser bar coming and going resizes the room view; the camera image
-    // follows, and the engine reports its camera again for the new size.
-    new ResizeObserver(() => { if (this.running) this.fitCanvas(); }).observe(canvas);
-  }
-
-  /** One canvas pixel to each screen pixel, as the room view draws over it (#109). */
-  private fitCanvas(): void {
-    const { canvas } = this;
-    if (canvas.width !== canvas.clientWidth) canvas.width = canvas.clientWidth;
-    if (canvas.height !== canvas.clientHeight) canvas.height = canvas.clientHeight;
   }
 
   get active(): boolean { return this.running; }
@@ -375,37 +354,24 @@ export class EngineTracking implements PhoneTracking {
     this.scale.restart(true);
     this.uncalibrate();
     this.engineStatus = '';
-    this.intrinsics = '';
     this.normal = false;
     this.everNormal = false;
     this.straighten();
-    this.fitCanvas();
-    const { engine, canvas } = this;
+    const { engine } = this;
     engine.XrController.configure({ scale: 'absolute' });
     engine.clearCameraPipelineModules();
     engine.addCameraPipelineModules([
-      engine.GlTextureRenderer.pipelineModule(),
       engine.XrController.pipelineModule(),
       {
         name: 'escape-room-tracking',
         onCameraStatusChange: ({ status }) => this.events.camera(status),
         onException: error => this.events.error(error instanceof Error ? error.message : String(error)),
         // In metres, x, z and facing start here once scale is known; the engine replaces this y
-        // with the phone's measured height above the floor. Its camera covers the room view's
-        // screen and draws as near and far, so the two pictures match.
-        onStart: () => engine.XrController.updateCameraProjectionMatrix({
-          cam: { pixelRectWidth: canvas.width, pixelRectHeight: canvas.height, nearClipPlane: VIEW_NEAR, farClipPlane: VIEW_FAR },
-          origin: START_EYE,
-          facing: TOWARD_DESK,
-        }),
+        // with the phone's measured height above the floor.
+        onStart: () => engine.XrController.updateCameraProjectionMatrix({ origin: START_EYE, facing: TOWARD_DESK }),
         onUpdate: ({ processCpuResult }) => {
           const reality = processCpuResult.reality;
           if (!reality) return;
-          const intrinsics = reality.intrinsics?.join(',') ?? '';
-          if (intrinsics && intrinsics !== this.intrinsics) {
-            this.intrinsics = intrinsics;
-            this.events.projection([...reality.intrinsics!]);
-          }
           const { position: p, rotation: r } = reality;
           const engineStatus = `${reality.trackingStatus ?? 'unknown'} ${reality.trackingReason ?? 'unknown'}`;
           if (engineStatus !== this.engineStatus) {
@@ -466,54 +432,54 @@ export class EngineTracking implements PhoneTracking {
   }
 
   /**
-   * The person stands at `mark`. The first tap remembers where 8th Wall has them; the second, at
-   * another object, calibrates: the room distance between the two over 8th Wall's gives its scale,
-   * the turn between the two directions its heading, and the second object the place. Returns the
-   * calibration after the second tap, null after the first. Throws `CalibrationRefused`, with what
-   * to do, when it cannot be taken.
+   * The person taps where they stand on the room's map (#124), and drags the way they face. The
+   * first tap places the phone there (keeping its heading for a tap without a drag), and is their
+   * start. A second, at least CALIBRATE_APART away after a walk, also sets 8th Wall's scale and
+   * heading: the room distance between the taps over 8th Wall's gives its scale, the turn between
+   * the two directions its heading. Returns the calibration after a second tap, null otherwise;
+   * throws `CalibrationRefused` before 8th Wall tracks.
    */
-  markAt(mark: RoomLandmark): Calibration | null {
-    const engine = this.engineAt;
-    if (this.status !== 'tracked' || !engine) {
-      throw new CalibrationRefused('Wait until 8th Wall is tracking, then tap again');
-    }
+  placeAt(spot: { x: number; z: number }, heading: number | null): Calibration | null {
+    const engine = this.tracked();
     const first = this.standingAt;
-    if (!first || first.mark.id === mark.id || first.mark.id === MAP_SPOT) {
-      this.standingAt = { mark, at: { ...engine.position } };
-      return null;
+    if (first) {
+      const apart = Math.hypot(spot.x - first.mark.x, spot.z - first.mark.z);
+      const walked = Math.hypot(engine.position.x - first.at.x, engine.position.z - first.at.z);
+      if (apart >= CALIBRATE_APART && walked >= CALIBRATE_WALKED) return this.calibrateBetween(first, spot, engine);
     }
-    const apart = Math.hypot(mark.x - first.mark.x, mark.z - first.mark.z);
-    if (apart < CALIBRATE_APART) {
-      throw new CalibrationRefused(`Those are ${apart.toFixed(1)} m apart: choose two at least ${CALIBRATE_APART} m apart`);
-    }
-    const walked = Math.hypot(engine.position.x - first.at.x, engine.position.z - first.at.z);
-    if (walked < CALIBRATE_WALKED) {
-      throw new CalibrationRefused(`Walk from the ${first.mark.label} to the ${mark.label}, then tap it`);
-    }
-    // A person stands a step from each object, toward the other.
-    return this.calibrateBetween(first, mark, engine, STANDING_OFF);
+    this.place(engine, spot, heading);
+    this.events.placed(spot, heading);
+    return null;
   }
 
   /**
-   * The person taps where they stand on the room's map (#124), and drags the way they face. The
-   * first tap places the phone there (keeping its heading for a tap without a drag). A second, at
-   * least CALIBRATE_APART away after a walk, also sets 8th Wall's scale and heading, as two
-   * objects do. Returns the calibration after a second tap, null otherwise; throws
-   * `CalibrationRefused` before 8th Wall tracks.
+   * The person stands at their start again, facing as they did (#127): the room is lined up with
+   * it once more, after drift or a loss, keeping the scale. A tap on the map after a walk then
+   * sets the scale again. Throws `CalibrationRefused` before 8th Wall tracks or with no start.
    */
-  placeAt(spot: { x: number; z: number }, heading: number | null): Calibration | null {
+  backAtStart(): void {
+    const engine = this.tracked();
+    const start = this.startSpot;
+    if (!start) throw new CalibrationRefused('Place yourself on the map first');
+    this.place(engine, start.spot, start.heading);
+    this.events.realigned(`back at the start (${start.spot.x.toFixed(2)}, ${start.spot.z.toFixed(2)}), heading ${start.heading.toFixed(2)} rad`);
+  }
+
+  /** Whether the person has placed themselves on the map, so has a start to go back to. */
+  get hasStart(): boolean { return this.startSpot !== null; }
+
+  /** 8th Wall's pose now, or `CalibrationRefused` while it does not track. */
+  private tracked(): RoomPose {
     const engine = this.engineAt;
     if (this.status !== 'tracked' || !engine) {
       throw new CalibrationRefused('Wait until 8th Wall is tracking, then tap again');
     }
-    const mark = { id: MAP_SPOT, label: 'spot on the map', aliases: [], ...spot };
-    const first = this.standingAt;
-    if (first?.mark.id === MAP_SPOT) {
-      const apart = Math.hypot(spot.x - first.mark.x, spot.z - first.mark.z);
-      const walked = Math.hypot(engine.position.x - first.at.x, engine.position.z - first.at.z);
-      if (apart >= CALIBRATE_APART && walked >= CALIBRATE_WALKED) return this.calibrateBetween(first, mark, engine, 0);
-    }
-    // Placed here, facing the way dragged: 8th Wall's heading now is that heading in the room.
+    return engine;
+  }
+
+  /** Places the phone at `spot`, facing `heading` (or as it faces for null), as the person's start. */
+  private place(engine: RoomPose, spot: { x: number; z: number }, heading: number | null): void {
+    // 8th Wall's heading now is that heading in the room.
     if (heading !== null) {
       this.yaw = heading - yawOf(engine.orientation);
       this.turn.setFromAxisAngle(UP, this.yaw);
@@ -523,30 +489,27 @@ export class EngineTracking implements PhoneTracking {
     this.shift.set(spot.x - turned.x, (this.latest?.position.y ?? scaled.y) - turned.y, spot.z - turned.z);
     this.lostFrom = null;
     this.turnAtLoss = null;
-    this.standingAt = { mark, at: { ...engine.position } };
+    this.standingAt = { mark: { id: MAP_SPOT, label: 'spot on the map', aliases: [], ...spot }, at: { ...engine.position } };
     this.latest = this.intoRoom({ position: scaled, orientation: engine.orientation });
+    this.startSpot = { spot: { ...spot }, heading: yawOf(this.latest.orientation) };
     this.events.moved(this.latest);
-    this.events.placed(spot, heading);
-    return null;
   }
 
   /**
-   * Calibrates from two places the person stood, `first` and `mark`, each `off` metres from the
-   * place toward the other: the room distance over 8th Wall's gives its scale, the turn between
-   * the two directions its heading, and `mark` the place.
+   * Calibrates from the first tap on the map and the phone at `spot` now: the room distance over
+   * 8th Wall's gives its scale, the turn between the two directions its heading, and `spot` the
+   * place.
    */
   private calibrateBetween(
-    first: { mark: RoomLandmark; at: Position }, mark: RoomLandmark, engine: RoomPose, off: number,
+    first: { mark: RoomLandmark; at: Position }, spot: { x: number; z: number }, engine: RoomPose,
   ): Calibration {
-    const apart = Math.hypot(mark.x - first.mark.x, mark.z - first.mark.z);
+    const apart = Math.hypot(spot.x - first.mark.x, spot.z - first.mark.z);
     const from = first.at;
     const to = { ...engine.position };
     const walked = Math.hypot(to.x - from.x, to.z - from.z);
-    const ux = (mark.x - first.mark.x) / apart;
-    const uz = (mark.z - first.mark.z) / apart;
-    const there = { x: mark.x - off * ux, z: mark.z - off * uz };
-    const roomApart = apart - 2 * off;
-    const factor = roomApart / walked;
+    const ux = (spot.x - first.mark.x) / apart;
+    const uz = (spot.z - first.mark.z) / apart;
+    const factor = apart / walked;
     // The turn about the vertical that takes 8th Wall's direction of the walk to the room's.
     const vx = to.x - from.x;
     const vz = to.z - from.z;
@@ -555,30 +518,24 @@ export class EngineTracking implements PhoneTracking {
     this.yaw = turn;
     this.turn.setFromAxisAngle(UP, turn);
     const turned = this.scratch.set(to.x, to.y, to.z).applyQuaternion(this.turn);
-    this.shift.set(there.x - turned.x, (this.latest?.position.y ?? to.y) - to.y, there.z - turned.z);
+    this.shift.set(spot.x - turned.x, (this.latest?.position.y ?? to.y) - to.y, spot.z - turned.z);
     this.lostFrom = null;
     this.turnAtLoss = null;
     this.standingAt = null;
-    // The phone is where the second object puts it now, not at its next frame.
+    // The phone is where the second tap puts it now, not at its next frame.
     this.latest = this.intoRoom({ position: this.scale.toRoom(to), orientation: engine.orientation });
     this.events.moved(this.latest);
     this.calibration = {
-      from: first.mark.id, to: mark.id, engine_distance_m: Number(walked.toFixed(3)),
-      room_distance_m: Number(roomApart.toFixed(3)), scale: Number(factor.toFixed(3)),
+      from: first.mark.id, to: MAP_SPOT, engine_distance_m: Number(walked.toFixed(3)),
+      room_distance_m: Number(apart.toFixed(3)), scale: Number(factor.toFixed(3)),
       turn_deg: Math.round(turn * 180 / Math.PI),
     };
     this.events.calibrated(this.calibration);
     return this.calibration;
   }
 
-  /** Forgets the first object stood at, when calibrating is cancelled. */
-  cancelCalibration(): void { this.standingAt = null; }
-
-  /** Whether the first object has been stood at, and calibrating waits for the second. */
-  get calibrating(): boolean { return this.standingAt !== null; }
-
   /** Whether the phone was placed on the map, and a second tap after a walk would set the scale. */
-  get placedOnMap(): boolean { return this.standingAt?.mark.id === MAP_SPOT; }
+  get placedOnMap(): boolean { return this.standingAt !== null; }
 
   private uncalibrate(): void {
     this.standingAt = null;
