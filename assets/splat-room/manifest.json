@@ -6,7 +6,8 @@
   "pivot": "bottom_center",
   "quaternion_order": "xyzw",
   "splat": {
-    "asset": "room.ply"
+    "asset": "room.ply",
+    "phone_asset": "room-phone.ply"
   },
   "entities": [
     {

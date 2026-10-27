@@ -12,6 +12,12 @@ const RATE_WINDOW_MS = 5000;
 /** Status and mode changes kept; a run with more is losing tracking far too often anyway. */
 const KEPT_CHANGES = 200;
 
+/** The splat a room view draws: its file and how many splats it holds. */
+export interface SplatDrawn {
+  file: string;
+  splats: number;
+}
+
 export interface StatusChange {
   at_ms: number;
   mode: TrackingMode;
@@ -44,6 +50,8 @@ export class TrackingStats {
   private readonly openings: Opening[] = [];
   /** When recent measured poses arrived, within the rate window. */
   private readonly poses: number[] = [];
+  /** When recent frames were drawn, within the rate window. */
+  private readonly frames: number[] = [];
 
   /** The room view opens and tracking starts: a new opening, timed to its own first pose. */
   opened(now = performance.now()): void {
@@ -99,15 +107,22 @@ export class TrackingStats {
     while (this.poses.length && now - this.poses[0] > RATE_WINDOW_MS) this.poses.shift();
   }
 
+  /** A frame was drawn. */
+  frame(now = performance.now()): void {
+    this.frames.push(now);
+    while (this.frames.length && now - this.frames[0] > RATE_WINDOW_MS) this.frames.shift();
+  }
+
   /** One line for the page's diagnostics. */
   summary(now = performance.now()): string {
     if (!this.current) return 'No tracking yet';
     const status = this.trackingStatus ?? 'starting';
     if (this.current.mode === 'steps') return ['Steps', this.current.fallback_reason, status].filter(Boolean).join(' · ');
-    return `Measured · ${status} · ${this.rate(now).toFixed(1)} poses/s`;
+    return `Measured · ${status} · ${this.rate(this.poses, now).toFixed(1)} poses/s · ${this.rate(this.frames, now).toFixed(0)} fps`;
   }
 
-  report(now = performance.now()): Record<string, unknown> {
+  /** `splat` is the file the room view draws and how many splats it holds. */
+  report(splat: SplatDrawn | null = null, now = performance.now()): Record<string, unknown> {
     return {
       mode: this.current?.mode ?? null,
       fallback_reason: this.current?.fallback_reason ?? null,
@@ -115,15 +130,17 @@ export class TrackingStats {
       status_changes: [...this.statusChanges],
       openings: this.openings.map(opening => ({ ...opening })),
       first_tracked_pose_ms: this.openings.at(-1)?.first_tracked_pose_ms ?? null,
-      pose_rate_hz: Number(this.rate(now).toFixed(2)),
+      pose_rate_hz: Number(this.rate(this.poses, now).toFixed(2)),
+      frame_rate_hz: Number(this.rate(this.frames, now).toFixed(2)),
+      splat,
       time_note: 'Times are milliseconds since the room view first opened, on this device.',
     };
   }
 
   private time(now: number): number { return Math.round(now - (this.clockFrom ?? now)); }
 
-  private rate(now: number): number {
-    return this.poses.filter(time => now - time <= RATE_WINDOW_MS).length / (RATE_WINDOW_MS / 1000);
+  private rate(times: readonly number[], now: number): number {
+    return times.filter(time => now - time <= RATE_WINDOW_MS).length / (RATE_WINDOW_MS / 1000);
   }
 
   private keep<T>(changes: T[], change: T): void {
