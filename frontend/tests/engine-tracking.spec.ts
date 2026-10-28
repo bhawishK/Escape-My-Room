@@ -145,7 +145,7 @@ test('lost while pointing steeply at the floor, the hint says to raise the phone
   await expect(page.getByTestId('view-status')).toHaveText('Tracking lost · raise the phone from the plain floor toward something with detail');
 });
 
-test('a loss while carrying the box keeps the hold, and letting go then drops it and reports the loss', async ({ browser }) => {
+test('a loss while carrying puts the box down, and a new hold starts only after tracking returns', async ({ browser }) => {
   const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
   const vr = await browser.newPage();
   await useFakeEngine(phone);
@@ -171,14 +171,23 @@ test('a loss while carrying the box keeps the hold, and letting go then drops it
   await phone.mouse.down();
   await expect(phone.getByTestId('view-status')).toHaveText(/^Carrying box/);
   await engineFrame(phone, { x: 9, y: 7, z: -12 }, tilted, INITIALIZING);
-  await expect(phone.getByTestId('view-status')).toHaveText(/^Tracking lost/);
-  // Python would drop the box at a pose without a position, so none is sent while it is held.
-  await phone.waitForTimeout(800);
-  await expect(vr.getByTestId('tracking')).toHaveText('Tracked');
-  await expect(phone.getByTestId('view-status')).toHaveText(/^Tracking lost/);
+  await expect(phone.getByTestId('view-status')).toHaveText(/The box stays where it was/);
+  await expect(phone.getByTestId('control-status')).toHaveText('No object is being moved');
+  await expect(vr.getByTestId('control-status')).toHaveText('No object is being moved');
+  await expect(vr.getByTestId('tracking')).toHaveText('Lost · position unavailable');
+  const stayed = await (await phone.request.get('/api/room')).json() as { entities: { id: string; position: { x: number; y: number; z: number } }[] };
+  const place = stayed.entities.find(entity => entity.id === 'box')!.position;
+  expect(place.x).toBeCloseTo(box.x);
+  expect(place.y).toBeCloseTo(0);
+  expect(place.z).toBeCloseTo(box.z);
+  await phone.mouse.up();
+  await engineFrame(phone, { x: box.x, y: 1.2, z: box.z + 1.2 }, tilted);
+  await expect(phone.getByTestId('view-status')).toHaveText('Box selected · press and hold it to pick it up');
+  await phone.mouse.down();
+  await expect(phone.getByTestId('view-status')).toHaveText(/^Carrying box/);
+  await expect(vr.getByTestId('control-status')).toHaveText('Phone is moving box');
   await phone.mouse.up();
   await expect(phone.getByTestId('view-status')).toHaveText('Dropped box');
-  await expect(vr.getByTestId('tracking')).toHaveText('Lost · position unavailable');
   await phone.close();
   await vr.close();
 });

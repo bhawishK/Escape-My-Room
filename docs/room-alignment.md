@@ -59,7 +59,7 @@ Calibration reads the viewer pose in the `local` reference space. The session re
 - Disconnecting a device clears that device only: status returns to `not_aligned`, and yaw and origin return to 0. The other device stays aligned.
 - Connecting the same role in a new tab does the same before the new page confirms. The new page has a new XR origin, so the previous yaw and origin are dropped.
 - Confirming again replaces only that device's yaw and origin.
-- A reset of the `local` reference space, or a loss of tracking, means the saved yaw and origin still describe the old origin. The status can remain `aligned`. Rebuilding the alignment after that loss is Issue 10.
+- A reset of the `local` reference space, or leaving VR, forgets the saved yaw and origin (`clear_alignment`). The status returns to `not_aligned`, and the person presses A again. A brief tracking loss lets go of a hold but keeps the alignment.
 - A new prepared-room version would move the landmarks this alignment was built on. The current room version is 1.
 
 ## What is stored

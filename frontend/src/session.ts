@@ -131,6 +131,12 @@ export class SessionClient {
     this.socket.send(JSON.stringify({ type: 'calibrate', ...input }));
   }
 
+  /** The saved alignment described an old reference space, so both screens forget it. */
+  sendClearAlignment(): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: 'clear_alignment' }));
+  }
+
   /** Asks Python to select a room object for this phone, or to deselect with null. */
   sendSelection(roomVersion: number, id: string | null): void {
     if (this.socket?.readyState !== WebSocket.OPEN) return;

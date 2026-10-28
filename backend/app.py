@@ -36,6 +36,7 @@ from backend.prepared_room import ASSET_URL_PREFIX, PreparedRoomError, load_prep
 from backend.protocol import (
     AcquireMessage,
     CalibrateMessage,
+    ClearAlignmentMessage,
     EntityTransformMessage,
     GripMessage,
     MarkerState,
@@ -55,6 +56,7 @@ type Incoming = (
     | RoomLoadedMessage
     | EntityTransformMessage
     | CalibrateMessage
+    | ClearAlignmentMessage
     | SelectMessage
     | AcquireMessage
     | ReleaseMessage
@@ -67,6 +69,7 @@ INCOMING: dict[str, type[Incoming]] = {
     "room_loaded": RoomLoadedMessage,
     "entity_transform": EntityTransformMessage,
     "calibrate": CalibrateMessage,
+    "clear_alignment": ClearAlignmentMessage,
     "select": SelectMessage,
     "acquire": AcquireMessage,
     "release": ReleaseMessage,
@@ -334,6 +337,9 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                                 room.load_error or "Prepared room is unavailable.",
                             )
                             continue
+                        await room.broadcast()
+                    elif isinstance(incoming, ClearAlignmentMessage):
+                        room.clear_alignment(role)
                         await room.broadcast()
                     elif isinstance(incoming, CalibrateMessage):
                         result = room.accept_alignment(role, incoming.yaw, incoming.origin)

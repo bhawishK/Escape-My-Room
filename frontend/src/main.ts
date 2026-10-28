@@ -69,6 +69,8 @@ let gripDown = false;
 let grabOffset: Position | null = null;
 /** The headset hold already asked to end, so it is asked once. */
 let headsetReleasing: number | null = null;
+/** Shown in the headset after a loss or a reset, until the person lines up or grabs again. */
+let headsetPauseNotice: string | null = null;
 /** The floor height a carried object slides across, from where it rested when picked up. */
 let carryFloor: number | null = null;
 /** The floor's extent, which a carried object stays on. */
@@ -109,12 +111,19 @@ function chooseTracking(): void {
       },
       status: (status, hint) => {
         trackingStats.status(status);
+        const pausing = status !== 'tracked' && ownHold() !== null;
+        const shown = hint && pausing
+          ? `${hint}. The box stays where it was. Press and hold again once tracking returns`
+          : hint;
         // Only a tracking hint is replaced on recovery; other messages are left alone.
-        if (hint) element('view-status').textContent = hint;
+        if (shown) element('view-status').textContent = shown;
         else if (trackingHint) element('view-status').textContent = viewInstruction();
-        trackingHint = hint;
-        // A loss during a hold is kept from Python, which would drop the object; the aim holds.
-        if (connected && ownHold() === null) publishTracking();
+        trackingHint = shown ?? '';
+        if (pausing) {
+          // A lost pose must not keep sliding the box. Let go where it last was.
+          view?.predict(null);
+          endHold();
+        } else if (connected && ownHold() === null) publishTracking();
       },
       realigned: detail => movementLog.event('realigned', detail),
       restarted: () => {
@@ -331,7 +340,14 @@ function resumeTrackingAfterGaze(): void {
   trackingStats.restarted();
   void measured.resume().catch(error => showRoomViewError(error, 'Tracking could not start again.')).finally(controls);
 }
-document.addEventListener('visibilitychange', resumeTrackingAfterGaze);
+document.addEventListener('visibilitychange', () => {
+  // A hidden page must not keep a hold going with no one watching it.
+  if (document.visibilityState === 'hidden' && role === 'mobile_master' && ownHold()) {
+    view?.predict(null);
+    endHold();
+  }
+  resumeTrackingAfterGaze();
+});
 
 function entityLabel(id: string): string {
   return state?.room.entities.find(entity => entity.id === id)?.label ?? id;
@@ -391,6 +407,7 @@ function setRoomView(open: boolean): void {
   element('scene').classList.toggle('room-view', open);
   document.documentElement.classList.toggle('room-view-open', open);
   if (!open) {
+    if (ownHold()) endHold();
     if (selected !== null) requestSelection(null);
     gaze.stop();
     depth.stop();
@@ -469,7 +486,9 @@ function applyState(next: SessionState): void {
     releasing = null;
     carryFloor = null;
     view?.predict(null);
-    element('view-status').textContent = `Dropped ${entityLabel(before.entity)}`;
+    element('view-status').textContent = tracking.status === 'lost' && trackingHint
+      ? trackingHint
+      : `Dropped ${entityLabel(before.entity)}`;
   }
   controls();
   view?.apply(next);
@@ -611,7 +630,7 @@ function endHold(): void {
   // Python places it from the latest aim, so it drops exactly where the phone shows it.
   if (tracking.status === 'tracked') publishPose(tracking.pose());
   client.sendRelease(mine.id);
-  // A loss during the hold was kept from Python so the hold went on; say it now.
+  // The hold has ended, so a loss can be published without dropping the object.
   if (tracking.status !== 'tracked') publishTracking();
 }
 
@@ -683,6 +702,7 @@ function handleRoomTouches(sceneView: DiagnosticScene): void {
 try {
   view = new DiagnosticScene(element('scene'));
   xr = new XRDiagnostic(view, overlay, (report, active) => {
+    const wasActive = xrActive;
     xrActive = active;
     overlay.hidden = !active || report.dom_overlay === 'unavailable';
     element('device-report').textContent = JSON.stringify(report, null, 2);
@@ -690,8 +710,13 @@ try {
       'VR needs trusted HTTPS. Desktop diagnostics can run on localhost.' : !report.api_available ?
       'WebXR unavailable. Use the Quest browser for VR.' :
       `VR ${report.immersive_vr ? 'available' : 'unavailable'}. Enter VR to test tracking and input.`;
+    if (role === 'vr_solver' && wasActive && !active) pauseHeadsetHold('ended');
+    else if (
+      role === 'vr_solver' && active &&
+      (report.positional_tracking === 'lost' || report.positional_tracking === 'emulated')
+    ) pauseHeadsetHold('lost');
     controls();
-  }, () => confirmAlignment());
+  }, () => confirmAlignment(), () => pauseHeadsetHold('reset'));
   const sceneView = view;
   handleRoomTouches(sceneView);
   // `?smoothing=` sets the glide in milliseconds for trying other settings; 0 turns it off.
@@ -717,7 +742,7 @@ try {
       sceneView.follow(pose);
       movementLog.pose(trackingMode(), tracking.status, pose);
       const mine = ownHold();
-      if (mine && carryFloor !== null) {
+      if (mine && carryFloor !== null && tracking.status === 'tracked') {
         // Drawn where the screen centre meets the floor now; Python confirms it a moment later.
         const held = state?.room.entities.find(entity => entity.id === mine.entity);
         const margin = held ? Math.max(held.size.width, held.size.depth) / 2 : 0;
@@ -944,6 +969,22 @@ function endHeadsetHold(): void {
   client.sendRelease(mine.id);
 }
 
+/**
+ * Tracking or the VR session can no longer move the object. A lost pose leaves the alignment.
+ * A reset or leaving VR forgets it, because that origin is no longer the one that was saved.
+ */
+function pauseHeadsetHold(reason: 'lost' | 'ended' | 'reset'): void {
+  const held = headsetHold() !== null;
+  endHeadsetHold();
+  grabOffset = null;
+  gripDown = false;
+  if (reason === 'lost' && !held) return;
+  headsetPauseNotice = reason === 'lost'
+    ? 'Tracking lost. The object stays where it was. Squeeze the grip again when the line is orange.'
+    : 'Line the room up again. Press A. The object stays where it was.';
+  view?.showNotice(headsetPauseNotice);
+}
+
 /** Grip and target ray in room meters, after alignment. */
 function roomGrip(sample: ControllerSample): {
   position: Position;
@@ -992,7 +1033,8 @@ function updateHeadsetGrab(time: number): void {
   view?.showAim(rays, rays.find(ray => ray.hit)?.hit ?? null);
   const phoneHold = state?.manipulation?.owner === 'mobile_master' ? state.manipulation : null;
   const mineNow = headsetHold();
-  if (rays.some(ray => ray.blocked)) view?.showNotice('The other person is holding that object.');
+  if (headsetPauseNotice && !mineNow) view?.showNotice(headsetPauseNotice);
+  else if (rays.some(ray => ray.blocked)) view?.showNotice('The other person is holding that object.');
   else if (phoneHold) view?.showNotice(`Phone is holding ${entityLabel(phoneHold.entity)}`);
   else if (mineNow) view?.showNotice(`Holding ${entityLabel(mineNow.entity)} · release the grip`);
   else if (xrActive) view?.showNotice(null);
@@ -1002,10 +1044,12 @@ function updateHeadsetGrab(time: number): void {
   }
   const aligned = state?.alignment.vr_solver.status === 'aligned';
   if (sample.started && !aligned) {
+    headsetPauseNotice = null;
     confirmAlignment();
     return;
   }
   if (sample.started && aligned) {
+    headsetPauseNotice = null;
     const posed = roomGrip(sample);
     const version = state?.room.room_version;
     const entities = state?.room.entities ?? [];
@@ -1044,6 +1088,7 @@ function updateHeadsetGrab(time: number): void {
 
 const confirmAlignment = () => {
   if (!connected) return;
+  headsetPauseNotice = null;
   client.sendCalibration(xr?.confirmedAlignment() ?? { yaw: 0, origin: { x: 0, y: 0, z: 0 } });
 };
 alignButton.addEventListener('click', confirmAlignment);
