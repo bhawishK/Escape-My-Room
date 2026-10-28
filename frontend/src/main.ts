@@ -460,6 +460,10 @@ function ownHold(): SessionState['manipulation'] {
 
 function applyState(next: SessionState): void {
   if (!showsRevision(state?.revision ?? null, next.revision)) return;
+  const otherRole = role === 'vr_solver' ? 'mobile_master' : 'vr_solver';
+  const otherWas = role === 'vr_solver' ? state?.mobile_connected : state?.vr_connected;
+  const otherNow = role === 'vr_solver' ? next.mobile_connected : next.vr_connected;
+  const otherHeld = state?.manipulation?.owner === otherRole;
   const before = ownHold();
   state = next;
   view?.setLocalRole(role);
@@ -541,15 +545,40 @@ function applyState(next: SessionState): void {
           ? 'Put the line on the box until it turns orange, then squeeze the grip'
           : 'Press A to confirm alignment')
     : (next.mobile_connected ? 'Phone connected' : 'Waiting for phone');
+  if (otherWas && !otherNow) {
+    const who = otherRole === 'mobile_master' ? 'Phone' : 'Headset';
+    const left = otherHeld
+      ? `${who} left. The box stays where it was. It can connect again.`
+      : `${who} left. The room is still here. It can connect again.`;
+    if (role === 'vr_solver') {
+      headsetPauseNotice = left;
+      view?.showNotice(left);
+    } else if (roomViewOpen && tracking.status !== 'lost') element('view-status').textContent = left;
+  } else if (!otherWas && otherNow && headsetPauseNotice?.endsWith('It can connect again.')) {
+    headsetPauseNotice = null;
+    if (role === 'vr_solver') view?.showNotice(null);
+  }
 }
 
 const client = new SessionClient({
   state: applyState,
   connection: value => {
     connected = value;
-    element('connection').textContent = value ? `Connected · ${role === 'mobile_master' ? 'Phone' : 'VR headset'}` : 'Not connected';
+    element('connection').textContent = value
+      ? `Connected · ${role === 'mobile_master' ? 'Phone' : 'VR headset'}`
+      : role
+        ? 'Disconnected · press Connect to rejoin the same room'
+        : 'Not connected';
     if (!value) {
       state = null;
+      holding = false;
+      carryFloor = null;
+      releasing = null;
+      gripDown = false;
+      grabOffset = null;
+      headsetReleasing = null;
+      headsetPauseNotice = null;
+      view?.predict(null);
       presenceSent = false;
       lastPresenceAt = -Infinity;
       element('marker-position').textContent = 'No accepted position';

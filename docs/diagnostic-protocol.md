@@ -202,6 +202,14 @@ Issue #10. When the phone loses tracking while it is carrying the box, it lets g
 
 When the headset loses positional tracking while it is holding, it lets go and the object stays. Leaving VR, or a reset of the `local` reference space, also lets go and sends `clear_alignment`, so the saved yaw and origin are forgotten. The person presses A again before the next grab. A new squeeze starts a new hold from the grip, with no offset from the old one.
 
+## Leaving and rejoining
+
+Issue #11. Closing the socket ends that person's hold and leaves the object at the last accepted place. The other person stays, and the room version stays. Pressing the same role button opens a new socket. Its welcome is the whole room as it is now: the object, who is connected, and the room version. The new socket does not keep the old hold, so the first grab is a new one and does not jump from the old grip.
+
+A command that arrives on the socket which was replaced is ignored. A `grip` or `release` that names the old hold returns `stale_manipulation` and does not move the object. Pose and grip numbers start again at 1 on the new socket.
+
+The page that dropped says to press Connect to rejoin the same room. The page that stayed says who left, and that the room is still here. Restarting Python is different: that forgets the room. Reconnecting does not.
+
 ## Motion delivery
 
 Issue #9. While the phone moves a held object, the headset should see continuous motion and the exact final placement, even on a slow network, without anything queueing up during a long hold.

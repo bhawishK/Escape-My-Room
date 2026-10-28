@@ -459,6 +459,7 @@ class PrototypeRoom:
         self.cancel_presence_timer(role)
         self.presence[role] = PresenceState(tracking_status="lost")
         self.presence_seen.pop(role, None)
+        # The object stays at the last accepted place. The other person keeps their own hold.
         if self.manipulation is not None and self.manipulation.owner == role:
             self.drop()
         if role == "mobile_master":

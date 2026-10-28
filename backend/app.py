@@ -262,6 +262,9 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                 if role == "mobile_master":
                     room.marker = MarkerState()
                     room.selection = None
+                # A new connection does not inherit the hold. The object stays at its last place.
+                if room.manipulation is not None and room.manipulation.owner == role:
+                    room.drop()
                 if previous is not None:
                     try:
                         await asyncio.wait_for(
