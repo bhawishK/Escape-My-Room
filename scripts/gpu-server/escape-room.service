@@ -1,0 +1,21 @@
+# The Escape My Room server on the GPU desktop (#139). setup-wizard.sh fills in @USER@ and @REPO@
+# and installs this as /etc/systemd/system/escape-room.service.
+#
+# Python reads its settings from @REPO@/.env. Reconstruction jobs run as its child processes, so
+# they need the CUDA toolkit on PATH for gsplat to compile its CUDA code.
+[Unit]
+Description=Escape My Room server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=@USER@
+WorkingDirectory=@REPO@
+Environment=PATH=@REPO@/.venv/bin:/usr/local/cuda-12.8/bin:/usr/local/bin:/usr/bin:/bin
+Environment=CUDA_HOME=/usr/local/cuda-12.8
+ExecStart=@REPO@/.venv/bin/python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --workers 1 --ws-max-size 16384
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

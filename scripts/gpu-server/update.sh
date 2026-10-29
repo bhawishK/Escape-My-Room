@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Deploys the latest main on the GPU desktop (#139): pull, reinstall, rebuild the frontend, and
+# restart the server. Run it from anywhere; it works in the repository it lives in.
+set -euo pipefail
+
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+cd "$repo"
+echo "▸ Pulling main"
+git pull --ff-only
+echo "▸ Installing the app"
+"$HOME/.local/bin/uv" pip install --python .venv/bin/python -e ".[gpu,dev]"
+echo "▸ Building the frontend"
+(cd frontend && npm ci && npm run build)
+echo "▸ Restarting the server"
+sudo systemctl restart escape-room
+sleep 3
+curl -fsS http://127.0.0.1:8000/api/health && echo
+echo "Done. The tunnel address is unchanged: $("$repo/scripts/gpu-server/address.sh" || echo unknown)"
