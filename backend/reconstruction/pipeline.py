@@ -27,7 +27,10 @@ class Settings:
     frames_per_second: float = 2.0
     max_frames: int = 240
     long_side: int = 1600
-    exhaustive_up_to: int = 150
+    # Up to this many frames, every frame is matched with every other, which joins the walk where
+    # it passes the same place again. Above it, only neighbours in time are: on the desktop 178
+    # frames matched that way placed 83 (#139). 250 frames is about 31,000 pairs, minutes on CPU.
+    exhaustive_up_to: int = 250
     sequential_overlap: int = 15
     mapper: str = "incremental"
     camera_height_m: float = 1.4
