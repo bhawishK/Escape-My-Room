@@ -122,7 +122,9 @@ Python serves `assets/prepared-room/` by default. Set `ESCAPE_ROOM_PREPARED_DIR`
 ESCAPE_ROOM_PREPARED_DIR=assets/multi-asset-room .venv/bin/python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --workers 1 --ws-max-size 16384
 ```
 
-Assets are served under `/assets/prepared-room/` whichever directory is chosen.
+Assets are served under `/assets/prepared-room/` whichever directory is chosen, with `Cache-Control: no-cache`. After a room change the same name is a new file, so browsers check before reusing one.
+
+**A room made live wins over this setting.** Once a reconstruction has been made live on the website ([making a room live](room-preparation.md#making-a-room-live-issue-138), #138), `data/live-room.json` names the live room, and the server starts with it. To serve the room this setting names again, use **Restore previous room** until it is live, or stop Python and delete `data/live-room.json`.
 
 ### What was checked
 

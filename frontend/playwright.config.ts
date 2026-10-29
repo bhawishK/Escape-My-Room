@@ -15,6 +15,8 @@ const servers: TestServer[] = [
   { port: 8774, room: 'splat-room', settings: {} },
   // The development preparation worker, configured to fail its geometry stage.
   { port: 8773, room: 'prepared-room', settings: { ESCAPE_ROOM_FIXTURE_FAIL_STAGE: 'geometry' } },
+  // Its own server, because making a room live (#138) changes the room for every test using it.
+  { port: 8775, room: 'prepared-room', settings: {} },
 ];
 
 // One fresh capture store per run. Workers inherit the variable, so they agree with the servers.

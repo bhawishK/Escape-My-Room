@@ -8,8 +8,13 @@ real ones; only the six stages are fakes that wait briefly and write small files
 - FAKE_RECONSTRUCTION_DIE_AT: a stage at which the process dies without a word, as if killed.
 - FAKE_RECONSTRUCTION_OUT_OF_MEMORY: "twice" makes splat training run out of GPU memory twice;
   "once" makes it run out once and train again smaller, through the real retry.
+- FAKE_RECONSTRUCTION_BROKEN_SPLAT: "1" writes a `room.ply` no room can be built from.
+
+The splat it writes is `build_room.py`'s small test splat, a floor and a block, so the real room
+build (#138) can run on it.
 """
 
+import importlib.util
 import json
 import os
 import sys
@@ -28,6 +33,17 @@ SECONDS = float(os.environ.get("FAKE_RECONSTRUCTION_STAGE_SECONDS") or 0.2)
 DIE_AT = os.environ.get("FAKE_RECONSTRUCTION_DIE_AT")
 OUT_OF_MEMORY = os.environ.get("FAKE_RECONSTRUCTION_OUT_OF_MEMORY")
 TRAINING_STEPS = 3
+BROKEN_SPLAT = os.environ.get("FAKE_RECONSTRUCTION_BROKEN_SPLAT") == "1"
+
+
+def write_test_splat(path: Path) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "splat_build_room", ROOT / "assets" / "splat-room" / "build_room.py"
+    )
+    assert spec and spec.loader
+    build_room = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build_room)
+    build_room.write_test_splat(path)
 
 
 def main() -> int:
@@ -68,7 +84,10 @@ def main() -> int:
         return Stage(name, run)
 
     def package() -> None:
-        (out / "room.ply").write_bytes(b"ply\n")
+        if BROKEN_SPLAT:
+            (out / "room.ply").write_bytes(b"ply\n")
+        else:
+            write_test_splat(out / "room.ply")
         (out / "previews").mkdir(parents=True, exist_ok=True)
         (out / "previews" / "frame_0000.jpg.jpg").write_bytes(b"jpeg")
         (out / "vps").mkdir(parents=True, exist_ok=True)

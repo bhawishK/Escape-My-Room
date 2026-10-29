@@ -4,6 +4,7 @@
  */
 import { errorMessage } from './api';
 import { element } from './dom';
+import type { LiveRoom } from './live-room';
 import type { VideoCaptureSummary } from './room-video';
 
 type StageName = 'frames' | 'colmap' | 'level' | 'splat' | 'vps_map' | 'package';
@@ -31,6 +32,9 @@ export interface ReconstructionJob {
     psnr_db: number | null;
     memory_retried: boolean;
     map_keypoints: number;
+    // Relative to the job folder.
+    splat: string;
+    previews: string[];
   } | null;
 }
 
@@ -87,6 +91,18 @@ export class RoomReconstruction {
   private readonly stages = element<HTMLOListElement>('reconstruction-stages');
   private readonly error = element('reconstruction-error');
   private readonly summary = element('reconstruction-summary');
+  private readonly review = element('reconstruction-review');
+  private readonly previews = element<HTMLUListElement>('reconstruction-previews');
+  private readonly viewer = element<HTMLAnchorElement>('reconstruction-viewer');
+  private readonly makeLive = element<HTMLButtonElement>('make-live');
+  // The job a press of Make live builds.
+  private reviewing: string | null = null;
+
+  constructor(private readonly live: LiveRoom) {
+    this.makeLive.addEventListener('click', () => {
+      if (this.reviewing) void this.live.makeLive(this.reviewing, this.makeLive);
+    });
+  }
 
   /** A button that reconstructs this video. */
   button(capture: VideoCaptureSummary): HTMLButtonElement {
@@ -146,9 +162,28 @@ export class RoomReconstruction {
     if (job.error) this.error.textContent = job.error.message;
     this.summary.hidden = job.reconstruction === null;
     if (job.reconstruction) this.summary.textContent = summaryText(job.reconstruction);
+    this.showReview(job);
     if (job.state === 'queued' || job.state === 'running') {
       setTimeout(() => { void this.poll(job.id, video, generation); }, POLL_MS);
     }
+  }
+
+  /** The finished reconstruction's previews, a link to look round its splat, and Make live. */
+  private showReview(job: ReconstructionJob): void {
+    const made = job.state === 'awaiting_review' ? job.reconstruction : null;
+    this.review.hidden = made === null;
+    this.reviewing = made ? job.id : null;
+    if (!made) return;
+    const file = (path: string) => `/api/preparations/${job.id}/files/${path}`;
+    this.previews.replaceChildren(...made.previews.map(path => {
+      const item = document.createElement('li');
+      const image = document.createElement('img');
+      image.src = file(path);
+      image.alt = `Held-out frame and the splat's view: ${path.split('/').pop()}`;
+      item.append(image);
+      return item;
+    }));
+    this.viewer.href = `/splat.html?src=${encodeURIComponent(file(made.splat))}`;
   }
 
   private async poll(id: string, video: string, generation: number): Promise<void> {

@@ -95,6 +95,19 @@
             <ol id="reconstruction-stages" class="preparation-stages" aria-label="Reconstruction stages"></ol>
             <p id="reconstruction-error" data-testid="reconstruction-error" class="error-message" role="alert" hidden></p>
             <p id="reconstruction-summary" data-testid="reconstruction-summary" hidden></p>
+            <div id="reconstruction-review" class="divided" hidden>
+              <h3>Review</h3>
+              <p class="hint">Held-out frames beside the splat's view of the same place. Open the splat to look round it, then make it the shared room.</p>
+              <ul id="reconstruction-previews" class="photo-grid" aria-label="Reconstruction previews"></ul>
+              <a id="reconstruction-viewer" target="_blank" rel="noopener">Open the splat in the viewer</a>
+              <button id="make-live">Make live</button>
+            </div>
+          </section>
+          <section id="live-room-panel" class="divided" aria-labelledby="live-room-heading">
+            <h3 id="live-room-heading">Live room</h3>
+            <p id="live-room" data-testid="live-room" role="status"></p>
+            <p id="live-room-error" data-testid="live-room-error" class="error-message" role="alert" hidden></p>
+            <button id="restore-room" class="secondary" hidden>Restore previous room</button>
           </section>
         </div>
       </section>

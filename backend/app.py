@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -31,13 +32,20 @@ from backend.captures import (
 from backend.delivery import Outbox
 from backend.env_file import load_env_file
 from backend.errors import Refusal
+from backend.live_room import LiveRoomError, LiveRooms
 from backend.preparation import (
+    RECONSTRUCTION_FOLDER,
     JobRequest,
     PreparationService,
     video_worker_from_environment,
     worker_from_environment,
 )
-from backend.prepared_room import ASSET_URL_PREFIX, PreparedRoomError, load_prepared_room
+from backend.prepared_room import (
+    ASSET_URL_PREFIX,
+    LoadedRoom,
+    PreparedRoomError,
+    load_prepared_room,
+)
 from backend.protocol import (
     AcquireMessage,
     CalibrateMessage,
@@ -118,6 +126,7 @@ MANIPULATION_REFUSALS = {
 }
 
 
+CARRYING = "Someone is carrying the box. Let go of it before changing the room."
 # Five minutes of poses ten times a second fits in well under this.
 MAX_MOVEMENT_LOG_BYTES = 2 * 1024 * 1024
 
@@ -139,9 +148,11 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
         video_worker_from_environment(repository, videos),
     )
     default = repository / "assets" / "prepared-room"
-    directory = prepared_dir or Path(os.environ.get("ESCAPE_ROOM_PREPARED_DIR") or default)
+    configured = prepared_dir or Path(os.environ.get("ESCAPE_ROOM_PREPARED_DIR") or default)
+    # The configured room, unless a reconstruction was made live since (#138).
+    live_rooms = LiveRooms(data, configured)
     try:
-        prepared = load_prepared_room(directory)
+        prepared = live_rooms.load()
         load_error = None
     except PreparedRoomError as exc:
         prepared = None
@@ -150,14 +161,36 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     if not 0 <= delay_ms <= 5000:
         raise ValueError("ESCAPE_ROOM_SIMULATED_DELAY_MS must be from 0 to 5000.")
     room = PrototypeRoom(load_error=load_error, delivery_delay=delay_ms / 1000)
+
+    def show(loaded: LoadedRoom) -> None:
+        """Make this the shared room. Devices see its version change and reload it."""
+        room.entities = [entity.model_copy(deep=True) for entity in loaded.entities]
+        room.room_version = loaded.room_version
+        room.splat_url = loaded.splat_url
+        room.splat_phone_url = loaded.splat_phone_url
+        room.landmarks = list(loaded.landmarks)
+        room.map = loaded.map
+        room.splat_placement = loaded.splat_placement
+        room.load_error = None
+
     if prepared is not None:
-        room.entities = [entity.model_copy(deep=True) for entity in prepared.entities]
-        room.room_version = prepared.room_version
-        room.splat_url = prepared.splat_url
-        room.splat_phone_url = prepared.splat_phone_url
-        room.landmarks = list(prepared.landmarks)
-        room.map = prepared.map
-        room.splat_placement = prepared.splat_placement
+        show(prepared)
+    # One change of the live room at a time.
+    changing_room = asyncio.Lock()
+
+    async def swap_in(loaded: LoadedRoom, record: Callable[[], object]) -> None:
+        """Make a checked room live for everyone; refused while someone carries the box."""
+        async with room.lock:
+            if room.manipulation is not None:
+                raise LiveRoomError(CARRYING, 409)
+            record()
+            show(loaded)
+            room.selection = None
+            # Calibrations and loaded versions belong to the old room.
+            room.alignment = {"mobile_master": Alignment(), "vr_solver": Alignment()}
+            room.loaded_versions = {"mobile_master": None, "vr_solver": None}
+            room.revision += 1
+            await room.broadcast()
 
     app = FastAPI(title="Escape My Room prototype")
 
@@ -278,6 +311,59 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     @app.get("/api/preparations/{job_id}")
     def get_preparation(job_id: str) -> dict[str, Any]:
         return preparations.get(job_id).model_dump()
+
+    @app.post("/api/preparations/{job_id}/activate")
+    async def make_live(job_id: str) -> dict[str, Any]:
+        """Build a reviewed reconstruction into a room and make it live, without a restart."""
+        job = preparations.get(job_id)
+        if job.state != "awaiting_review" or job.reconstruction is None:
+            raise LiveRoomError("Only a finished reconstruction can be made live.", 409)
+        if room.manipulation is not None:
+            raise LiveRoomError(CARRYING, 409)
+        async with changing_room:
+            version = live_rooms.next_version(room.room_version)
+            folder = live_rooms.rooms / job.id
+            source = preparations.root / job.id / RECONSTRUCTION_FOLDER
+            loaded = await asyncio.to_thread(live_rooms.build, job.id, source, version)
+            await swap_in(loaded, lambda: live_rooms.record(folder, version, job.id))
+            return live_rooms.describe(loaded)
+
+    @app.post("/api/rooms/restore")
+    async def restore_room() -> dict[str, Any]:
+        """Make the room before the live one live again, under a new room version."""
+        async with changing_room:
+            previous = live_rooms.previous
+            if previous is None:
+                raise LiveRoomError("There is no earlier room to go back to.", 409)
+            version = live_rooms.next_version(room.room_version)
+            try:
+                loaded = load_prepared_room(Path(previous.directory))
+            except PreparedRoomError as exc:
+                message = f"The earlier room can no longer be loaded: {exc}"
+                raise LiveRoomError(message, 422) from exc
+            loaded.room_version = version
+            directory = Path(previous.directory)
+            await swap_in(
+                loaded, lambda: live_rooms.record(directory, version, previous.job_id)
+            )
+            return live_rooms.describe(loaded)
+
+    @app.get("/api/rooms/live")
+    async def live_room() -> dict[str, Any]:
+        try:
+            loaded = live_rooms.load()
+        except PreparedRoomError:
+            loaded = None
+        return live_rooms.describe(loaded)
+
+    @app.get(ASSET_URL_PREFIX + "/{relative:path}")
+    async def room_file(relative: str) -> FileResponse:
+        """A file of the live room. No-cache: after a room change the same name is a new file."""
+        root = live_rooms.directory.resolve()
+        path = (root / relative).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise HTTPException(404, "That room file does not exist.")
+        return FileResponse(path, headers={"Cache-Control": "no-cache"})
 
     @app.get("/api/preparations/{job_id}/files/{relative:path}")
     def preparation_file(job_id: str, relative: str) -> FileResponse:
@@ -495,8 +581,6 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                     await room.broadcast()
             await outbox.close()
 
-    if directory.is_dir():
-        app.mount(ASSET_URL_PREFIX, StaticFiles(directory=directory), name="prepared-room")
     dist = repository / "frontend" / "dist"
     if dist.is_dir():
         app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")
