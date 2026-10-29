@@ -4,6 +4,8 @@ Throwaway code to answer issue #92: can COLMAP plus a trained Gaussian splat, ma
 video, give a room view that matches the real room in size, looks like it, and runs smoothly on
 the iPhone and the Quest? Nothing here is used by the app.
 
+> **Retired, 29 October 2026.** The pipeline now lives in `backend/reconstruction/` and runs on the GPU desktop (#134, #135); see [the reconstruction pipeline](../../docs/reconstruction.md). The notebook is kept as a record of the spike and is no longer updated. `check_pipeline.py` now runs the module's steps.
+
 | File | What it is |
 | --- | --- |
 | `room_splat.ipynb` | The Colab notebook: video → frames → COLMAP → level and scale → train → download |
