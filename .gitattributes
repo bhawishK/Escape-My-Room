@@ -3,3 +3,6 @@
 .gitattributes text eol=lf
 *.docx binary
 *.glb binary
+# Shell scripts and systemd units run on the Linux GPU desktop (#139): keep them LF.
+*.sh text eol=lf
+*.service text eol=lf

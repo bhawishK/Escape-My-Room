@@ -1,0 +1,19 @@
+# The Cloudflare quick tunnel that gives the phone and the headset an HTTPS address (#139).
+# setup-wizard.sh fills in @USER@ and installs this as /etc/systemd/system/escape-room-tunnel.service.
+#
+# A quick tunnel gets a new trycloudflare.com address each time it starts; address.sh prints the
+# current one from the journal.
+[Unit]
+Description=Escape My Room tunnel
+After=escape-room.service network-online.target
+Wants=network-online.target
+Requires=escape-room.service
+
+[Service]
+User=@USER@
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8000
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
