@@ -6,8 +6,9 @@
 [Unit]
 Description=Escape My Room tunnel
 After=escape-room.service network-online.target
-Wants=network-online.target
-Requires=escape-room.service
+# Wants, not Requires: restarting the server (update.sh) must not restart the tunnel, which would
+# give it a new address.
+Wants=escape-room.service network-online.target
 
 [Service]
 User=@USER@
