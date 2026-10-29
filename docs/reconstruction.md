@@ -1,6 +1,6 @@
 # Reconstruction pipeline
 
-Turns a video of a room into a splat room package, on the GPU desktop (issue #135, part of #134). It replaces the Colab notebook from spike #92. The website will start it for uploaded videos (#136, #137); for now it runs from the command line.
+Turns a video of a room into a splat room package, on the GPU desktop (issue #135, part of #134). It replaces the Colab notebook from spike #92. Videos are uploaded on the website ([room video captures](room-video.md), #136), and the website will start the pipeline for them (#137); for now it runs from the command line.
 
 ```
 python -m backend.reconstruction VIDEO OUT [--quick] [--train-steps N] [--memory-budget-gb G]

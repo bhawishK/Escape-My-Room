@@ -91,6 +91,8 @@ class CaptureImage(WireModel):
 
 class Capture(StoredRecord):
     id: str = Field(pattern=CAPTURE_ID.pattern)
+    # Photo captures saved before room videos (#136) have no kind; they are photos.
+    kind: Literal["photos"] = "photos"
     instructions: str
     overview_image_id: str
     images: list[CaptureImage]

@@ -50,6 +50,14 @@ from backend.protocol import (
     WireModel,
 )
 from backend.sessions import PrototypeRoom
+from backend.videos import (
+    CompleteRequest,
+    UploadRequest,
+    VideoError,
+    VideoLimits,
+    VideoStore,
+    probe_from_environment,
+)
 
 type Incoming = (
     PoseMessage
@@ -117,6 +125,7 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     repository = Path(__file__).resolve().parents[1]
     data = data_dir or Path(os.environ.get("ESCAPE_ROOM_DATA_DIR") or repository / "data")
     captures = CaptureStore(data / "captures", CaptureLimits.from_environment())
+    videos = VideoStore(data / "captures", VideoLimits.from_environment(), probe_from_environment())
     preparations = PreparationService(
         data / "jobs", captures, worker_from_environment(repository, captures)
     )
@@ -200,7 +209,10 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
 
     @app.get("/api/captures")
     def list_captures() -> dict[str, list[dict[str, Any]]]:
-        return {"captures": [describe(capture) for capture in captures.newest_first()]}
+        """Photo and video captures together, newest first; each says its `kind`."""
+        listed = [describe(capture) for capture in captures.newest_first()]
+        listed += [video.model_dump() for video in videos.newest_first()]
+        return {"captures": sorted(listed, key=lambda c: c["created_at"], reverse=True)}
 
     @app.post("/api/captures", status_code=201)
     def create_capture(
@@ -211,7 +223,8 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
 
     @app.get("/api/captures/{capture_id}")
     def get_capture(capture_id: str) -> dict[str, Any]:
-        return describe(captures.get(capture_id))
+        video = videos.get(capture_id)
+        return video.model_dump() if video else describe(captures.get(capture_id))
 
     @app.put("/api/captures/{capture_id}/overview")
     def choose_overview(capture_id: str, choice: OverviewChoice) -> dict[str, Any]:
@@ -221,6 +234,22 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     def capture_image(capture_id: str, image_id: str, kind: ImageKind) -> FileResponse:
         path, media_type = captures.photo_file(capture_id, image_id, kind)
         return FileResponse(path, media_type=media_type)
+
+    @app.post("/api/videos", status_code=201)
+    def start_video(request: UploadRequest) -> dict[str, Any]:
+        return videos.start(request).model_dump()
+
+    @app.put("/api/videos/{upload_id}/chunks/{number}", status_code=204)
+    async def video_chunk(upload_id: str, number: int, request: Request) -> None:
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > videos.limits.chunk_bytes:
+            raise VideoError(f"A chunk is at most {videos.limits.chunk_bytes} bytes.", 413)
+        data = await request.body()
+        await asyncio.to_thread(videos.put_chunk, upload_id, number, data)
+
+    @app.post("/api/videos/{upload_id}/complete", status_code=201)
+    def complete_video(upload_id: str, request: CompleteRequest) -> dict[str, Any]:
+        return videos.complete(upload_id, request).model_dump()
 
     @app.get("/api/preparations")
     def list_preparations() -> dict[str, list[dict[str, Any]]]:

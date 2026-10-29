@@ -39,6 +39,10 @@ export default defineConfig({
       ESCAPE_ROOM_CAPTURE_MAX_IMAGES: '4',
       ESCAPE_ROOM_CAPTURE_MAX_IMAGE_BYTES: String(64 * 1024),
       ESCAPE_ROOM_CAPTURE_MAX_IMAGE_PIXELS: '250000',
+      // Room videos (#136): small chunks so a test file spans several, and a stand-in for ffprobe.
+      ESCAPE_ROOM_VIDEO_PROBE: 'fixture',
+      ESCAPE_ROOM_VIDEO_CHUNK_BYTES: String(64 * 1024),
+      ESCAPE_ROOM_VIDEO_MAX_BYTES: String(1024 * 1024),
       // The deterministic development worker, slow enough for progress to be visible.
       ESCAPE_ROOM_PREPARATION_WORKER: 'fixture',
       ESCAPE_ROOM_FIXTURE_STAGE_SECONDS: '0.6',

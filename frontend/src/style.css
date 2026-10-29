@@ -192,6 +192,10 @@ pre:empty { display: none; }
 .photos-page { display: grid; gap: 28px; padding-top: 40px; padding-bottom: max(56px, env(safe-area-inset-bottom)); }
 .page-header { display: grid; gap: 10px; }
 .photos-panel p { margin: 0; }
+.video-advice { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+.video-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.video-list li { padding: 10px 12px; border-radius: 14px; background: #ffffff; font-size: .875rem; }
+#video-progress { width: 100%; }
 .file-button { position: relative; flex: 1; margin: 0; }
 .file-button input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .photo-grid { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
