@@ -8,6 +8,7 @@
  */
 import { errorMessage } from './api';
 import { element } from './dom';
+import type { RoomReconstruction } from './reconstruction';
 
 export interface VideoCaptureSummary {
   id: string;
@@ -104,7 +105,7 @@ export class RoomVideo {
   private readonly error = element('video-error');
   private readonly saved = element<HTMLUListElement>('saved-videos');
 
-  constructor() {
+  constructor(private readonly reconstruction: RoomReconstruction) {
     for (const id of ['video-camera', 'video-input']) {
       const input = element<HTMLInputElement>(id);
       input.addEventListener('change', () => {
@@ -124,7 +125,7 @@ export class RoomVideo {
       const when = document.createElement('span');
       when.className = 'hint';
       when.textContent = ` Saved ${new Date(capture.created_at).toLocaleString()}`;
-      item.append(when);
+      item.append(when, this.reconstruction.button(capture));
       return item;
     }));
   }
@@ -192,6 +193,8 @@ export class RoomVideo {
     const response = await fetch('/api/captures');
     if (!response.ok) return;
     const { captures } = await response.json() as { captures: { kind: string }[] };
-    this.showSaved(captures.filter((c): c is VideoCaptureSummary => c.kind === 'video'));
+    const videos = captures.filter((c): c is VideoCaptureSummary => c.kind === 'video');
+    this.showSaved(videos);
+    await this.reconstruction.showLatest(videos);
   }
 }

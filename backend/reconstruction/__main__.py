@@ -1,12 +1,17 @@
 """python -m backend.reconstruction VIDEO OUT [--quick] [--train-steps N] [--memory-budget-gb G]
+    [--watch-stdin]
 
 Prints one JSON line per progress event (stage, state, step, total, message, seconds), which the
 preparation queue (#137) reads. Run it again with the same OUT to continue a stopped run.
+`--watch-stdin` stops the run when standard input closes: the web server starts it that way, so a
+run never outlives the server that started it.
 """
 
 import argparse
 import json
+import os
 import sys
+import threading
 import traceback
 from dataclasses import replace
 from pathlib import Path
@@ -26,7 +31,10 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--train-steps", type=int)
     parser.add_argument("--memory-budget-gb", type=float)
+    parser.add_argument("--watch-stdin", action="store_true")
     args = parser.parse_args(argv)
+    if args.watch_stdin:
+        threading.Thread(target=stop_when_stdin_closes, daemon=True).start()
     settings = replace(Settings(), **QUICK) if args.quick else Settings()
     if args.train_steps:
         settings = replace(settings, train_steps=args.train_steps)
@@ -46,6 +54,11 @@ def main(argv: list[str]) -> int:
         traceback.print_exc()
         return 1
     return 0
+
+
+def stop_when_stdin_closes() -> None:
+    sys.stdin.read()
+    os._exit(1)
 
 
 if __name__ == "__main__":

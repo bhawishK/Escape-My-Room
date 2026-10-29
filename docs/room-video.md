@@ -1,6 +1,6 @@
 # Room video captures
 
-The **Room video** section of `/photos.html` films the room, or picks a saved video, and uploads it as a video capture (issue #136, part of #134). The GPU desktop will turn it into a splat room (#137); for now it is kept and listed.
+The **Room video** section of `/photos.html` films the room, or picks a saved video, and uploads it as a video capture (issue #136, part of #134). **Reconstruct room** then turns it into a splat room on the GPU desktop; see [room video reconstruction](room-preparation.md#room-video-reconstruction-issue-137) (#137).
 
 ## Using it
 

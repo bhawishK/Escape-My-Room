@@ -87,6 +87,15 @@
             <h3>Saved videos</h3>
             <ul id="saved-videos" class="video-list" aria-label="Saved videos"></ul>
           </div>
+          <section id="reconstruction" class="divided" aria-labelledby="reconstruction-heading" hidden>
+            <h3 id="reconstruction-heading">Room reconstruction</h3>
+            <p class="hint">The GPU desktop turns the video into a splat room and a positioning map. The active room is not changed.</p>
+            <p id="reconstruction-video" class="hint"></p>
+            <p id="reconstruction-state" data-testid="reconstruction-state" role="status"></p>
+            <ol id="reconstruction-stages" class="preparation-stages" aria-label="Reconstruction stages"></ol>
+            <p id="reconstruction-error" data-testid="reconstruction-error" class="error-message" role="alert" hidden></p>
+            <p id="reconstruction-summary" data-testid="reconstruction-summary" hidden></p>
+          </section>
         </div>
       </section>
     </main>

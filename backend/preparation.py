@@ -5,10 +5,17 @@ change. One background thread runs queued jobs in order, so request handlers and
 lock never wait for a worker. A worker runs named stages and then yields a candidate prepared
 room; the candidate is inspected here and never replaces the active room.
 
-Server settings choose the worker. The deterministic fixture worker is a test configuration, and
-everything it produces is labelled as fixture output, not AI inference. The OpenRouter worker asks
-Qwen through OpenRouter for the overview's objects and ends with that inventory for review; every
-model request is recorded on the job with its tokens, cost and answer.
+Server settings choose the workers. Photo captures go to one of these:
+- the deterministic fixture worker, a test configuration; everything it produces is labelled as
+  fixture output, not AI inference;
+- the OpenRouter worker, which asks Qwen through OpenRouter for the overview's objects and ends with
+  that inventory for review; every model request is recorded on the job with its tokens, cost and
+  answer.
+
+Room videos (#137) go to the reconstruction worker, which runs `python -m backend.reconstruction` as
+a child process on the GPU desktop and ends with the reconstruction for review. Its jobs have their
+own queue, so a photo job never waits behind an hour of training. A service restart puts an
+unfinished reconstruction back in its queue; the pipeline then skips the stages it finished.
 """
 
 import hashlib
@@ -17,10 +24,14 @@ import os
 import queue
 import re
 import secrets
+import shutil
+import subprocess
+import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Literal, Protocol, Self
+from typing import Annotated, Any, Literal, Protocol, Self, cast, get_args
 
 from pydantic import Field
 
@@ -40,15 +51,25 @@ from backend.openrouter import (
 from backend.prepared_room import LoadedRoom, PreparedRoomError, load_prepared_room
 from backend.protocol import WireModel
 from backend.records import RecordFolder, StoredRecord, now, seconds_between
+from backend.videos import VideoStore
 
 JOB_ID = re.compile(r"^job_[0-9a-f]{32}$")
 FIXTURE_LABEL = "Fixture output, not AI inference"
 OPENROUTER_LABEL = "Qwen through OpenRouter"
+RECONSTRUCTION_LABEL = "Splat reconstruction on the GPU desktop"
+# Where in the job folder the reconstruction pipeline writes, and its exit code for running out of
+# GPU memory twice.
+RECONSTRUCTION_FOLDER = "reconstruction"
+OUT_OF_GPU_MEMORY = 3
 
-type StageName = Literal["scene_understanding", "geometry", "stabilization", "export"]
+type PhotoStageName = Literal["scene_understanding", "geometry", "stabilization", "export"]
+# The stages of `backend.reconstruction`, in its order.
+type ReconstructionStageName = Literal["frames", "colmap", "level", "splat", "vps_map", "package"]
+type StageName = PhotoStageName | ReconstructionStageName
 type JobState = Literal["queued", "running", "awaiting_review", "failed"]
 # `fixture` is a failure the fixture worker was configured to produce; `worker` is an unexpected
-# crash inside a worker; `interrupted` is a job a service restart cut off.
+# crash inside a worker; `interrupted` is a job a service restart cut off; `reconstruction` is a
+# failure the reconstruction pipeline described, such as COLMAP placing no frames.
 type ErrorKind = Literal[
     "configuration",
     "resource",
@@ -58,6 +79,7 @@ type ErrorKind = Literal[
     "fixture",
     "worker",
     "interrupted",
+    "reconstruction",
 ]
 type ArtifactMediaType = Literal["application/json", "model/gltf-binary", "text/plain"]
 
@@ -87,6 +109,10 @@ class Stage(WireModel):
     # While a stage runs, this is the time so far.
     elapsed_seconds: float | None = None
     artifacts: list[Artifact] = Field(default_factory=lambda: list[Artifact]())
+    # Progress within a long stage, such as splat training's steps.
+    step: int | None = None
+    total: int | None = None
+    message: str | None = None
 
 
 class JobError(WireModel):
@@ -99,7 +125,8 @@ class JobRequest(WireModel):
     """What a client asks to prepare."""
 
     capture_id: str
-    overview_image_id: str
+    # Which photo shows the most of the room; room videos have none.
+    overview_image_id: str | None = None
 
 
 class JobInput(JobRequest):
@@ -116,7 +143,17 @@ class FixtureConfig(WireModel):
     fail_stage: StageName | None = None
 
 
-type WorkerConfig = Annotated[FixtureConfig | OpenRouterConfig, Field(discriminator="worker")]
+class ReconstructionConfig(WireModel):
+    worker: Literal["reconstruction"]
+    version: str
+    # The pipeline's command line before its VIDEO and OUT arguments.
+    command: list[str]
+    require_gpu: bool
+
+
+type WorkerConfig = Annotated[
+    FixtureConfig | OpenRouterConfig | ReconstructionConfig, Field(discriminator="worker")
+]
 
 
 class CandidateEntity(WireModel):
@@ -176,6 +213,25 @@ class Inventory(WireModel):
     answer: str
 
 
+class Reconstruction(WireModel):
+    """What the reconstruction pipeline made from a room video, for review. Paths are relative to
+    the job folder; `report` holds every stage's full report."""
+
+    video: str
+    frames: int
+    frames_placed: int
+    splats: int
+    psnr_db: float | None
+    peak_gpu_memory_gb: float | None
+    # Whether splat training ran out of GPU memory once and was trained again, smaller.
+    memory_retried: bool
+    # Keypoints in the positioning map (#133) that have a 3D point.
+    map_keypoints: int
+    splat: str
+    report: str
+    previews: list[str]
+
+
 class ModelCall(WireModel):
     """One model request: what it cost, and whether its answer was accepted."""
 
@@ -210,6 +266,7 @@ class PreparationJob(StoredRecord):
     error: JobError | None = None
     candidate: Candidate | None = None
     inventory: Inventory | None = None
+    reconstruction: Reconstruction | None = None
     model_calls: list[ModelCall] = Field(default_factory=lambda: list[ModelCall]())
     # The sum of the costs OpenRouter reported, in US dollars; None when no model was asked.
     cost_usd: float | None = None
@@ -355,7 +412,10 @@ class OpenRouterWorker:
 
     def run_stage(self, stage: StageName, job: JobInput, workspace: Workspace) -> list[Artifact]:
         capture = self.captures.get(job.capture_id)
-        path, _ = self.captures.photo_file(capture.id, job.overview_image_id, "processed")
+        overview_id = job.overview_image_id
+        if overview_id is None:
+            raise StageFailure("validation", "Choose an overview photo from this capture.")
+        path, _ = self.captures.photo_file(capture.id, overview_id, "processed")
         overview = Picture.from_file(path, self.config.max_image_side)
         parts: list[Picture | str] = [overview, LIST_OBJECTS_PROMPT]
         if capture.instructions.strip():
@@ -396,7 +456,7 @@ class OpenRouterWorker:
         inventory = Inventory(
             source="openrouter",
             label=OPENROUTER_LABEL,
-            overview_image_id=job.overview_image_id,
+            overview_image_id=overview_id,
             objects=[
                 InventoryObject(id=entity_id, label=label)
                 for entity_id, label in zip(entity_ids(labels), labels, strict=True)
@@ -419,6 +479,142 @@ class OpenRouterWorker:
         )
 
 
+class ReconstructionWorker:
+    """Runs the reconstruction pipeline on a room video as a child process, so a CUDA crash or a
+    GPU out of memory never takes the web server down, and reads its progress lines."""
+
+    stages: tuple[ReconstructionStageName, ...] = get_args(ReconstructionStageName.__value__)
+
+    def __init__(self, videos: VideoStore, config: ReconstructionConfig, repository: Path):
+        self.videos = videos
+        self.config = config
+        self.repository = repository
+
+    def run(
+        self, job: JobInput, workspace: Workspace, event: Callable[[dict[str, Any]], None]
+    ) -> Reconstruction:
+        """Run the whole pipeline, passing on each progress event; raise StageFailure if it fails.
+        The pipeline's own stage markers in the job folder make a second run skip finished stages.
+        """
+        if self.config.require_gpu and shutil.which("nvidia-smi") is None:
+            raise StageFailure(
+                "configuration",
+                "This server has no NVIDIA GPU (nvidia-smi was not found); room videos are "
+                "reconstructed on the GPU desktop.",
+            )
+        capture = self.videos.get(job.capture_id)
+        if capture is None:
+            raise StageFailure("validation", "That room video no longer exists.")
+        video = self.videos.root / capture.id / capture.file
+        out = workspace.folder / RECONSTRUCTION_FOLDER
+        out.mkdir(parents=True, exist_ok=True)
+        failure: str | None = None
+        with open(out / "pipeline.log", "ab") as log:
+            # The pipeline reads stdin and stops when it closes, so it never outlives this service.
+            process = subprocess.Popen(
+                [*self.config.command, str(video), str(out), "--watch-stdin"],
+                cwd=self.repository,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=log,
+                text=True,
+            )
+            assert process.stdout is not None
+            try:
+                for line in process.stdout:
+                    try:
+                        found = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(found, dict):
+                        continue
+                    progress = cast(dict[str, Any], found)
+                    if progress.get("state") == "failed":
+                        failure = str(progress.get("message") or "")
+                    event(progress)
+            except BaseException:
+                # Reading its progress failed: stop it, so a second GPU job never starts beside
+                # one still training.
+                process.kill()
+                process.wait()
+                raise
+            code = process.wait()
+        if code == OUT_OF_GPU_MEMORY:
+            raise StageFailure("resource", failure or "Splat training ran out of GPU memory.")
+        if code != 0 and failure:
+            raise StageFailure("reconstruction", failure)
+        if code != 0:
+            raise StageFailure(
+                "worker", f"The reconstruction process stopped unexpectedly (exit code {code})."
+            )
+        return self.outcome(out, capture.original_filename)
+
+    @staticmethod
+    def marker(stage: str) -> str:
+        """Where the pipeline keeps a finished stage's report, relative to the job folder."""
+        return f"{RECONSTRUCTION_FOLDER}/work/stages/{stage}.json"
+
+    def stage_report(self, workspace: Workspace, stage: StageName) -> list[Artifact]:
+        """The pipeline's own report for a finished stage, as an artifact of that stage."""
+        path = workspace.folder / self.marker(stage)
+        if not path.is_file():
+            return []
+        description = f"The {stage_title(stage)} stage's report"
+        return [
+            Artifact(
+                path=self.marker(stage),
+                media_type="application/json",
+                description=description,
+                size_bytes=path.stat().st_size,
+            )
+        ]
+
+    def stage_seconds(self, workspace: Workspace, stage: StageName) -> float | None:
+        """How long a finished stage took when it ran, kept in its marker across restarts."""
+        path = workspace.folder / self.marker(stage)
+        return json.loads(path.read_text(encoding="utf-8"))["seconds"] if path.is_file() else None
+
+    def outcome(self, out: Path, video: str) -> Reconstruction:
+        def report(stage: str) -> dict[str, Any]:
+            path = out.parent / self.marker(stage)
+            return json.loads(path.read_text(encoding="utf-8"))["report"]
+
+        frames, colmap, splat, vps = (report(s) for s in ("frames", "colmap", "splat", "vps_map"))
+        relative = PurePosixPath(RECONSTRUCTION_FOLDER)
+        previews = sorted((out / "previews").glob("*.jpg")) if (out / "previews").is_dir() else []
+        return Reconstruction(
+            video=video,
+            frames=frames["frames"],
+            frames_placed=colmap["frames_placed"],
+            splats=splat["splats"],
+            psnr_db=splat.get("psnr_db"),
+            peak_gpu_memory_gb=splat.get("peak_gpu_memory_gb"),
+            memory_retried=bool(splat.get("memory", {}).get("retried")),
+            map_keypoints=vps["keypoints_with_depth"],
+            splat=str(relative / "room.ply"),
+            report=str(relative / "report.json"),
+            previews=[str(relative / "previews" / path.name) for path in previews],
+        )
+
+
+def video_worker_from_environment(
+    repository: Path, videos: VideoStore
+) -> ReconstructionWorker | None:
+    """The reconstruction worker when the server is set up for it, otherwise None."""
+    if os.environ.get("ESCAPE_ROOM_VIDEO_WORKER") != "reconstruction":
+        return None
+    command = os.environ.get("ESCAPE_ROOM_RECONSTRUCTION_COMMAND")
+    config = ReconstructionConfig(
+        worker="reconstruction",
+        version="reconstruction-1",
+        command=json.loads(command)
+        if command
+        else [sys.executable, "-m", "backend.reconstruction"],
+        require_gpu=os.environ.get("ESCAPE_ROOM_RECONSTRUCTION_REQUIRE_GPU") != "0",
+    )
+    return ReconstructionWorker(videos, config, repository)
+
+
 def worker_from_environment(repository: Path, captures: CaptureStore) -> PreparationWorker | None:
     """The worker chosen by server settings, or None when preparation is not configured."""
     worker = os.environ.get("ESCAPE_ROOM_PREPARATION_WORKER")
@@ -439,30 +635,66 @@ def worker_from_environment(repository: Path, captures: CaptureStore) -> Prepara
     return FixtureWorker(repository / "assets" / "multi-asset-room", config)
 
 
+type AnyWorker = PreparationWorker | ReconstructionWorker
+# Which queue a job's worker uses: photo jobs and reconstructions never wait for each other.
+type QueueName = Literal["photos", "video"]
+
+
+def current_stage(job: PreparationJob) -> StageName | None:
+    """The stage that was running or failed, if any."""
+    found = next((s for s in job.stages if s.status in ("running", "failed")), None)
+    return found.name if found else None
+
+
 class PreparationService:
-    def __init__(self, root: Path, captures: CaptureStore, worker: PreparationWorker | None):
+    def __init__(
+        self,
+        root: Path,
+        captures: CaptureStore,
+        worker: PreparationWorker | None,
+        videos: VideoStore | None = None,
+        video_worker: ReconstructionWorker | None = None,
+    ):
         self.root = root
         self.captures = captures
         self.worker = worker
+        self.videos = videos
+        self.video_worker = video_worker
         self._records = RecordFolder(root, PreparationJob, JOB_ID, "job")
-        self._queue: queue.Queue[str] = queue.Queue()
+        self._queues: dict[QueueName, queue.Queue[str]] = {
+            "photos": queue.Queue(),
+            "video": queue.Queue(),
+        }
         self._lock = threading.Lock()
-        self._thread: threading.Thread | None = None
-        self._mark_interrupted()
+        self._threads: dict[QueueName, threading.Thread] = {}
+        self._recover_interrupted()
 
     def submit(self, request: JobRequest) -> PreparationJob:
-        capture = self.captures.get(request.capture_id)
-        if request.overview_image_id not in {image.id for image in capture.images}:
-            raise PreparationError("Choose an overview photo from this capture.")
-        if self.worker is None:
-            raise PreparationError("Room preparation is not configured on this server.", 503)
-        job_input = JobInput(
-            capture_id=capture.id,
-            overview_image_id=request.overview_image_id,
-            image_sha256=[image.sha256 for image in capture.images],
-            instructions_sha256=hashlib.sha256(capture.instructions.encode()).hexdigest(),
-        )
-        identity = {"input": job_input.model_dump(), "config": self.worker.config.model_dump()}
+        video = self.videos.get(request.capture_id) if self.videos else None
+        worker: AnyWorker | None
+        if video is not None:
+            if self.video_worker is None:
+                raise PreparationError("Room reconstruction is not configured on this server.", 503)
+            worker = self.video_worker
+            job_input = JobInput(
+                capture_id=video.id,
+                image_sha256=[video.sha256],
+                instructions_sha256=hashlib.sha256(video.instructions.encode()).hexdigest(),
+            )
+        else:
+            capture = self.captures.get(request.capture_id)
+            if request.overview_image_id not in {image.id for image in capture.images}:
+                raise PreparationError("Choose an overview photo from this capture.")
+            if self.worker is None:
+                raise PreparationError("Room preparation is not configured on this server.", 503)
+            worker = self.worker
+            job_input = JobInput(
+                capture_id=capture.id,
+                overview_image_id=request.overview_image_id,
+                image_sha256=[image.sha256 for image in capture.images],
+                instructions_sha256=hashlib.sha256(capture.instructions.encode()).hexdigest(),
+            )
+        identity = {"input": job_input.model_dump(), "config": worker.config.model_dump()}
         submitted = now()
         job = PreparationJob(
             id=f"job_{secrets.token_hex(16)}",
@@ -470,14 +702,13 @@ class PreparationService:
             updated_at=submitted,
             state="queued",
             input=job_input,
-            config=self.worker.config,
+            config=worker.config,
             input_hash=hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest(),
-            stages=[Stage(name=name) for name in self.worker.stages],
+            stages=[Stage(name=name) for name in worker.stages],
         )
         (self.root / job.id).mkdir(parents=True)
         self._records.save(job)
-        self._queue.put(job.id)
-        self._start()
+        self._enqueue(job)
         return job
 
     def get(self, job_id: str) -> PreparationJob:
@@ -501,10 +732,20 @@ class PreparationService:
             raise PreparationError("That preparation file does not exist.", 404)
         return path
 
-    def _mark_interrupted(self) -> None:
-        """Fail jobs a previous service process left unfinished; they are not resumed."""
-        for job in self._records.newest_first():
+    def _recover_interrupted(self) -> None:
+        """Queue again the reconstructions a previous service process left unfinished, oldest
+        first; the pipeline skips what it finished. Fail the other jobs: they are not resumed."""
+        for job in reversed(self._records.newest_first()):
             if not job.active:
+                continue
+            if isinstance(job.config, ReconstructionConfig) and self.video_worker is not None:
+                for stage in job.stages:
+                    if stage.status == "running":
+                        stage.status = "pending"
+                        stage.started_at = stage.elapsed_seconds = None
+                        stage.step = stage.total = stage.message = None
+                self._update(job, state="queued")
+                self._enqueue(job)
                 continue
             stage = next((stage for stage in job.stages if stage.status == "running"), None)
             if stage is not None:
@@ -517,15 +758,76 @@ class PreparationService:
             )
             self._finish(job, "failed")
 
-    def _start(self) -> None:
+    def _enqueue(self, job: PreparationJob) -> None:
+        name: QueueName = "video" if isinstance(job.config, ReconstructionConfig) else "photos"
+        self._queues[name].put(job.id)
         with self._lock:
-            if self._thread is None:
-                self._thread = threading.Thread(target=self._run_forever, daemon=True)
-                self._thread.start()
+            if name not in self._threads:
+                thread = threading.Thread(target=self._run_forever, args=(name,), daemon=True)
+                self._threads[name] = thread
+                thread.start()
 
-    def _run_forever(self) -> None:
+    def _run_forever(self, name: QueueName) -> None:
         while True:
-            self._run(self._queue.get())
+            job_id = self._queues[name].get()
+            if name == "video":
+                self._run_reconstruction(job_id)
+            else:
+                self._run(job_id)
+
+    def _run_reconstruction(self, job_id: str) -> None:
+        worker = self.video_worker
+        job = self._records.read(job_id)
+        if worker is None or job is None:
+            return
+        workspace = Workspace(self.root / job.id)
+        self._update(job, state="running")
+        stages = {stage.name: stage for stage in job.stages}
+
+        def event(progress: dict[str, Any]) -> None:
+            stage = stages.get(progress.get("stage", ""))
+            if stage is None:
+                return
+            state = progress.get("state")
+            if state == "started":
+                stage.status, stage.started_at = "running", now()
+                stage.finished_at = stage.message = None
+                stage.step = stage.total = None
+            elif state == "step":
+                stage.step, stage.total = progress.get("step"), progress.get("total")
+                stage.message = progress.get("message")
+            elif state == "done":
+                stage.status, stage.finished_at = "done", now()
+                stage.started_at = stage.started_at or stage.finished_at
+                stage.elapsed_seconds = progress.get("seconds")
+                stage.artifacts = worker.stage_report(workspace, stage.name)
+            elif state == "skipped":
+                # Finished before a restart: keep the time it took then.
+                stage.status = "done"
+                stage.finished_at = stage.finished_at or now()
+                stage.started_at = stage.started_at or stage.finished_at
+                stage.elapsed_seconds = worker.stage_seconds(workspace, stage.name)
+                stage.artifacts = worker.stage_report(workspace, stage.name)
+            elif state == "failed":
+                stage.status, stage.finished_at = "failed", now()
+                stage.elapsed_seconds = progress.get("seconds")
+            self._update(job)
+
+        try:
+            job.reconstruction = worker.run(job.input, workspace, event)
+        except StageFailure as exc:
+            error = JobError(stage=current_stage(job), kind=exc.kind, message=str(exc))
+        except Exception as exc:  # noqa: BLE001 - one bad job must not stop the worker thread
+            message = f"The reconstruction worker stopped unexpectedly ({type(exc).__name__})."
+            error = JobError(stage=current_stage(job), kind="worker", message=message)
+        else:
+            self._finish(job, "awaiting_review")
+            return
+        for stage in job.stages:
+            if stage.status == "running":
+                stage.status, stage.finished_at = "failed", now()
+        job.error = error
+        self._finish(job, "failed")
 
     def _run(self, job_id: str) -> None:
         worker = self.worker
