@@ -1,15 +1,14 @@
-"""Check the notebook's CPU steps on a synthetic room video whose geometry is known.
+"""Check the pipeline's CPU steps on a synthetic room video whose geometry is known.
 
 Renders a textured 4 m x 5 m x 2.6 m room with a table and a cabinet, filmed from 1.4 m while
-walking round its edge, then runs the notebook's frame, COLMAP and levelling helpers on it and
-compares the cameras with the truth. Also writes the sparse points as a small splat file for the
-viewer.
+walking round its edge, then runs the frame, COLMAP and levelling steps of
+`backend.reconstruction` on it and compares the cameras with the truth. Also writes the sparse
+points as a small splat file for the viewer.
 
     python check_pipeline.py OUTPUT_DIR [incremental|global]
     (needs ffmpeg, pycolmap, numpy, opencv)
 """
 
-import re
 import subprocess
 import sys
 import time
@@ -25,13 +24,21 @@ TRUE_FOCAL = WIDTH / 2 / np.tan(np.radians(70) / 2)
 
 
 def helpers() -> dict:
-    """The notebook's helper cell, run as code."""
-    source = (HERE / "room_splat.py").read_text(encoding="utf-8")
-    cells = re.split(r"^# %%.*$", source, flags=re.MULTILINE)
-    [cell] = [cell for cell in cells if cell.lstrip().startswith("# Helpers")]
-    namespace: dict = {}
-    exec(compile(cell, "helpers", "exec"), namespace)
-    return namespace
+    """The pipeline's CPU steps, from the module that replaced the notebook (#135)."""
+    sys.path.insert(0, str(HERE.parents[1]))
+    from backend.reconstruction.colmap import load_scene, reconstruct
+    from backend.reconstruction.frames import extract_frames
+    from backend.reconstruction.levelling import apply_transform, level_room
+    from backend.reconstruction.splat import write_ply
+
+    return {
+        "extract_frames": extract_frames,
+        "reconstruct": reconstruct,
+        "load_scene": load_scene,
+        "level_room": level_room,
+        "apply_transform": apply_transform,
+        "write_ply": write_ply,
+    }
 
 
 def texture(rng: np.random.Generator, width_m: float, height_m: float) -> np.ndarray:
