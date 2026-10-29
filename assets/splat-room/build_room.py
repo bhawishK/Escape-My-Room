@@ -38,8 +38,9 @@ BOX_SIZE = 0.3
 MIN_FLOOR = 2.0
 CAMERA_HEIGHT = 1.4
 # A phone draws this many splats at most, so 8th Wall keeps its pace (#109): the hallway's
-# 400,000 left it about 5 poses a second on the iPhone.
-PHONE_SPLATS = 150_000
+# 400,000 left it about 5 poses a second on the iPhone, and 100,000 tracked better than 400,000 on
+# 29 October 2026 (13.4 against 10.8 frames a second, lost 24% of the time against 33%).
+PHONE_SPLATS = 100_000
 PHONE_FILE = "room-phone.ply"
 # What Spark needs to draw a splat in its base colour; view-dependent colour is left out.
 PHONE_PROPERTIES = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity"]

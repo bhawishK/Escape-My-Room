@@ -122,7 +122,9 @@ Python serves `assets/prepared-room/` by default. Set `ESCAPE_ROOM_PREPARED_DIR`
 ESCAPE_ROOM_PREPARED_DIR=assets/multi-asset-room .venv/bin/python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --workers 1 --ws-max-size 16384
 ```
 
-Assets are served under `/assets/prepared-room/` whichever directory is chosen.
+Assets are served under `/assets/prepared-room/` whichever directory is chosen, with `Cache-Control: no-cache`. After a room change the same name is a new file, so browsers check before reusing one.
+
+**A room made live wins over this setting.** Once a reconstruction has been made live on the website ([making a room live](room-preparation.md#making-a-room-live-issue-138), #138), `data/live-room.json` names the live room, and the server starts with it. To serve the room this setting names again, use **Restore previous room** until it is live, or stop Python and delete `data/live-room.json`.
 
 ### What was checked
 
@@ -205,7 +207,7 @@ Each rebuild counts the room version up, so devices still showing the earlier ro
 
 Drawing the hallway's 400,000 splats on the iPhone left 8th Wall only about 5 poses a second, so the view lagged behind the person and lost tracking more easily. The phone now draws less, and the Quest is unchanged.
 
-- **A lighter splat.** `build_room.py` also writes `room-phone.ply`, named as `phone_asset` in the manifest's `splat` entry and served as `splat_phone_url`. It holds the 150,000 splats that show most (opacity × area face-on) with base colours only: 8.4 MB instead of 42 MB for the hallway, and almost the same to look at. Phones load it; the headset loads the full splat. Add one to a room built earlier with `python assets/splat-room/build_room.py --phone data/splat-room [COUNT]`, which counts the room version up.
+- **A lighter splat.** `build_room.py` also writes `room-phone.ply`, named as `phone_asset` in the manifest's `splat` entry and served as `splat_phone_url`. It holds the 100,000 splats that show most (opacity × area face-on) with base colours only: 5.6 MB instead of 42 MB for the hallway, and almost the same to look at. It was 150,000 until 29 October 2026, when 100,000 tracked better on the iPhone (13.4 against 10.8 frames a second, and lost 24% of the time against 33% with 400,000). Phones load it; the headset loads the full splat. Add one to a room built earlier with `python assets/splat-room/build_room.py --phone data/splat-room [COUNT]`, which counts the room version up.
 - **One pixel per screen pixel.** In the phone's view, against up to two (four times the pixels) before.
 - **Drawing when needed.** In the room view, the phone draws when its pose changes, and otherwise ten times a second, so others' changes still show. It no longer draws the same picture sixty times a second.
 - **Reported.** The tracking summary (#66), in the diagnostic report and Send log, includes `frame_rate_hz` and `splat`: the file drawn and its splat count. The diagnostics line shows the frame rate next to the pose rate.
@@ -214,7 +216,7 @@ Drawing the hallway's 400,000 splats on the iPhone left 8th Wall only about 5 po
 - **No furniture entities.** Walking passes through the splat's furniture, since there are no furniture entities for it to stop at.
 - **Approximate scale.** It comes from the notebook's assumed 1.4 m camera height until the room is measured.
 - **Gaps away from the filming.** Away from where the video was filmed, the splat shows gaps and smears.
-- **Weight on phones.** Even 150,000 splats can be heavy for low-end phones; `--phone ROOM COUNT` makes a smaller copy.
+- **Weight on phones.** Even 100,000 splats can be heavy for low-end phones; `--phone ROOM COUNT` makes a smaller copy.
 
 ### Render-and-ask (issue 98)
 

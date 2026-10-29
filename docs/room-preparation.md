@@ -44,7 +44,7 @@ These are server settings for development and tests. Nothing in the page can mak
    - `worker`: an unexpected crash inside a worker. It is recorded and does not stop the worker thread.
    - `interrupted`: a service restart cut the job off.
 
-Restarting the service does not resume photo jobs. Photo jobs that were queued or running are marked **failed** with kind `interrupted` and the message “The service restarted before this job finished. Submit it again.” Reconstructions of room videos are resumed instead; see [below](#room-video-reconstruction-issue-137). Cancellation and publishing a candidate as the active room are later issues.
+Restarting the service does not resume photo jobs. Photo jobs that were queued or running are marked **failed** with kind `interrupted` and the message “The service restarted before this job finished. Submit it again.” Reconstructions of room videos are resumed instead; see [below](#room-video-reconstruction-issue-137). Cancellation is a later issue; making a reconstructed room live is described [below](#making-a-room-live-issue-138).
 
 ## What is stored
 
@@ -215,3 +215,43 @@ Python tests against a spawned service, with the fake pipeline (`tests/test_reco
 Desktop Edge (`frontend/tests/room-video.spec.ts`) reconstructs a saved video and watches the stages, the live training steps and the summary.
 
 Not yet run with the real pipeline on the GPU desktop (#139).
+
+## Making a room live (issue #138)
+
+A reconstruction awaiting review shows a **Review** section in its panel:
+- the held-out frames beside the splat's view of the same place;
+- a link that opens the splat in the desktop viewer (`/splat.html?src=…`);
+- **Make live**.
+
+**Live room** below it says which room both devices share: its room version, whether it is the server's configured room or a reconstructed one, the floor size, the scale source and whether the positioning map is in place.
+
+### Make live
+
+`POST /api/preparations/{job_id}/activate`:
+1. Builds the reconstruction with `assets/splat-room/build_room.py` into a new folder, `data/rooms/<job id>-v<room version>/`, so the room being served is never touched. It writes the manifest, the 100,000-splat phone splat, the map from above (when the renderer is available), and the positioning map from `vps/`.
+2. Checks the built room as the server checks any room. A room that can't be built or doesn't pass is refused with 422, its folder is removed, and the live room is unchanged.
+3. Makes it live for everyone without restarting Python. The room version is one higher than any before, so both devices see it change and reload. The selection, the devices' calibrations, the phone's position, both people's presence and their loaded versions are cleared, because they belonged to the old room. It works even when the configured room failed to load.
+
+Only a reconstruction awaiting review can be made live (409 otherwise). The room is never changed while someone carries the box: that is refused with 409, "Someone is carrying the box. Let go of it before changing the room." One change of the live room runs at a time.
+
+### Restore
+
+`POST /api/rooms/restore` makes the room before the live one live again, under a new, higher room version; no room's own files are changed. Pressing it again goes forward to the room it replaced. With no earlier room it is refused with 409.
+
+### What survives a restart
+
+`data/live-room.json` lists every room made live, oldest first; the last is live, and the server starts with it. If that room's folder has gone, the server starts with the configured room instead. The first entry is the room `ESCAPE_ROOM_PREPARED_DIR` named, so Restore can always go back to it. `GET /api/rooms/live` describes the live room.
+
+### What was checked
+
+Python tests against a spawned service (`tests/test_live_room.py`). The fake pipeline writes `build_room.py`'s small test splat, and the real `build_room.py` builds it. They cover:
+- Make live: the new room and its splat are served (`no-cache`), and a connected headset is sent the new version;
+- Restore: the configured room comes back under a higher version;
+- a candidate that can't be built is refused, leaves no folder, and keeps the live room;
+- the live room outlasts a restart, and a restart falls back to the configured room when the live room's folder has gone;
+- a reconstruction can be made live when the configured room is broken;
+- the room isn't changed while the box is carried.
+
+Desktop Edge (`frontend/tests/live-room.spec.ts`, on its own test server because it changes the room) makes a reconstruction live and restores the old room. A connected phone's and headset's room status both follow each change.
+
+Not yet tried: a real reconstruction from the GPU desktop, and how long `build_room.py` takes on a 400,000-splat room (its phone splat is chosen in plain Python).
