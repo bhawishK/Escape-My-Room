@@ -103,13 +103,13 @@ test('when the answer to finishing is lost, the page asks again and the video is
     return route.continue();
   });
   const video = await openVideo(page);
-  const before = await video.getByRole('list', { name: 'Saved videos' }).getByRole('listitem').count();
   await video.getByLabel('Choose video').setInputFiles({
     name: 'once.mp4', mimeType: 'video/mp4', buffer: fixtureVideo(20, 70 * 1024),
   });
   await video.getByRole('button', { name: 'Upload video' }).click();
 
+  // Other tests' videos may be listed too; this one must be listed exactly once.
   const saved = video.getByRole('list', { name: 'Saved videos' }).getByRole('listitem');
   await expect(saved.first()).toContainText('once.mp4 · 20 s');
-  await expect(saved).toHaveCount(before + 1);
+  await expect(saved.filter({ hasText: 'once.mp4' })).toHaveCount(1);
 });
