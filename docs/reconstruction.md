@@ -3,7 +3,7 @@
 Turns a video of a room into a splat room package, on the GPU desktop (issue #135, part of #134). It replaces the Colab notebook from spike #92. Videos are uploaded on the website ([room video captures](room-video.md), #136), and **Reconstruct room** runs the pipeline on one as a job ([room video reconstruction](room-preparation.md#room-video-reconstruction-issue-137), #137). It also runs from the command line.
 
 ```
-python -m backend.reconstruction VIDEO OUT [--quick] [--train-steps N] [--memory-budget-gb G]
+python -m backend.reconstruction VIDEO OUT [--quick] [--max-frames N] [--exhaustive-up-to N] [--train-steps N] [--memory-budget-gb G]
 ```
 
 `OUT` ends up holding:
@@ -21,7 +21,7 @@ Then build the room as before: `python assets/splat-room/build_room.py OUT data/
 ## Stages
 
 1. **`frames`:** ffmpeg pulls frames at three times `frames_per_second`, and the sharpest of each three is kept, at most `max_frames`, with the long side at most `long_side` pixels.
-2. **`colmap`:** feature extraction, matching (every pair up to 150 frames, otherwise 15 neighbours in time) and mapping. If one mapper places fewer than 80% of the frames, the other is tried too. Then the frames are undistorted.
+2. **`colmap`:** feature extraction, matching (every pair up to 250 frames, otherwise 15 neighbours in time) and mapping. Matching every pair joins the walk where it passes the same place again; with neighbours only, 178 frames on the desktop placed only 83 (#139). It was 150 until 29 October 2026. If one mapper places fewer than 80% of the frames, the other is tried too. Then the frames are undistorted.
 3. **`level`:** the floor goes to y = 0 with +y up, scaled as if the phone was held 1.4 m up. The similarity is kept in the stage's report and in `report.json` as `levelling_transform`.
 4. **`splat`:** gsplat MCMC training, at most 400,000 splats at degree-1 colour, within a GPU memory budget (below).
 5. **`vps_map`:** the positioning map (below).
@@ -40,6 +40,14 @@ The RTX 3070 Ti has 8 GB, and the positioning service (#133) needs 1–2 GB of i
 ### Settings
 
 The defaults suit a 1–2 minute walk round a room: 240 frames at 1600 px and 20,000 training steps. Frames are 1600 px on the long side rather than a full 1080p (1920 px), to keep training within the 3070 Ti's memory budget; `long_side` raises it. `--quick` gives 120 frames at 1280 px and 10,000 steps, as the notebook's `QUICK` did. All settings are in `Settings` in `backend/reconstruction/pipeline.py`.
+
+For jobs started from the website, give the options in the server's `.env` as part of the pipeline's command, then restart the server. For example, to keep up to 400 frames and match all of them in pairs:
+
+```
+ESCAPE_ROOM_RECONSTRUCTION_COMMAND=[".venv/bin/python", "-m", "backend.reconstruction", "--max-frames", "400", "--exhaustive-up-to", "400"]
+```
+
+A changed frame or matching setting reruns frames or COLMAP and everything after them; a new job starts from the beginning anyway.
 
 ## The positioning map
 

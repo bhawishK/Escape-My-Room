@@ -1,5 +1,5 @@
-"""python -m backend.reconstruction VIDEO OUT [--quick] [--train-steps N] [--memory-budget-gb G]
-    [--watch-stdin]
+"""python -m backend.reconstruction VIDEO OUT [--quick] [--max-frames N] [--exhaustive-up-to N]
+    [--train-steps N] [--memory-budget-gb G] [--watch-stdin]
 
 Prints one JSON line per progress event (stage, state, step, total, message, seconds), which the
 preparation queue (#137) reads. Run it again with the same OUT to continue a stopped run.
@@ -29,6 +29,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("video", type=Path)
     parser.add_argument("out", type=Path)
     parser.add_argument("--quick", action="store_true")
+    parser.add_argument("--max-frames", type=int)
+    parser.add_argument("--exhaustive-up-to", type=int)
     parser.add_argument("--train-steps", type=int)
     parser.add_argument("--memory-budget-gb", type=float)
     parser.add_argument("--watch-stdin", action="store_true")
@@ -36,6 +38,10 @@ def main(argv: list[str]) -> int:
     if args.watch_stdin:
         threading.Thread(target=stop_when_stdin_closes, daemon=True).start()
     settings = replace(Settings(), **QUICK) if args.quick else Settings()
+    if args.max_frames:
+        settings = replace(settings, max_frames=args.max_frames)
+    if args.exhaustive_up_to:
+        settings = replace(settings, exhaustive_up_to=args.exhaustive_up_to)
     if args.train_steps:
         settings = replace(settings, train_steps=args.train_steps)
     if args.memory_budget_gb:
