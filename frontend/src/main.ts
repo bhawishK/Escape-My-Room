@@ -10,6 +10,7 @@ import { TrackingStats } from './tracking-stats';
 import { CalibrationRefused, EngineTracking, HELD_AT, engineUnavailable, trackingEngine } from './engine-tracking';
 import { RoomMap, type Spot } from './room-map';
 import { MovementLog, type TrackingMode } from './movement-log';
+import { placementError, placementTarget, type PlacementTarget } from './placement';
 import { StepTracking, type PhoneTracking } from './phone-tracking';
 import { START_EYE, headingOf, pitchOf, type RoomPose } from './phone-view';
 import {
@@ -191,7 +192,57 @@ const LOWEST_HELD = 0.5;
 const HIGHEST_HELD = 2.5;
 /** Read when the page opens, so a link that gives it is kept even before connecting. */
 const phoneHeight = heldAt();
-/** The mode last written to the movement log, so each change is logged once. */
+/** The spot being placed, when the clock for this attempt started, and what each release recorded. */
+let placementTask: PlacementTarget | null = null;
+let placementStartedAt: number | null = null;
+const placementAttempts = new Map<string, number>();
+const placementRecords: Record<string, unknown>[] = [];
+
+function choosePlacement(id: string): void {
+  const target = placementTarget(id);
+  if (!target) return;
+  placementTask = target;
+  placementStartedAt = performance.now();
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-task]')) {
+    button.setAttribute('aria-pressed', String(button.dataset.task === id));
+  }
+  const line = `${target.label} · put the box there, then let go`;
+  element('placement-result').textContent = line;
+  if (roomViewOpen) element('view-status').textContent = line;
+}
+
+/** Records one accepted release against the chosen spot. The error is metres in the room, not pixels. */
+function notePlacement(owner: string, position: Position): void {
+  const target = placementTask;
+  const task = target?.id ?? 'none';
+  const attempt = (placementAttempts.get(task) ?? 0) + 1;
+  placementAttempts.set(task, attempt);
+  const error = target ? placementError(position, target) : null;
+  const duration = placementStartedAt === null ? null : Math.round(performance.now() - placementStartedAt);
+  const record = {
+    task,
+    attempt,
+    owner,
+    room_version: state?.room.room_version ?? null,
+    mode: trackingMode(),
+    policy: 'phone release keeps the floor height; a headset release keeps the grip height',
+    x: position.x,
+    y: position.y,
+    z: position.z,
+    error_m: error === null ? null : Math.round(error.metres * 1000) / 1000,
+    inside: error?.inside ?? null,
+    duration_ms: duration,
+    note: element<HTMLInputElement>('placement-note').value,
+  };
+  placementRecords.push(record);
+  movementLog.event('placement', JSON.stringify(record));
+  if (target === null || error === null) return;
+  const words = error.inside
+    ? `${target.label} · inside the region`
+    : `${target.label} · ${error.metres.toFixed(2)} m outside the region`;
+  element('placement-result').textContent = words;
+  if (roomViewOpen && tracking.status !== 'lost') element('view-status').textContent = words;
+}
 let loggedMode = '';
 /** What the status line says about tracking, or empty while tracking is fine. */
 let trackingHint = '';
@@ -465,6 +516,7 @@ function applyState(next: SessionState): void {
   const otherNow = role === 'vr_solver' ? next.mobile_connected : next.vr_connected;
   const otherHeld = state?.manipulation?.owner === otherRole;
   const before = ownHold();
+  const previousManipulation = state?.manipulation ?? null;
   state = next;
   view?.setLocalRole(role);
   for (const map of [phoneMap, pageMap]) {
@@ -493,6 +545,10 @@ function applyState(next: SessionState): void {
     element('view-status').textContent = tracking.status === 'lost' && trackingHint
       ? trackingHint
       : `Dropped ${entityLabel(before.entity)}`;
+  }
+  if (previousManipulation && !next.manipulation) {
+    const entity = next.room.entities.find(item => item.id === previousManipulation.entity);
+    if (entity) notePlacement(previousManipulation.owner, entity.position);
   }
   controls();
   view?.apply(next);
@@ -1134,6 +1190,9 @@ for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) {
   holdProbe.addEventListener(event, () => { holdProbe.dataset.held = 'false'; });
 }
 overlay.addEventListener('beforexrselect', event => event.preventDefault());
+for (const button of document.querySelectorAll<HTMLButtonElement>('[data-task]')) {
+  button.addEventListener('click', () => choosePlacement(button.dataset.task ?? ''));
+}
 element('send-log').addEventListener('click', () => {
   // Python saves it on the computer it runs on, so nothing has to be copied off the phone.
   void fetch('/api/movement-logs', {
@@ -1159,6 +1218,7 @@ element('download-report').addEventListener('click', () => {
       tracking: trackingStats.report(view?.splatDrawn ?? null),
     },
     evidence: 'Browser observations only; complete the manual device smoke-test record separately.',
+    placements: placementRecords,
   };
   const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
   const link = document.createElement('a');

@@ -60,6 +60,17 @@
                 <li><strong>Measure height</strong> measures once how high the phone is, from the back camera. It downloads 76 MB the first time.</li>
               </ul>
             </div>
+            <div class="placement">
+              <p class="hint">Choose a spot, put the box there, then let go. The page records how far it landed, in metres.</p>
+              <div id="placement-tasks" class="button-row" data-testid="placement-tasks">
+                <button type="button" data-task="desk">Desk</button>
+                <button type="button" data-task="cabinet" class="secondary">Cabinet</button>
+                <button type="button" data-task="floor" class="secondary">Floor</button>
+              </div>
+              <p id="placement-result" data-testid="placement-result" class="hint" role="status"></p>
+              <label class="hint" for="placement-note">How the move felt</label>
+              <input id="placement-note" data-testid="placement-note" type="text" maxlength="200" placeholder="Steady, jumpy, hard to let go">
+            </div>
             <button id="disconnect" class="secondary" disabled>Disconnect</button>
             <p id="error" class="error-message" role="alert" hidden></p>
           </div>
@@ -116,6 +127,9 @@
         <button id="gaze-mode" class="secondary" hidden>Switch to head</button>
         <button id="gaze-calibrate" class="secondary" hidden>Calibrate</button>
         <button id="gaze-test" class="secondary" hidden>Test accuracy</button>
+        <button type="button" data-task="desk">Desk</button>
+        <button type="button" data-task="cabinet" class="secondary">Cabinet</button>
+        <button type="button" data-task="floor" class="secondary">Floor</button>
         <button id="send-log" class="secondary">Send log</button>
         <p id="engine-credits" data-testid="engine-credits" class="hud-credits">
           Phone tracking by the 8th Wall Engine, created by Niantic Spatial, Inc. © 2026 Niantic Spatial, Inc.
