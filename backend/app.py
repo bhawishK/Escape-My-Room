@@ -127,6 +127,7 @@ MANIPULATION_REFUSALS = {
 
 
 CARRYING = "Someone is carrying the box. Let go of it before changing the room."
+
 # Five minutes of poses ten times a second fits in well under this.
 MAX_MOVEMENT_LOG_BYTES = 2 * 1024 * 1024
 
@@ -186,8 +187,10 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
             record()
             show(loaded)
             room.selection = None
-            # Calibrations and loaded versions belong to the old room.
+            # Calibrations, positions and loaded versions belong to the old room.
             room.alignment = {"mobile_master": Alignment(), "vr_solver": Alignment()}
+            room.marker = MarkerState()
+            room.presence = {"mobile_master": PresenceState(), "vr_solver": PresenceState()}
             room.loaded_versions = {"mobile_master": None, "vr_solver": None}
             room.revision += 1
             await room.broadcast()
@@ -322,11 +325,10 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
             raise LiveRoomError(CARRYING, 409)
         async with changing_room:
             version = live_rooms.next_version(room.room_version)
-            folder = live_rooms.rooms / job.id
             source = preparations.root / job.id / RECONSTRUCTION_FOLDER
-            loaded = await asyncio.to_thread(live_rooms.build, job.id, source, version)
+            loaded, folder = await asyncio.to_thread(live_rooms.build, job.id, source, version)
             await swap_in(loaded, lambda: live_rooms.record(folder, version, job.id))
-            return live_rooms.describe(loaded)
+            return live_rooms.describe(loaded).model_dump()
 
     @app.post("/api/rooms/restore")
     async def restore_room() -> dict[str, Any]:
@@ -336,17 +338,17 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
             if previous is None:
                 raise LiveRoomError("There is no earlier room to go back to.", 409)
             version = live_rooms.next_version(room.room_version)
+            directory = Path(previous.directory)
             try:
-                loaded = load_prepared_room(Path(previous.directory))
+                loaded = load_prepared_room(directory)
             except PreparedRoomError as exc:
                 message = f"The earlier room can no longer be loaded: {exc}"
                 raise LiveRoomError(message, 422) from exc
             loaded.room_version = version
-            directory = Path(previous.directory)
             await swap_in(
                 loaded, lambda: live_rooms.record(directory, version, previous.job_id)
             )
-            return live_rooms.describe(loaded)
+            return live_rooms.describe(loaded).model_dump()
 
     @app.get("/api/rooms/live")
     async def live_room() -> dict[str, Any]:
@@ -354,7 +356,7 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
             loaded = live_rooms.load()
         except PreparedRoomError:
             loaded = None
-        return live_rooms.describe(loaded)
+        return live_rooms.describe(loaded).model_dump()
 
     @app.get(ASSET_URL_PREFIX + "/{relative:path}")
     async def room_file(relative: str) -> FileResponse:

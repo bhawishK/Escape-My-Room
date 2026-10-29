@@ -170,12 +170,12 @@ export class RoomReconstruction {
 
   /** The finished reconstruction's previews, a link to look round its splat, and Make live. */
   private showReview(job: ReconstructionJob): void {
-    const made = job.state === 'awaiting_review' ? job.reconstruction : null;
-    this.review.hidden = made === null;
-    this.reviewing = made ? job.id : null;
-    if (!made) return;
+    const finished = job.state === 'awaiting_review' ? job.reconstruction : null;
+    this.review.hidden = finished === null;
+    this.reviewing = finished ? job.id : null;
+    if (!finished) return;
     const file = (path: string) => `/api/preparations/${job.id}/files/${path}`;
-    this.previews.replaceChildren(...made.previews.map(path => {
+    this.previews.replaceChildren(...finished.previews.map(path => {
       const item = document.createElement('li');
       const image = document.createElement('img');
       image.src = file(path);
@@ -183,7 +183,7 @@ export class RoomReconstruction {
       item.append(image);
       return item;
     }));
-    this.viewer.href = `/splat.html?src=${encodeURIComponent(file(made.splat))}`;
+    this.viewer.href = `/splat.html?src=${encodeURIComponent(file(finished.splat))}`;
   }
 
   private async poll(id: string, video: string, generation: number): Promise<void> {

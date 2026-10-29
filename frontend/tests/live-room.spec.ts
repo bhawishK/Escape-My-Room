@@ -14,13 +14,18 @@ function fixtureVideo(seconds: number, size: number): Buffer {
   return Buffer.concat([start, Buffer.alloc(size - start.length, 0x20)]);
 }
 
-test("making a reconstruction live changes the headset's room, and restoring brings the old one back", async ({ browser }) => {
+test("making a reconstruction live changes the phone's and the headset's room, and restoring brings the old one back", async ({ browser }) => {
   test.setTimeout(90_000);
-  const headset = await (await browser.newContext()).newPage();
-  await headset.goto(`${SERVER}/`);
-  await headset.getByRole('button', { name: 'Connect VR headset', exact: true }).click();
-  const status = headset.getByTestId('room-status');
-  await expect(status).toHaveText('Room version 1 · floor, desk, cabinet, box (movable)');
+  const devices = await Promise.all([['phone', 'Connect phone'], ['headset', 'Connect VR headset']].map(async ([, button]) => {
+    const page = await (await browser.newContext()).newPage();
+    await page.goto(`${SERVER}/`);
+    await page.getByRole('button', { name: button, exact: true }).click();
+    return page.getByTestId('room-status');
+  }));
+  const expectRoom = async (text: string) => {
+    for (const status of devices) await expect(status).toHaveText(text, { timeout: 15_000 });
+  };
+  await expectRoom('Room version 1 · floor, desk, cabinet, box (movable)');
 
   const page = await (await browser.newContext()).newPage();
   await page.goto(`${SERVER}/photos.html`);
@@ -34,9 +39,9 @@ test("making a reconstruction live changes the headset's room, and restoring bri
 
   await video.getByRole('button', { name: 'Make live' }).click();
   await expect(video.getByTestId('live-room')).toContainText('Live · room version 2', { timeout: 30_000 });
-  await expect(status).toHaveText('Room version 2 · floor, box (movable)', { timeout: 15_000 });
+  await expectRoom('Room version 2 · floor, box (movable)');
 
   await video.getByRole('button', { name: 'Restore previous room' }).click();
   await expect(video.getByTestId('live-room')).toContainText('Live · room version 3');
-  await expect(status).toHaveText('Room version 3 · floor, desk, cabinet, box (movable)', { timeout: 15_000 });
+  await expectRoom('Room version 3 · floor, desk, cabinet, box (movable)');
 });

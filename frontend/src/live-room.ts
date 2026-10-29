@@ -12,7 +12,8 @@ export interface LiveRoomSummary {
   floor_width_m: number | null;
   floor_depth_m: number | null;
   scale_source: string | null;
-  map: boolean;
+  // Whether the room has its map from above (#124), and the positioning map (#133).
+  overview_map: boolean;
   positioning_map: boolean;
   can_restore: boolean;
 }

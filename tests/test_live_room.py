@@ -2,6 +2,7 @@
 small real splat, the real `build_room.py` builds it, and connected devices get the new room."""
 
 import json
+import shutil
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -126,3 +127,31 @@ def test_the_room_is_not_changed_while_the_box_is_carried(service: str) -> None:
         "Someone is carrying the box. Let go of it before changing the room."
     )
     assert room(service)["room_version"] == before["room_version"]
+
+
+def test_a_reconstruction_can_be_made_live_when_the_configured_room_is_broken(
+    start_service: StartService, tmp_path: Path
+) -> None:
+    broken = tmp_path / "no-room"
+    broken.mkdir()
+    with start_service(tmp_path, **settings(ESCAPE_ROOM_PREPARED_DIR=str(broken))) as url:
+        assert httpx.get(f"{url}/api/room", timeout=5).status_code == 503
+        job = reconstructed(url)
+
+        response = activate(url, job)
+
+        assert response.status_code == 200, response.text
+        assert room(url)["room_version"] == 1
+        assert [entity["id"] for entity in room(url)["entities"]] == ["floor", "box"]
+
+
+def test_a_restart_falls_back_to_the_configured_room_when_the_live_one_is_gone(
+    start_service: StartService, tmp_path: Path
+) -> None:
+    with start_service(tmp_path, **settings()) as url:
+        configured = room(url)
+        activate(url, reconstructed(url))
+    shutil.rmtree(tmp_path / "rooms")
+
+    with start_service(tmp_path, **settings()) as url:
+        assert room(url)["entities"] == configured["entities"]
