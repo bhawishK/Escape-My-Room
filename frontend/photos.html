@@ -60,6 +60,35 @@
           </div>
         </div>
       </section>
+      <section id="room-video" class="content photos-page" aria-labelledby="video-heading">
+        <header class="page-header">
+          <h2 id="video-heading">Room video</h2>
+          <p class="lede">Film the room once; the GPU desktop turns the video into a splat room.</p>
+        </header>
+        <div class="card photos-panel">
+          <ul class="hint video-advice">
+            <li>Film at 1080p, with HDR off (Settings → Camera → Record Video).</li>
+            <li>Walk slowly round the edge of the room, facing across it.</li>
+            <li>Film each end of the room both ways: walk there, turn round, and walk back. The phone finds its place in the room from these views.</li>
+            <li>Keep it under 5 minutes.</li>
+          </ul>
+          <div class="button-row">
+            <label class="file-button secondary">Record video<input id="video-camera" type="file" accept="video/*" capture="environment" /></label>
+            <label class="file-button secondary">Choose video<input id="video-input" type="file" accept="video/*" /></label>
+          </div>
+          <p id="video-selected" data-testid="video-selected" hidden></p>
+          <label for="video-instructions">Room instructions</label>
+          <textarea id="video-instructions" rows="3" placeholder="Describe the room and the objects that matter."></textarea>
+          <button id="upload-video" disabled>Upload video</button>
+          <progress id="video-progress" max="1" value="0" aria-label="Upload progress" hidden></progress>
+          <p id="video-status" class="hint" role="status"></p>
+          <p id="video-error" data-testid="video-error" class="error-message" role="alert" hidden></p>
+          <div class="divided">
+            <h3>Saved videos</h3>
+            <ul id="saved-videos" class="video-list" aria-label="Saved videos"></ul>
+          </div>
+        </div>
+      </section>
     </main>
     <script type="module" src="/src/photos.ts"></script>
   </body>

@@ -2,6 +2,8 @@
 
 Issue 24 lets the mobile master save the photographs and instructions that later room preparation (#22) will use. Nothing here runs AI. A saved capture is reviewed, kept, and shown again after a reload or a service restart.
 
+A room video can be uploaded on the same page; see [room video captures](room-video.md).
+
 ## Using it
 
 **Room photos** has its own page, `/photos.html`, reached from the navigation bar at the top of the shared room page.
@@ -58,7 +60,7 @@ Pillow also refuses photos above roughly 179 megapixels whatever the configured 
 | Request | Result |
 | --- | --- |
 | `POST /api/captures` | multipart form: one or more `images` files, `overview` (index of the overview in the uploaded order), optional `instructions`. Returns 201 with the capture. |
-| `GET /api/captures` | `{ "captures": [...] }`, newest first |
+| `GET /api/captures` | `{ "captures": [...] }`, newest first. Since #136 it also lists video captures; each capture has a `kind`, `photos` or `video`. |
 | `GET /api/captures/{capture_id}` | one capture, or 404 |
 | `PUT /api/captures/{capture_id}/overview` | JSON `{ "image_id": "img_…" }`. A photo from another capture returns 400. |
 | `GET /api/captures/{capture_id}/images/{image_id}/original` | the uploaded file |

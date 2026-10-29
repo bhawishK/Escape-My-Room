@@ -25,6 +25,7 @@ export interface CaptureImage {
 
 export interface CaptureSummary {
   id: string;
+  kind: 'photos';
   created_at: string;
   instructions: string;
   overview_image_id: string;
@@ -87,7 +88,9 @@ export class RoomPhotos {
     if (request !== this.shown) return;
     if (!response.ok) return this.showError(await errorMessage(response, 'Saved photos could not be loaded'));
     const { captures } = await response.json() as { captures: CaptureSummary[] };
-    if (request === this.shown && captures.length > 0) this.showSaved(captures[0]);
+    // Room videos (#136) are listed too; this panel shows only photos.
+    const photos = captures.filter(capture => capture.kind === 'photos');
+    if (request === this.shown && photos.length > 0) this.showSaved(photos[0]);
   }
 
   private add(files: File[]): void {
