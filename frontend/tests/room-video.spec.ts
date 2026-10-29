@@ -113,3 +113,26 @@ test('when the answer to finishing is lost, the page asks again and the video is
   await expect(saved.first()).toContainText('once.mp4 · 20 s');
   await expect(saved.filter({ hasText: 'once.mp4' })).toHaveCount(1);
 });
+
+test('reconstructing a saved video shows each stage, the live training steps, then what it made', async ({ page }) => {
+  const video = await openVideo(page);
+  await video.getByLabel('Choose video').setInputFiles({
+    name: 'study.mov', mimeType: 'video/quicktime', buffer: fixtureVideo(64, 70 * 1024),
+  });
+  await video.getByRole('button', { name: 'Upload video' }).click();
+  await video.getByRole('button', { name: 'Reconstruct room from study.mov' }).click();
+
+  const stages = video.getByRole('list', { name: 'Reconstruction stages' }).getByRole('listitem');
+  await expect(stages).toHaveText([
+    /^Frames · /, /^COLMAP · /, /^Levelling · /, /^Splat training · /, /^Positioning map · /, /^Package · /,
+  ]);
+  await expect(stages.nth(3)).toContainText(/step [123] of 3 · [123],000 splats/);
+  await expect(video.getByTestId('reconstruction-state')).toHaveText('Awaiting review', { timeout: 15_000 });
+  await expect(stages.nth(0)).toHaveText(/^Frames · done in \d+\.\d s$/);
+  await expect(video.getByTestId('reconstruction-summary')).toHaveText(
+    'study.mov · 118 of 120 frames placed · 300,000 splats · PSNR 24.5 dB · 200,000 map keypoints',
+  );
+
+  await page.reload();
+  await expect((await openVideo(page)).getByTestId('reconstruction-state')).toHaveText('Awaiting review');
+});

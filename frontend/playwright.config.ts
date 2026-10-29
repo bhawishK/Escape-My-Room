@@ -43,6 +43,11 @@ export default defineConfig({
       ESCAPE_ROOM_VIDEO_PROBE: 'fixture',
       ESCAPE_ROOM_VIDEO_CHUNK_BYTES: String(64 * 1024),
       ESCAPE_ROOM_VIDEO_MAX_BYTES: String(1024 * 1024),
+      // Reconstruction jobs (#137) run a fake pipeline that needs no GPU, slow enough to watch.
+      ESCAPE_ROOM_VIDEO_WORKER: 'reconstruction',
+      ESCAPE_ROOM_RECONSTRUCTION_COMMAND: JSON.stringify([python, join(root, 'tests', 'fake_reconstruction.py')]),
+      ESCAPE_ROOM_RECONSTRUCTION_REQUIRE_GPU: '0',
+      FAKE_RECONSTRUCTION_STAGE_SECONDS: '0.4',
       // The deterministic development worker, slow enough for progress to be visible.
       ESCAPE_ROOM_PREPARATION_WORKER: 'fixture',
       ESCAPE_ROOM_FIXTURE_STAGE_SECONDS: '0.6',

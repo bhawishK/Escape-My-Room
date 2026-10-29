@@ -44,7 +44,7 @@ These are server settings for development and tests. Nothing in the page can mak
    - `worker`: an unexpected crash inside a worker. It is recorded and does not stop the worker thread.
    - `interrupted`: a service restart cut the job off.
 
-Restarting the service does not resume jobs. Jobs that were queued or running are marked **failed** with kind `interrupted` and the message “The service restarted before this job finished. Submit it again.” Cancellation and publishing a candidate as the active room are later issues.
+Restarting the service does not resume photo jobs. Photo jobs that were queued or running are marked **failed** with kind `interrupted` and the message “The service restarted before this job finished. Submit it again.” Reconstructions of room videos are resumed instead; see [below](#room-video-reconstruction-issue-137). Cancellation and publishing a candidate as the active room are later issues.
 
 ## What is stored
 
@@ -166,3 +166,51 @@ To see what the real model does, run the one-off check with a room photo; it rea
 It prints and saves a report under `data/openrouter-checks/` with every answer, token count and cost. The support request carries seven images, REST3D's largest. No real run has been recorded yet.
 
 Prompt sources and their licence are in [`backend/prompts/NOTICE.md`](../backend/prompts/NOTICE.md).
+
+## Room video reconstruction (issue #137)
+
+A saved room video ([room video captures](room-video.md)) is reconstructed by the pipeline from #135 ([reconstruction pipeline](reconstruction.md)), on the GPU desktop. Each saved video on `/photos.html` has a **Reconstruct room** button. The page then follows the job's stages: Frames, COLMAP, Levelling, Splat training, Positioning map, Package. Each shows its state and time, and splat training shows its steps as they happen, such as "step 4001 of 20000 · 312,000 splats, loss 0.0410". At the end the job is **awaiting review** with what it made: frames placed, splat count, PSNR, positioning-map keypoints, and whether training ran out of GPU memory and was trained again smaller.
+
+### Turn it on
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `ESCAPE_ROOM_VIDEO_WORKER` | unset | `reconstruction` enables it; unset means a video job is refused with 503 |
+| `ESCAPE_ROOM_RECONSTRUCTION_COMMAND` | `["<python>", "-m", "backend.reconstruction"]` | The pipeline's command line before its VIDEO and OUT arguments, as a JSON list. The tests point it at `tests/fake_reconstruction.py`. |
+| `ESCAPE_ROOM_RECONSTRUCTION_REQUIRE_GPU` | `1` | `0` skips the GPU check, for the fake pipeline |
+
+A video job is submitted as `POST /api/preparations` with only `{ "capture_id": "cap_…" }`; room videos have no overview photo.
+
+### How it runs
+
+- **A child process:** the worker runs the pipeline with `--watch-stdin`, reads its JSON progress lines into the job's stages (`step`, `total` and `message` while a stage reports progress), and keeps its error output in `reconstruction/pipeline.log` in the job folder. A CUDA crash or running out of memory can't take the web server down.
+- **Its own queue:** reconstructions run one at a time, separately from photo jobs, so a photo job never waits behind an hour of training.
+- **The GPU check:** without `nvidia-smi` on the search path, the job fails at once with kind `configuration`: "This server has no NVIDIA GPU (nvidia-smi was not found); room videos are reconstructed on the GPU desktop."
+- **What is kept:** the pipeline writes into the job folder's `reconstruction/` (`room.ply`, `report.json`, `previews/`, `vps/`, `work/`). Each finished stage has the pipeline's own report for it as an artifact, so a GPU memory retry can be read from the splat stage's report.
+
+### Failures
+
+| What happened | Job error kind | Message |
+| --- | --- | --- |
+| No GPU | `configuration` | as above |
+| Training ran out of GPU memory twice (exit code 3) | `resource` | The pipeline's own message, naming both attempts |
+| The pipeline described a failure, such as COLMAP placing no frames | `reconstruction` | The pipeline's message |
+| The process died without a word, as if killed | `worker` | "The reconstruction process stopped unexpectedly (exit code N)." |
+
+### Restarts
+
+The pipeline reads its standard input and stops when it closes, so it never outlives the service that started it, on Linux or Windows. When the service starts again, an unfinished reconstruction goes back to its queue, and the pipeline skips every stage it finished. A run stopped during training retrains the splat, but keeps the frames, COLMAP and levelling.
+
+### What was checked
+
+Python tests against a spawned service, with the fake pipeline (`tests/test_reconstruction_jobs.py`). The fake uses the real stage runner, so its progress lines, markers and skipping are the real ones. The tests cover:
+- a video becomes a reconstruction to review;
+- training steps show while the job runs;
+- a killed pipeline gives `worker`;
+- running out of GPU memory gives `resource`;
+- no GPU gives `configuration`;
+- a restart during training resumes, and runs frames, COLMAP and levelling only once.
+
+Desktop Edge (`frontend/tests/room-video.spec.ts`) reconstructs a saved video and watches the stages, the live training steps and the summary.
+
+Not yet run with the real pipeline on the GPU desktop (#139).

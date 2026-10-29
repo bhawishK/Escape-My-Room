@@ -1,12 +1,16 @@
 """Folders of durable JSON records: one `<id>/<name>.json` per record, written atomically."""
 
 import re
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
 from backend.protocol import WireModel
+
+REPLACE_TRIES = 50
+REPLACE_WAIT_SECONDS = 0.02
 
 
 def now() -> str:
@@ -19,10 +23,21 @@ def seconds_between(start: str, end: str) -> float:
 
 
 def write_json(path: Path, record: BaseModel) -> None:
-    """Replace the file in one step, so a reader never sees a half-written record."""
+    """Replace the file in one step, so a reader never sees a half-written record.
+
+    Windows refuses to replace a file while a reader has it open, as one polling a job does, so
+    the replace is tried again for up to a second before giving up.
+    """
     pending = path.with_suffix(".json.tmp")
     pending.write_text(record.model_dump_json(indent=2), encoding="utf-8")
-    pending.replace(path)
+    for attempt in range(REPLACE_TRIES):
+        try:
+            pending.replace(path)
+            return
+        except PermissionError:
+            if attempt == REPLACE_TRIES - 1:
+                raise
+            time.sleep(REPLACE_WAIT_SECONDS)
 
 
 class StoredRecord(WireModel):

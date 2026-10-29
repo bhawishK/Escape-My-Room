@@ -1,6 +1,6 @@
 # Reconstruction pipeline
 
-Turns a video of a room into a splat room package, on the GPU desktop (issue #135, part of #134). It replaces the Colab notebook from spike #92. Videos are uploaded on the website ([room video captures](room-video.md), #136), and the website will start the pipeline for them (#137); for now it runs from the command line.
+Turns a video of a room into a splat room package, on the GPU desktop (issue #135, part of #134). It replaces the Colab notebook from spike #92. Videos are uploaded on the website ([room video captures](room-video.md), #136), and **Reconstruct room** runs the pipeline on one as a job ([room video reconstruction](room-preparation.md#room-video-reconstruction-issue-137), #137). It also runs from the command line.
 
 ```
 python -m backend.reconstruction VIDEO OUT [--quick] [--train-steps N] [--memory-budget-gb G]
@@ -27,7 +27,7 @@ Then build the room as before: `python assets/splat-room/build_room.py OUT data/
 5. **`vps_map`:** the positioning map (below).
 6. **`package`:** writes `report.json`.
 
-Each stage prints progress as one JSON line per event, for example `{"stage": "splat", "state": "step", "step": 4001, "total": 20000, "message": "312,000 splats, loss 0.0410", "seconds": 812.4}`. The states are `started`, `step`, `done`, `skipped` and `failed`. The exit code is 0 when done, 3 when training ran out of GPU memory twice, and 1 for any other failure, with the traceback on stderr.
+Each stage prints progress as one JSON line per event, for example `{"stage": "splat", "state": "step", "step": 4001, "total": 20000, "message": "312,000 splats, loss 0.0410", "seconds": 812.4}`. The states are `started`, `step`, `done`, `skipped` and `failed`. The exit code is 0 when done, 3 when training ran out of GPU memory twice, and 1 for any other failure, with the traceback on stderr. With `--watch-stdin`, the run stops when its standard input closes; the web server starts it that way, so it never outlives the server.
 
 ### Continuing a stopped run
 

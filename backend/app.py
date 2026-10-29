@@ -31,7 +31,12 @@ from backend.captures import (
 from backend.delivery import Outbox
 from backend.env_file import load_env_file
 from backend.errors import Refusal
-from backend.preparation import JobRequest, PreparationService, worker_from_environment
+from backend.preparation import (
+    JobRequest,
+    PreparationService,
+    video_worker_from_environment,
+    worker_from_environment,
+)
 from backend.prepared_room import ASSET_URL_PREFIX, PreparedRoomError, load_prepared_room
 from backend.protocol import (
     AcquireMessage,
@@ -127,7 +132,11 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     captures = CaptureStore(data / "captures", CaptureLimits.from_environment())
     videos = VideoStore(data / "captures", VideoLimits.from_environment(), probe_from_environment())
     preparations = PreparationService(
-        data / "jobs", captures, worker_from_environment(repository, captures)
+        data / "jobs",
+        captures,
+        worker_from_environment(repository, captures),
+        videos,
+        video_worker_from_environment(repository, videos),
     )
     default = repository / "assets" / "prepared-room"
     directory = prepared_dir or Path(os.environ.get("ESCAPE_ROOM_PREPARED_DIR") or default)
