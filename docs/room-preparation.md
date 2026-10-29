@@ -183,7 +183,7 @@ A video job is submitted as `POST /api/preparations` with only `{ "capture_id": 
 
 ### How it runs
 
-- **A child process:** the worker runs the pipeline with `--watch-stdin`, reads its JSON progress lines into the job's stages (`step`, `total` and `message` while a stage reports progress), and keeps its error output in `reconstruction/pipeline.log` in the job folder. A CUDA crash or running out of memory can't take the web server down.
+- **A child process:** the worker runs the pipeline with `--watch-stdin`, reads its JSON progress lines into the job's stages (`step`, `total` and `message` while a stage reports progress), and keeps its error output in `reconstruction/pipeline.log` in the job folder. A CUDA crash or running out of memory can't take the web server down. If reading its progress ever fails, the worker stops the child before failing the job, so two GPU jobs never train at once.
 - **Its own queue:** reconstructions run one at a time, separately from photo jobs, so a photo job never waits behind an hour of training.
 - **The GPU check:** without `nvidia-smi` on the search path, the job fails at once with kind `configuration`: "This server has no NVIDIA GPU (nvidia-smi was not found); room videos are reconstructed on the GPU desktop."
 - **What is kept:** the pipeline writes into the job folder's `reconstruction/` (`room.ply`, `report.json`, `previews/`, `vps/`, `work/`). Each finished stage has the pipeline's own report for it as an artifact, so a GPU memory retry can be read from the splat stage's report.
@@ -199,7 +199,7 @@ A video job is submitted as `POST /api/preparations` with only `{ "capture_id": 
 
 ### Restarts
 
-The pipeline reads its standard input and stops when it closes, so it never outlives the service that started it, on Linux or Windows. When the service starts again, an unfinished reconstruction goes back to its queue, and the pipeline skips every stage it finished. A run stopped during training retrains the splat, but keeps the frames, COLMAP and levelling.
+The pipeline reads its standard input and stops when it closes, so it never outlives the service that started it, on Linux or Windows. When the service starts again, an unfinished reconstruction goes back to its queue, and the pipeline skips every stage it finished. Those stages keep the time they took when they ran, from the pipeline's markers. A run stopped during training retrains the splat, but keeps the frames, COLMAP and levelling. A service started without the reconstruction worker marks such a job `interrupted` instead.
 
 ### What was checked
 
@@ -209,7 +209,8 @@ Python tests against a spawned service, with the fake pipeline (`tests/test_reco
 - a killed pipeline gives `worker`;
 - running out of GPU memory gives `resource`;
 - no GPU gives `configuration`;
-- a restart during training resumes, and runs frames, COLMAP and levelling only once.
+- a restart during training resumes, runs frames, COLMAP and levelling only once, and keeps their times;
+- training that runs out of GPU memory once is trained again, the job says so, and the splat stage's report lists both attempts.
 
 Desktop Edge (`frontend/tests/room-video.spec.ts`) reconstructs a saved video and watches the stages, the live training steps and the summary.
 

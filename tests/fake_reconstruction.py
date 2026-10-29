@@ -6,7 +6,8 @@ It uses the real stage runner, so progress lines, stage markers and skipping on 
 real ones; only the six stages are fakes that wait briefly and write small files. Settings:
 - FAKE_RECONSTRUCTION_STAGE_SECONDS: how long each stage takes (default 0.2).
 - FAKE_RECONSTRUCTION_DIE_AT: a stage at which the process dies without a word, as if killed.
-- FAKE_RECONSTRUCTION_OUT_OF_MEMORY: "1" makes splat training run out of GPU memory twice.
+- FAKE_RECONSTRUCTION_OUT_OF_MEMORY: "twice" makes splat training run out of GPU memory twice;
+  "once" makes it run out once and train again smaller, through the real retry.
 """
 
 import json
@@ -19,12 +20,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from backend.reconstruction.__main__ import stop_when_stdin_closes  # noqa: E402
 from backend.reconstruction.pipeline import Settings, Stage, StageContext, run_pipeline  # noqa: E402
-from backend.reconstruction.splat import OutOfGpuMemory  # noqa: E402
+from backend.reconstruction.splat import OutOfGpuMemory, train_within_budget  # noqa: E402
 
 SECONDS = float(os.environ.get("FAKE_RECONSTRUCTION_STAGE_SECONDS") or 0.2)
 DIE_AT = os.environ.get("FAKE_RECONSTRUCTION_DIE_AT")
-OUT_OF_MEMORY = os.environ.get("FAKE_RECONSTRUCTION_OUT_OF_MEMORY") == "1"
+OUT_OF_MEMORY = os.environ.get("FAKE_RECONSTRUCTION_OUT_OF_MEMORY")
 TRAINING_STEPS = 3
 
 
@@ -32,7 +34,7 @@ def main() -> int:
     video, out = Path(sys.argv[1]), Path(sys.argv[2])
     out.mkdir(parents=True, exist_ok=True)
     if "--watch-stdin" in sys.argv:
-        threading.Thread(target=lambda: (sys.stdin.read(), os._exit(1)), daemon=True).start()
+        threading.Thread(target=stop_when_stdin_closes, daemon=True).start()
 
     def stage(name: str, report: dict, write=None) -> Stage:
         def run(context: StageContext) -> dict:
@@ -45,8 +47,18 @@ def main() -> int:
                 for step in range(1, TRAINING_STEPS + 1):
                     time.sleep(SECONDS)
                     context.step(step, TRAINING_STEPS, f"{step * 1000:,} splats")
-                if OUT_OF_MEMORY:
+                if OUT_OF_MEMORY == "twice":
                     raise OutOfGpuMemory("Splat training ran out of GPU memory at 1600 px.")
+                if OUT_OF_MEMORY == "once":
+                    tries: list[int] = []
+
+                    def train(settings: Settings) -> None:
+                        tries.append(settings.long_side)
+                        if len(tries) == 1:
+                            raise OutOfGpuMemory("CUDA out of memory")
+
+                    _, memory = train_within_budget(train, context.settings)
+                    return report | {"memory": memory}
             else:
                 time.sleep(SECONDS)
             if write:

@@ -136,7 +136,7 @@ def test_training_steps_show_on_the_job_while_it_runs(
             "The reconstruction process stopped unexpectedly (exit code 9).",
         ),
         (
-            {"FAKE_RECONSTRUCTION_OUT_OF_MEMORY": "1"},
+            {"FAKE_RECONSTRUCTION_OUT_OF_MEMORY": "twice"},
             "splat",
             "resource",
             "Splat training ran out of GPU memory at 1600 px.",
@@ -195,3 +195,23 @@ def test_a_restart_during_training_resumes_the_job_without_redoing_finished_stag
     assert finished["state"] == "awaiting_review", finished["error"]
     ran = (tmp_path / "jobs" / submitted["id"] / "reconstruction" / "ran.txt").read_text()
     assert ran.split() == ["frames", "colmap", "level", "splat", "splat", "vps_map", "package"]
+    # Stages finished before the restart keep the time they took then, about 0.5 s each.
+    assert all(stage["elapsed_seconds"] >= 0.4 for stage in finished["stages"][:3])
+
+
+def test_training_that_runs_out_of_memory_once_is_trained_again_and_says_so(
+    start_service: StartService, tmp_path: Path
+) -> None:
+    with start_service(tmp_path, **settings(FAKE_RECONSTRUCTION_OUT_OF_MEMORY="once")) as url:
+        finished = wait_until_finished(url, submit(url, save_video(url))["id"])
+        [report] = finished["stages"][3]["artifacts"]
+        splat = httpx.get(
+            f"{url}/api/preparations/{finished['id']}/files/{report['path']}", timeout=5
+        ).json()
+
+    assert finished["state"] == "awaiting_review", finished["error"]
+    assert finished["reconstruction"]["memory_retried"] is True
+    assert [a["outcome"] for a in splat["report"]["memory"]["attempts"]] == [
+        "out of GPU memory",
+        "trained",
+    ]

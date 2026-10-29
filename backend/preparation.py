@@ -31,7 +31,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Any, Literal, Protocol, Self, cast
+from typing import Annotated, Any, Literal, Protocol, Self, cast, get_args
 
 from pydantic import Field
 
@@ -57,6 +57,10 @@ JOB_ID = re.compile(r"^job_[0-9a-f]{32}$")
 FIXTURE_LABEL = "Fixture output, not AI inference"
 OPENROUTER_LABEL = "Qwen through OpenRouter"
 RECONSTRUCTION_LABEL = "Splat reconstruction on the GPU desktop"
+# Where in the job folder the reconstruction pipeline writes, and its exit code for running out of
+# GPU memory twice.
+RECONSTRUCTION_FOLDER = "reconstruction"
+OUT_OF_GPU_MEMORY = 3
 
 type PhotoStageName = Literal["scene_understanding", "geometry", "stabilization", "export"]
 # The stages of `backend.reconstruction`, in its order.
@@ -479,14 +483,7 @@ class ReconstructionWorker:
     """Runs the reconstruction pipeline on a room video as a child process, so a CUDA crash or a
     GPU out of memory never takes the web server down, and reads its progress lines."""
 
-    stages: tuple[ReconstructionStageName, ...] = (
-        "frames",
-        "colmap",
-        "level",
-        "splat",
-        "vps_map",
-        "package",
-    )
+    stages: tuple[ReconstructionStageName, ...] = get_args(ReconstructionStageName.__value__)
 
     def __init__(self, videos: VideoStore, config: ReconstructionConfig, repository: Path):
         self.videos = videos
@@ -523,17 +520,24 @@ class ReconstructionWorker:
                 text=True,
             )
             assert process.stdout is not None
-            for line in process.stdout:
-                try:
-                    found = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(found, dict):
-                    continue
-                progress = cast(dict[str, Any], found)
-                if progress.get("state") == "failed":
-                    failure = str(progress.get("message") or "")
-                event(progress)
+            try:
+                for line in process.stdout:
+                    try:
+                        found = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(found, dict):
+                        continue
+                    progress = cast(dict[str, Any], found)
+                    if progress.get("state") == "failed":
+                        failure = str(progress.get("message") or "")
+                    event(progress)
+            except BaseException:
+                # Reading its progress failed: stop it, so a second GPU job never starts beside
+                # one still training.
+                process.kill()
+                process.wait()
+                raise
             code = process.wait()
         if code == OUT_OF_GPU_MEMORY:
             raise StageFailure("resource", failure or "Splat training ran out of GPU memory.")
@@ -545,9 +549,34 @@ class ReconstructionWorker:
             )
         return self.outcome(out, capture.original_filename)
 
+    @staticmethod
+    def marker(stage: str) -> str:
+        """Where the pipeline keeps a finished stage's report, relative to the job folder."""
+        return f"{RECONSTRUCTION_FOLDER}/work/stages/{stage}.json"
+
+    def stage_report(self, workspace: Workspace, stage: StageName) -> list[Artifact]:
+        """The pipeline's own report for a finished stage, as an artifact of that stage."""
+        path = workspace.folder / self.marker(stage)
+        if not path.is_file():
+            return []
+        description = f"The {stage_title(stage)} stage's report"
+        return [
+            Artifact(
+                path=self.marker(stage),
+                media_type="application/json",
+                description=description,
+                size_bytes=path.stat().st_size,
+            )
+        ]
+
+    def stage_seconds(self, workspace: Workspace, stage: StageName) -> float | None:
+        """How long a finished stage took when it ran, kept in its marker across restarts."""
+        path = workspace.folder / self.marker(stage)
+        return json.loads(path.read_text(encoding="utf-8"))["seconds"] if path.is_file() else None
+
     def outcome(self, out: Path, video: str) -> Reconstruction:
         def report(stage: str) -> dict[str, Any]:
-            path = out / "work" / "stages" / f"{stage}.json"
+            path = out.parent / self.marker(stage)
             return json.loads(path.read_text(encoding="utf-8"))["report"]
 
         frames, colmap, splat, vps = (report(s) for s in ("frames", "colmap", "splat", "vps_map"))
@@ -566,12 +595,6 @@ class ReconstructionWorker:
             report=str(relative / "report.json"),
             previews=[str(relative / "previews" / path.name) for path in previews],
         )
-
-
-# Where in the job folder the reconstruction pipeline writes, and its exit code for running out of
-# GPU memory twice.
-RECONSTRUCTION_FOLDER = "reconstruction"
-OUT_OF_GPU_MEMORY = 3
 
 
 def video_worker_from_environment(
@@ -719,6 +742,8 @@ class PreparationService:
                 for stage in job.stages:
                     if stage.status == "running":
                         stage.status = "pending"
+                        stage.started_at = stage.elapsed_seconds = None
+                        stage.step = stage.total = stage.message = None
                 self._update(job, state="queued")
                 self._enqueue(job)
                 continue
@@ -771,11 +796,18 @@ class PreparationService:
             elif state == "step":
                 stage.step, stage.total = progress.get("step"), progress.get("total")
                 stage.message = progress.get("message")
-            elif state in ("done", "skipped"):
+            elif state == "done":
                 stage.status, stage.finished_at = "done", now()
                 stage.started_at = stage.started_at or stage.finished_at
                 stage.elapsed_seconds = progress.get("seconds")
-                stage.artifacts = self._stage_report(workspace, stage.name)
+                stage.artifacts = worker.stage_report(workspace, stage.name)
+            elif state == "skipped":
+                # Finished before a restart: keep the time it took then.
+                stage.status = "done"
+                stage.finished_at = stage.finished_at or now()
+                stage.started_at = stage.started_at or stage.finished_at
+                stage.elapsed_seconds = worker.stage_seconds(workspace, stage.name)
+                stage.artifacts = worker.stage_report(workspace, stage.name)
             elif state == "failed":
                 stage.status, stage.finished_at = "failed", now()
                 stage.elapsed_seconds = progress.get("seconds")
@@ -796,23 +828,6 @@ class PreparationService:
                 stage.status, stage.finished_at = "failed", now()
         job.error = error
         self._finish(job, "failed")
-
-    @staticmethod
-    def _stage_report(workspace: Workspace, stage: StageName) -> list[Artifact]:
-        """The pipeline's own report for a finished stage, as an artifact of that stage."""
-        marker = f"{RECONSTRUCTION_FOLDER}/work/stages/{stage}.json"
-        path = workspace.folder / marker
-        if not path.is_file():
-            return []
-        description = f"The {stage_title(stage)} stage's report"
-        return [
-            Artifact(
-                path=marker,
-                media_type="application/json",
-                description=description,
-                size_bytes=path.stat().st_size,
-            )
-        ]
 
     def _run(self, job_id: str) -> None:
         worker = self.worker

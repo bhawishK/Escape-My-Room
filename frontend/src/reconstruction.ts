@@ -156,6 +156,10 @@ export class RoomReconstruction {
     try {
       const response = await fetch(`/api/preparations/${id}`);
       if (response.ok) return this.follow(await response.json() as ReconstructionJob, video, generation);
+      // A refusal, such as a job that no longer exists, will not change by asking again.
+      if (response.status < 500) {
+        return this.showError(await errorMessage(response, 'The reconstruction could not be followed'));
+      }
     } catch {
       // Try again at the next poll; the connection may come back.
     }
