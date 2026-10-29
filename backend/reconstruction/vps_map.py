@@ -54,6 +54,8 @@ class StoredFrame:
     descriptors: np.ndarray
     scores: np.ndarray
     points3d: np.ndarray
+    # The frame's (width, height) in pixels, the keypoints' frame.
+    size: tuple[int, int]
 
 
 @dataclass(frozen=True)
@@ -167,6 +169,7 @@ def read_vps_map(folder: Path) -> VpsMap:
                     stored["descriptors"],
                     stored["scores"],
                     stored["points3d"],
+                    (int(entry["width"]), int(entry["height"])),
                 )
             )
     with np.load(folder / "global.npz") as stored:

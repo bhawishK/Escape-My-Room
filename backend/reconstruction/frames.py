@@ -39,6 +39,8 @@ def extract_frames(video: Path, out: Path, fps: float, long_side: int, max_frame
 
     def sharpness(path: Path) -> float:
         grey = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        if grey is None:
+            return 0.0
         return float(cv2.Laplacian(grey, cv2.CV_64F).var())
 
     picked = [max(frames[i : i + 3], key=sharpness) for i in range(0, len(frames), 3)]
