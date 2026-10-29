@@ -1,6 +1,6 @@
 """Frames out of the room video: the sharpest of every three, evenly thinned. Needs ffmpeg."""
 
-# cv2, pycolmap, torch and transformers are only installed on the GPU desktop.
+# cv2 is only installed on the GPU desktop.
 # pyright: basic
 # pyright: reportMissingImports=false
 

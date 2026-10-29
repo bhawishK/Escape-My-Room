@@ -1,4 +1,6 @@
-"""Splat training on the GPU, within a memory budget, and the splat file it writes."""
+"""Splat training within a GPU memory budget, and the splat file: the parts that need no GPU.
+
+The training itself is in `training.py`."""
 
 from collections.abc import Callable
 from dataclasses import replace

@@ -4,7 +4,7 @@ Feature extraction and matching use the GPU when pycolmap was built with CUDA; t
 are CPU-only, which is slower but gives the same result (see docs/reconstruction.md).
 """
 
-# cv2, pycolmap, torch and transformers are only installed on the GPU desktop.
+# pycolmap is only installed on the GPU desktop, and ships few type hints.
 # pyright: basic
 # pyright: reportMissingImports=false
 

@@ -14,8 +14,10 @@ On disk, in `vps/`:
 - `frames/<frame>.npz`: keypoints, descriptors, scores and 3D points;
 - `global.npz`: frame names and global descriptors, in the same order as `map.json`.
 
-The map is in the splat's frame, so the room's manifest placement (rotation, scale, lift) carries
-it into room metres exactly as it does the splat.
+The map is already in the splat's frame: COLMAP's frame moved by the levelling similarity
+(`levelling_transform` in `report.json`, kept for reference). Never apply that similarity again;
+only the room's manifest placement (rotation, scale, lift) carries the map into room metres,
+exactly as it does the splat.
 """
 
 import json
@@ -25,6 +27,8 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
+
+from backend.reconstruction.pipeline import Step
 
 # Rendered opacity a keypoint's pixel needs before its depth is trusted.
 MIN_ALPHA = 0.9
@@ -80,8 +84,9 @@ def build_vps_map(
     render_depth: DepthRenderer,
     extractor: Extractor,
     out: Path,
-    step: Callable[[int, int, str], None] | None = None,
+    step: Step | None = None,
 ) -> dict[str, Any]:
+    """Writes the map for `frames` into `out` and reports how many keypoints got a 3D point."""
     (out / "frames").mkdir(parents=True, exist_ok=True)
     entries: list[dict[str, Any]] = []
     globals_: list[np.ndarray] = []

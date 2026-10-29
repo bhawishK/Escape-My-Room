@@ -66,6 +66,10 @@ def test_keypoints_get_the_floor_points_they_show(tmp_path: Path) -> None:
     z = 1.4 / (np.sin(pitch) + np.cos(pitch) * 6.5 / 60)
     expected_x = 1.0 + z * (10.5 - 32) / 60
     assert abs(stored.points3d[0, 0] - expected_x) < 1e-6
+    # Each 3D point, seen through the stored camera, lands back on its keypoint.
+    world_to_camera = np.linalg.inv(stored.camera_to_world)
+    seen = stored.K @ (world_to_camera[:3, :3] @ stored.points3d.T + world_to_camera[:3, 3:4])
+    assert np.allclose((seen[:2] / seen[2]).T, stored.keypoints)
     assert np.array_equal(stored.descriptors, np.arange(8, dtype=np.float32).reshape(2, 4))
     assert np.allclose(stored.camera_to_world, frame.camera_to_world)
     assert vps.global_descriptors.shape == (1, 2)

@@ -1,7 +1,8 @@
 """Run the reconstruction's stages in order, reporting progress, and skip finished ones on restart.
 
 Each stage that finishes leaves a marker in `<work>/stages/<name>.json` with its report and the
-settings it used. A restart skips a stage whose marker is there with the same settings; once one
+settings it used. A restart skips a stage whose marker is there with the same settings and whose
+outputs are all still there; once one
 stage runs again, every stage after it runs too, since their inputs may have changed.
 """
 
@@ -14,11 +15,14 @@ from typing import Any
 
 type Report = dict[str, Any]
 type Progress = Callable[[Report], None]
+# A stage's progress within itself: step, total, message.
+type Step = Callable[[int, int, str], None]
 
 
 @dataclass(frozen=True)
 class Settings:
-    """The notebook's settings. The defaults suit a 1–2 minute walk round a room."""
+    """The pipeline's settings, as the notebook had them. The defaults suit a 1–2 minute walk round
+    a room."""
 
     frames_per_second: float = 2.0
     max_frames: int = 240
@@ -43,7 +47,7 @@ class StageContext:
     reports: dict[str, Report]
     # How long each stage before this one took, in seconds, from its first finished run.
     seconds: dict[str, float]
-    step: Callable[[int, int, str], None]
+    step: Step
 
 
 @dataclass(frozen=True)
@@ -52,6 +56,8 @@ class Stage:
     run: Callable[[StageContext], Report]
     # The settings this stage's output depends on; changing one runs it again.
     settings: tuple[str, ...] = ()
+    # Files or folders the stage leaves; if one is missing, it runs again.
+    outputs: tuple[Path, ...] = ()
 
 
 def run_pipeline(
@@ -72,7 +78,7 @@ def run_pipeline(
         used = stage_settings(stage, settings)
         if not rerunning and marker.is_file():
             done = json.loads(marker.read_text(encoding="utf-8"))
-            if done["settings"] == used:
+            if done["settings"] == used and all(path.exists() for path in stage.outputs):
                 reports[stage.name] = done["report"]
                 seconds[stage.name] = done["seconds"]
                 emit("skipped")

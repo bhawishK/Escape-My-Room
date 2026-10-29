@@ -79,6 +79,25 @@ def test_a_changed_setting_reruns_its_stage_and_the_ones_after(tmp_path: Path) -
     assert again == ["splat", "package"]
 
 
+def test_a_stage_whose_output_is_gone_runs_again(tmp_path: Path) -> None:
+    splat = tmp_path / "room.ply"
+
+    def train(log: list[str]) -> Stage:
+        def run(context: StageContext) -> dict:
+            log.append("splat")
+            splat.write_bytes(b"ply")
+            return {}
+
+        return Stage("splat", run, outputs=(splat,))
+
+    run_pipeline([train([])], tmp_path, Settings(), lambda _: None)
+    splat.unlink()
+    again: list[str] = []
+    run_pipeline([train(again)], tmp_path, Settings(), lambda _: None)
+
+    assert again == ["splat"]
+
+
 def test_later_stages_see_how_long_earlier_ones_took_even_after_a_restart(tmp_path: Path) -> None:
     def slow(context: StageContext) -> dict:
         time.sleep(0.15)

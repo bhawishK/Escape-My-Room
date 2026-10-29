@@ -10,7 +10,7 @@ python -m backend.reconstruction VIDEO OUT [--quick] [--train-steps N] [--memory
 
 | Path | What it is |
 | --- | --- |
-| `room.ply` | The trained splat, in the notebook's layout |
+| `room.ply` | The trained splat, as a standard 3DGS PLY (the layout the app already reads) |
 | `report.json` | Settings, each stage's report and time, and where each frame was filmed from. `build_room.py` reads the cameras. |
 | `previews/` | Up to four held-out frames next to the splat's render of the same view |
 | `vps/` | The positioning map for #133 (below) |
@@ -31,7 +31,7 @@ Each stage prints progress as one JSON line per event, for example `{"stage": "s
 
 ### Continuing a stopped run
 
-A finished stage leaves `work/stages/<stage>.json` with its report, its time and the settings it used. Running the same command again skips every stage whose marker is there with the same settings. Once one stage runs again, because it never finished or a setting it uses changed, every stage after it runs too. For example, `--train-steps 5000` on a finished run retrains the splat and rebuilds the map, but keeps the frames and COLMAP.
+A finished stage leaves `work/stages/<stage>.json` with its report, its time and the settings it used. Running the same command again skips every stage whose marker is there with the same settings and whose outputs (such as `work/colmap/undistorted` or `room.ply`) are still there. Once one stage runs again, because it never finished or a setting it uses changed, every stage after it runs too. For example, `--train-steps 5000` on a finished run retrains the splat and rebuilds the map, but keeps the frames and COLMAP.
 
 ### GPU memory
 
@@ -39,7 +39,7 @@ The RTX 3070 Ti has 8 GB, and the positioning service (#133) needs 1–2 GB of i
 
 ### Settings
 
-The defaults suit a 1–2 minute walk round a room: 240 frames at 1600 px and 20,000 training steps. `--quick` gives 120 frames at 1280 px and 10,000 steps, as the notebook's `QUICK` did. All settings are in `Settings` in `backend/reconstruction/pipeline.py`.
+The defaults suit a 1–2 minute walk round a room: 240 frames at 1600 px and 20,000 training steps. Frames are 1600 px on the long side rather than a full 1080p (1920 px), to keep training within the 3070 Ti's memory budget; `long_side` raises it. `--quick` gives 120 frames at 1280 px and 10,000 steps, as the notebook's `QUICK` did. All settings are in `Settings` in `backend/reconstruction/pipeline.py`.
 
 ## The positioning map
 
@@ -53,13 +53,13 @@ The defaults suit a 1–2 minute walk round a room: 240 frames at 1600 px and 20
 | `sparse/` | The COLMAP model, levelled into the same frame |
 | `images/` | The undistorted frames the map was made from |
 
-- **Local features:** SuperPoint (`magic-leap-community/superpoint` on Hugging Face), the strongest 2,048 keypoints per frame.
+- **Local features:** SuperPoint (`magic-leap-community/superpoint` on Hugging Face), the strongest 2,048 keypoints per frame. It detects on the frame shrunk to 640 px on the long side, keeping its shape. Keypoints are stored in the frame's own pixels, measured from the image's corner like COLMAP's and gsplat's `K`, so a pixel's centre is at +0.5.
 - **Global descriptors:** DINOv2 (`facebook/dinov2-small`): its class token and mean patch token, joined and normalised.
 - **3D points:** each keypoint's 3D point comes from the trained splat's rendered depth at that pixel, instead of re-triangulating. Keypoints where the splat is less than 90% opaque are left out. Frames rendered from the splat, such as views back along the room that the video missed, can be added the same way.
-- **Frame:** the map is in the splat's own frame, so the manifest's placement (rotation, scale, lift) carries it into room metres exactly as it carries the splat.
+- **Frame:** the map is already in the splat's own frame, because the levelling has been applied to it. `report.json` keeps `levelling_transform` only for reference; never apply it again. The manifest's placement (rotation, scale, lift) alone carries the map into room metres, exactly as it carries the splat. `build_room.py` doesn't copy `vps/` into the room yet; that's for #133.
 - **Licence:** SuperPoint's weights are for non-commercial use only, which suits the contest. ALIKED is a BSD-licensed alternative if that changes.
 
-The phone's frames must be described with the same two models; `map.json` names them.
+The phone's frames must be described with the same two models; `map.json` names them. Matching them (LightGlue) belongs to #133, so it isn't installed here.
 
 ## Installing on the GPU desktop
 

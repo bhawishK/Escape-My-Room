@@ -98,7 +98,7 @@ def video_to_room(video: Path, out: Path) -> list[Stage]:
             "frames": reports["frames"]["frames"],
             "colmap": reports["colmap"],
             "levelling": {k: v for k, v in reports["level"].items() if k != "transform"},
-            "levelling_transform": reports["level"]["transform"],
+            "levelling_transform": transform_of(context).tolist(),
             "training": reports["splat"],
             "vps": reports["vps_map"],
             "stage_seconds": dict(context.seconds),
@@ -117,13 +117,24 @@ def video_to_room(video: Path, out: Path) -> list[Stage]:
         return {"report": "report.json", "ply_mb": report["ply_mb"]}
 
     return [
-        Stage("frames", frames, ("frames_per_second", "max_frames", "long_side")),
-        Stage("colmap", colmap, ("exhaustive_up_to", "sequential_overlap", "mapper")),
+        Stage(
+            "frames",
+            frames,
+            ("frames_per_second", "max_frames", "long_side"),
+            (out / "work" / "frames",),
+        ),
+        Stage(
+            "colmap",
+            colmap,
+            ("exhaustive_up_to", "sequential_overlap", "mapper"),
+            (out / "work" / "colmap" / "undistorted",),
+        ),
         Stage("level", level, ("camera_height_m",)),
         Stage(
             "splat",
             splat,
             (
+                "long_side",
                 "train_steps",
                 "max_splats",
                 "sh_degree",
@@ -131,9 +142,10 @@ def video_to_room(video: Path, out: Path) -> list[Stage]:
                 "min_start_splats",
                 "memory_budget_gb",
             ),
+            (out / "room.ply",),
         ),
-        Stage("vps_map", vps_map),
-        Stage("package", package),
+        Stage("vps_map", vps_map, outputs=(out / "vps" / "map.json",)),
+        Stage("package", package, outputs=(out / "report.json",)),
     ]
 
 

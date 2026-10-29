@@ -5,16 +5,15 @@ notebook (spike #92); measured on the GPU desktop, not in the tests."""
 # pyright: basic
 # pyright: reportMissingImports=false
 
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from backend.reconstruction.levelling import Camera
-from backend.reconstruction.pipeline import Settings
+from backend.reconstruction.pipeline import Settings, Step
 from backend.reconstruction.splat import OutOfGpuMemory, read_ply, write_ply
-from backend.reconstruction.vps_map import MapFrame
+from backend.reconstruction.vps_map import DepthRenderer, MapFrame
 
 
 def train_splat(
@@ -23,7 +22,7 @@ def train_splat(
     colours: np.ndarray,
     settings: Settings,
     out: Path,
-    step: Callable[[int, int, str], None],
+    step: Step,
 ) -> dict[str, Any]:
     """Train a splat on the frames (needs CUDA, torch and gsplat), then write `out/room.ply` and
     held-out previews in `out/previews/`. Frames are shrunk to `settings.long_side` if larger.
@@ -219,7 +218,7 @@ def train_splat(
         torch.cuda.empty_cache()
 
 
-def depth_renderer(splat: Path) -> Callable[[MapFrame], tuple[np.ndarray, np.ndarray]]:
+def depth_renderer(splat: Path) -> DepthRenderer:
     """Renders a map frame's depth (z in the camera) and opacity from a written splat, on CUDA."""
     import torch
     from gsplat import rasterization
