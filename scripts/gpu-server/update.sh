@@ -8,7 +8,8 @@ cd "$repo"
 echo "▸ Pulling main"
 git pull --ff-only
 echo "▸ Installing the app"
-"$HOME/.local/bin/uv" pip install --python .venv/bin/python -e ".[gpu,dev]"
+# Package servers can be slow from the desktop; wait up to 5 minutes per request.
+UV_HTTP_TIMEOUT=300 UV_CONCURRENT_DOWNLOADS=4 "$HOME/.local/bin/uv" pip install --python .venv/bin/python -e ".[gpu,dev]"
 echo "▸ Building the frontend"
 (cd frontend && npm ci && npm run build)
 echo "▸ Restarting the server"

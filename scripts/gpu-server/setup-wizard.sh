@@ -339,6 +339,9 @@ if [[ ! -x "$UV" ]]; then
   rm -f "$installer"
 fi
 cd "$REPO"
+# Package servers can be slow from here (pypi.org took 20 s to answer on 29 October 2026, and a
+# cuDNN download stalled): wait up to 5 minutes per request, with fewer downloads at once.
+export UV_HTTP_TIMEOUT=300 UV_CONCURRENT_DOWNLOADS=4
 [[ -x .venv/bin/python ]] || run "$UV" venv --python 3.12 .venv
 run "$UV" pip install --python .venv/bin/python torch --index-url https://download.pytorch.org/whl/cu128
 run "$UV" pip install --python .venv/bin/python -e ".[gpu,dev]"
