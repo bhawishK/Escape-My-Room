@@ -34,10 +34,14 @@ class HuggingFaceExtractor:
         from transformers import AutoImageProcessor, AutoModel, SuperPointForKeypointDetection
 
         self.device = device
-        self.local_processor = AutoImageProcessor.from_pretrained(LOCAL_MODEL)
-        self.local_net = SuperPointForKeypointDetection.from_pretrained(LOCAL_MODEL).to(device)
-        self.global_processor = AutoImageProcessor.from_pretrained(GLOBAL_MODEL)
-        self.global_net = AutoModel.from_pretrained(GLOBAL_MODEL).to(device)
+        # Both models are public. A Hugging Face login stored on the machine is never sent: an
+        # expired one makes the Hub refuse even public models (it did on the GPU desktop, #139).
+        public = {"token": False}
+        self.local_processor = AutoImageProcessor.from_pretrained(LOCAL_MODEL, **public)
+        self.local_net = SuperPointForKeypointDetection.from_pretrained(LOCAL_MODEL, **public)
+        self.local_net.to(device)
+        self.global_processor = AutoImageProcessor.from_pretrained(GLOBAL_MODEL, **public)
+        self.global_net = AutoModel.from_pretrained(GLOBAL_MODEL, **public).to(device)
         self.local_net.eval()
         self.global_net.eval()
 
