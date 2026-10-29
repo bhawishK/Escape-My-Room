@@ -65,7 +65,51 @@ test('a video too long for the server is refused with the reason', async ({ page
 test('the camera records the video and the page says how to film the room', async ({ page }) => {
   const video = await openVideo(page);
   await expect(video.getByLabel('Record video')).toHaveAttribute('capture', 'environment');
-  await expect(video.getByLabel('Record video')).toHaveAttribute('accept', 'video/mp4,video/quicktime');
+  await expect(video.getByLabel('Record video')).toHaveAttribute('accept', 'video/*');
   await expect(video).toContainText('Film at 1080p');
   await expect(video).toContainText('both ways');
+});
+
+test('a video of another type is refused with the reason, before anything is sent', async ({ page }) => {
+  const video = await openVideo(page);
+  await video.getByLabel('Choose video').setInputFiles({
+    name: 'room.webm', mimeType: 'video/webm', buffer: fixtureVideo(30, 70 * 1024),
+  });
+  await video.getByRole('button', { name: 'Upload video' }).click();
+
+  await expect(video.getByTestId('video-error')).toHaveText('Upload an MP4 or MOV video; room.webm is video/webm.');
+});
+
+test('a MOV the browser gives no type is still sent as a MOV', async ({ page }) => {
+  const video = await openVideo(page);
+  await video.getByLabel('Choose video').setInputFiles({
+    name: 'untyped.MOV', mimeType: '', buffer: fixtureVideo(12, 70 * 1024),
+  });
+  await video.getByRole('button', { name: 'Upload video' }).click();
+
+  await expect(video.getByRole('list', { name: 'Saved videos' }).getByRole('listitem').first())
+    .toContainText('untyped.MOV · 12 s · 1080 × 1920');
+});
+
+test('when the answer to finishing is lost, the page asks again and the video is saved once', async ({ page }) => {
+  let lost = false;
+  await page.route('**/api/videos/*/complete', async route => {
+    if (!lost) {
+      lost = true;
+      // The server finishes the upload, but its answer never reaches the page.
+      await route.fetch();
+      return route.abort('connectionreset');
+    }
+    return route.continue();
+  });
+  const video = await openVideo(page);
+  const before = await video.getByRole('list', { name: 'Saved videos' }).getByRole('listitem').count();
+  await video.getByLabel('Choose video').setInputFiles({
+    name: 'once.mp4', mimeType: 'video/mp4', buffer: fixtureVideo(20, 70 * 1024),
+  });
+  await video.getByRole('button', { name: 'Upload video' }).click();
+
+  const saved = video.getByRole('list', { name: 'Saved videos' }).getByRole('listitem');
+  await expect(saved.first()).toContainText('once.mp4 · 20 s');
+  await expect(saved).toHaveCount(before + 1);
 });

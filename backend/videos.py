@@ -4,7 +4,9 @@ The free Cloudflare tunnel refuses requests over 100 MB, so a video arrives in c
 default). `start` reserves a file of the video's size; each chunk is written at its own offset, so a
 chunk sent twice after a dropped connection does no harm. `complete` checks that every chunk came,
 asks ffprobe what the file is, and only then moves it into place as a video capture:
-`<captures>/<capture id>/video.<mp4|mov>` beside `capture.json`. A refused video leaves nothing.
+`<captures>/<capture id>/video.<mp4|mov>` beside `capture.json`. A refused video leaves nothing; a
+failure on the server's side (such as no ffprobe) keeps the upload, to finish later. Finishing
+again after the answer was lost returns the same capture.
 
 Video captures share the captures folder with photo captures; each store reads only its own kind.
 """
@@ -102,6 +104,8 @@ class VideoCapture(StoredRecord):
     size_bytes: int
     sha256: str
     video: VideoInfo
+    # The upload it was finished from, so finishing again finds it.
+    upload_id: str = Field(pattern=UPLOAD_ID.pattern)
 
     @property
     def file(self) -> PurePath:
@@ -170,7 +174,9 @@ class VideoStore:
         self.uploads = root / ".uploads"
         self._records = RecordFolder(root, VideoCapture, CAPTURE_ID, "capture")
         self._pending = RecordFolder(self.uploads, VideoUpload, UPLOAD_ID, "upload")
-        self._lock = threading.Lock()
+        # One lock per upload, so checking one large video never holds up another's chunks.
+        self._locks: dict[str, threading.Lock] = {}
+        self._locks_lock = threading.Lock()
 
     def start(self, request: UploadRequest) -> VideoUpload:
         name = PurePath(request.filename.replace("\\", "/")).name[:255] or "video"
@@ -205,7 +211,7 @@ class VideoStore:
         return upload
 
     def put_chunk(self, upload_id: str, number: int, data: bytes) -> None:
-        with self._lock:
+        with self._lock(upload_id):
             upload = self._upload(upload_id)
             if not 0 <= number < upload.chunks:
                 raise VideoError(f"This upload has chunks 0 to {upload.chunks - 1}.")
@@ -223,7 +229,12 @@ class VideoStore:
     def complete(self, upload_id: str, request: CompleteRequest) -> VideoCapture:
         if len(request.instructions) > MAX_INSTRUCTIONS:
             raise VideoError(f"Keep room instructions under {MAX_INSTRUCTIONS} characters.", 413)
-        with self._lock:
+        with self._lock(upload_id):
+            finished = next(
+                (c for c in self._records.newest_first() if c.upload_id == upload_id), None
+            )
+            if finished is not None:
+                return finished
             upload = self._upload(upload_id)
             missing = sorted(set(range(upload.chunks)) - set(upload.received))
             if missing:
@@ -235,13 +246,16 @@ class VideoStore:
             folder = self.uploads / upload.id
             try:
                 capture = self._check(upload, folder / "video.part", request.instructions)
-                incoming = self.root / f".incoming-{capture.id}"
-                incoming.mkdir()
-                (folder / "video.part").replace(incoming / capture.file)
-                write_json(incoming / "capture.json", capture)
-                incoming.rename(self.root / capture.id)
-            finally:
-                shutil.rmtree(folder, ignore_errors=True)
+            except VideoError as exc:
+                if exc.status < 500:
+                    shutil.rmtree(folder, ignore_errors=True)
+                raise
+            incoming = self.root / f".incoming-{capture.id}"
+            incoming.mkdir()
+            (folder / "video.part").replace(incoming / capture.file)
+            write_json(incoming / "capture.json", capture)
+            incoming.rename(self.root / capture.id)
+            shutil.rmtree(folder, ignore_errors=True)
             return capture
 
     def newest_first(self) -> list[VideoCapture]:
@@ -254,8 +268,8 @@ class VideoStore:
         info = self.probe(path, upload.filename)
         if info.seconds > self.limits.max_seconds:
             raise VideoError(
-                f"{upload.filename} is {duration(info.seconds)} long; "
-                f"keep it under {duration(self.limits.max_seconds)}.",
+                f"{upload.filename} is {duration_text(info.seconds)} long; "
+                f"keep it under {duration_text(self.limits.max_seconds)}.",
                 413,
             )
         digest = hashlib.sha256()
@@ -271,7 +285,12 @@ class VideoStore:
             size_bytes=upload.size_bytes,
             sha256=digest.hexdigest(),
             video=info,
+            upload_id=upload.id,
         )
+
+    def _lock(self, upload_id: str) -> threading.Lock:
+        with self._locks_lock:
+            return self._locks.setdefault(upload_id, threading.Lock())
 
     def _upload(self, upload_id: str) -> VideoUpload:
         upload = self._pending.read(upload_id)
@@ -292,6 +311,6 @@ def size_text(size: float) -> str:
     return f"{size / 1024**2:,.0f} MB"
 
 
-def duration(seconds: float) -> str:
+def duration_text(seconds: float) -> str:
     minutes, rest = divmod(round(seconds), 60)
     return f"{minutes} min {rest} s" if minutes else f"{rest} s"

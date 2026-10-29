@@ -241,11 +241,18 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
 
     @app.put("/api/videos/{upload_id}/chunks/{number}", status_code=204)
     async def video_chunk(upload_id: str, number: int, request: Request) -> None:
+        largest = videos.limits.chunk_bytes
+        too_large = VideoError(f"A chunk is at most {largest} bytes.", 413)
         declared = request.headers.get("content-length", "")
-        if declared.isdigit() and int(declared) > videos.limits.chunk_bytes:
-            raise VideoError(f"A chunk is at most {videos.limits.chunk_bytes} bytes.", 413)
-        data = await request.body()
-        await asyncio.to_thread(videos.put_chunk, upload_id, number, data)
+        if declared.isdigit() and int(declared) > largest:
+            raise too_large
+        # Read as it streams, so a chunk with no declared length is still cut off at the limit.
+        data = bytearray()
+        async for piece in request.stream():
+            data += piece
+            if len(data) > largest:
+                raise too_large
+        await asyncio.to_thread(videos.put_chunk, upload_id, number, bytes(data))
 
     @app.post("/api/videos/{upload_id}/complete", status_code=201)
     def complete_video(upload_id: str, request: CompleteRequest) -> dict[str, Any]:

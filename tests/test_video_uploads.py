@@ -106,7 +106,7 @@ def test_a_missing_chunk_is_named_and_the_upload_can_finish_after_a_retry(servic
 
     early = httpx.post(f"{service}/api/videos/{upload['id']}/complete", json={}, timeout=5)
     assert early.status_code == 409
-    assert early.json()["detail"] == ("1 of 3 chunks have not arrived yet, starting with chunk 1.")
+    assert early.json()["detail"] == "1 of 3 chunks have not arrived yet, starting with chunk 1."
 
     # The retry of a chunk that already arrived, then the missing one.
     assert send(service, upload["id"], 0, parts[0]).status_code == 204
@@ -159,3 +159,51 @@ def test_a_chunk_of_the_wrong_size_is_refused(service: str) -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Chunk 1 should be 1024 bytes; 10 came."
+
+
+def test_finishing_again_after_a_lost_answer_gives_the_same_capture(service: str) -> None:
+    video = fixture_video()
+    upload = start(service, video).json()
+    for number, part in enumerate(chunks(video)):
+        send(service, upload["id"], number, part)
+    first = httpx.post(f"{service}/api/videos/{upload['id']}/complete", json={}, timeout=5)
+
+    # The answer was lost on the way back, so the page asks again.
+    again = httpx.post(f"{service}/api/videos/{upload['id']}/complete", json={}, timeout=5)
+
+    assert again.status_code == 201, again.text
+    assert again.json() == first.json()
+
+
+def test_without_ffprobe_the_upload_is_kept_to_finish_later(
+    start_service: StartService, tmp_path: Path
+) -> None:
+    # No ffprobe on the search path: the server cannot check the video.
+    with start_service(tmp_path, PATH="", ESCAPE_ROOM_VIDEO_CHUNK_BYTES=str(CHUNK)) as url:
+        video = fixture_video()
+        upload = start(url, video).json()
+        for number, part in enumerate(chunks(video)):
+            send(url, upload["id"], number, part)
+
+        for _ in range(2):
+            done = httpx.post(f"{url}/api/videos/{upload['id']}/complete", json={}, timeout=5)
+            assert done.status_code == 503
+            assert done.json()["detail"] == (
+                "The server cannot check videos: ffprobe is not installed."
+            )
+
+
+def test_a_chunk_with_no_declared_length_is_cut_off_at_the_chunk_size(service: str) -> None:
+    upload = start(service, fixture_video()).json()
+
+    def streamed() -> Iterator[bytes]:
+        # Sent in pieces, so the request has no Content-Length to check up front.
+        for _ in range(3):
+            yield b"x" * CHUNK
+
+    response = httpx.put(
+        f"{service}/api/videos/{upload['id']}/chunks/0", content=streamed(), timeout=5
+    )
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "A chunk is at most 1024 bytes."

@@ -3,7 +3,8 @@
  *
  * The free Cloudflare tunnel refuses requests over 100 MB, so the server names a chunk size and the
  * page sends the video piece by piece. A chunk whose connection drops is sent again; the server
- * writes each chunk at its own place, so a repeat does no harm.
+ * writes each chunk at its own place, so a repeat does no harm. Finishing is asked again the same
+ * way: if its answer was lost, the server answers with the capture it already saved.
  */
 import { errorMessage } from './api';
 import { element } from './dom';
@@ -20,8 +21,8 @@ export interface VideoCaptureSummary {
 
 interface StartedUpload { id: string; chunk_bytes: number; chunks: number }
 
-// Tries for each chunk, and the wait before each retry grows by this much.
-const CHUNK_TRIES = 4;
+// Tries for each chunk and for finishing, and the wait before each retry grows by this much.
+const TRIES = 4;
 const RETRY_STEP_MS = 500;
 
 /** A size as the server words it: KB under a megabyte, MB above. */
@@ -37,19 +38,29 @@ export function durationText(seconds: number): string {
   return minutes ? `${minutes} min ${whole % 60} s` : `${whole} s`;
 }
 
+// Phones name the type of what they record; some browsers leave a picked file's type blank.
+const TYPES_BY_EXTENSION: Record<string, string> = { mov: 'video/quicktime', mp4: 'video/mp4' };
+
 class Refused extends Error {}
 
-/** Sends one chunk, again after a dropped connection or a server error; a refusal is final. */
-async function sendChunk(upload: StartedUpload, number: number, chunk: Blob): Promise<void> {
+export function videoType(file: File): string {
+  return file.type || TYPES_BY_EXTENSION[file.name.split('.').pop()?.toLowerCase() ?? ''] || '';
+}
+
+/**
+ * Makes the request, again after a dropped connection or a server error, and returns the answer.
+ * A refusal (4xx) is final: asking again would not change it.
+ */
+async function withRetries(request: () => Promise<Response>, failure: string): Promise<Response> {
   for (let attempt = 1; ; attempt += 1) {
     try {
-      const response = await fetch(`/api/videos/${upload.id}/chunks/${number}`, { method: 'PUT', body: chunk });
-      if (response.ok) return;
-      if (response.status < 500) throw new Refused(await errorMessage(response, 'The video could not be sent'));
+      const response = await request();
+      if (response.ok) return response;
+      if (response.status < 500) throw new Refused(await errorMessage(response, failure));
     } catch (error) {
       if (error instanceof Refused) throw error;
     }
-    if (attempt === CHUNK_TRIES) throw new Error('The connection kept dropping. Check it and upload the video again.');
+    if (attempt === TRIES) throw new Error('The connection kept dropping. Check it and upload the video again.');
     await new Promise(resolve => setTimeout(resolve, RETRY_STEP_MS * attempt));
   }
 }
@@ -61,21 +72,24 @@ export async function uploadVideo(
   const started = await fetch('/api/videos', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ filename: file.name, size_bytes: file.size, media_type: file.type }),
+    body: JSON.stringify({ filename: file.name, size_bytes: file.size, media_type: videoType(file) }),
   });
   if (!started.ok) throw new Refused(await errorMessage(started, 'The video could not be started'));
   const upload = await started.json() as StartedUpload;
   for (let number = 0; number < upload.chunks; number += 1) {
     const start = number * upload.chunk_bytes;
-    await sendChunk(upload, number, file.slice(start, start + upload.chunk_bytes));
+    const chunk = file.slice(start, start + upload.chunk_bytes);
+    await withRetries(
+      () => fetch(`/api/videos/${upload.id}/chunks/${number}`, { method: 'PUT', body: chunk }),
+      'The video could not be sent',
+    );
     progress((number + 1) / upload.chunks);
   }
-  const completed = await fetch(`/api/videos/${upload.id}/complete`, {
+  const completed = await withRetries(() => fetch(`/api/videos/${upload.id}/complete`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ instructions }),
-  });
-  if (!completed.ok) throw new Refused(await errorMessage(completed, 'The video could not be saved'));
+  }), 'The video could not be saved');
   return await completed.json() as VideoCaptureSummary;
 }
 
@@ -84,7 +98,7 @@ export class RoomVideo {
   private uploading = false;
   private readonly selected = element('video-selected');
   private readonly instructions = element<HTMLTextAreaElement>('video-instructions');
-  private readonly upload = element<HTMLButtonElement>('upload-video');
+  private readonly uploadButton = element<HTMLButtonElement>('upload-video');
   private readonly bar = element<HTMLProgressElement>('video-progress');
   private readonly status = element('video-status');
   private readonly error = element('video-error');
@@ -99,7 +113,7 @@ export class RoomVideo {
         if (file) this.choose(file);
       });
     }
-    this.upload.addEventListener('click', () => { void this.submit(); });
+    this.uploadButton.addEventListener('click', () => { void this.submit(); });
   }
 
   showSaved(videos: VideoCaptureSummary[]): void {
@@ -119,13 +133,30 @@ export class RoomVideo {
     this.file = file;
     this.selected.textContent = `${file.name} · ${sizeText(file.size)}`;
     this.selected.hidden = false;
+    this.showLength(file);
     this.error.hidden = true;
     this.status.textContent = '';
     this.render();
   }
 
+  /** Adds the video's length once the browser has read it; a file it cannot play keeps the size. */
+  private showLength(file: File): void {
+    const probe = document.createElement('video');
+    probe.preload = 'metadata';
+    const url = URL.createObjectURL(file);
+    const done = () => URL.revokeObjectURL(url);
+    probe.addEventListener('loadedmetadata', () => {
+      done();
+      if (this.file === file && Number.isFinite(probe.duration)) {
+        this.selected.textContent = `${file.name} · ${sizeText(file.size)} · ${durationText(probe.duration)}`;
+      }
+    }, { once: true });
+    probe.addEventListener('error', done, { once: true });
+    probe.src = url;
+  }
+
   private render(): void {
-    this.upload.disabled = this.uploading || this.file === null;
+    this.uploadButton.disabled = this.uploading || this.file === null;
   }
 
   private async submit(): Promise<void> {
