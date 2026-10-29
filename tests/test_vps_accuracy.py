@@ -47,3 +47,23 @@ def test_errors_are_measured_after_aligning_the_reference_path() -> None:
     assert 0.9 < report.median_rotation_error_degrees < 1.1
     assert abs(report.scale - 1 / 0.3) < 0.03
     assert report.frames == 60
+
+
+def test_rotation_error_holds_when_the_located_frames_lie_along_one_line() -> None:
+    rng = np.random.default_rng(6)
+    # Two short stretches of a straight walk, looking about: the positions leave the alignment's
+    # turn about that line open, so it must not decide the rotation error.
+    truth = [
+        pose(turn(rng.normal(size=3), rng.uniform(0, 60)), np.array([x, -1.4, 0.0]))
+        for x in [*np.linspace(0, 0.4, 12), *np.linspace(2.0, 2.3, 10)]
+    ]
+    move = turn(np.array([1.0, 2, 3]), 40)
+    reference = [pose(move @ t[:3, :3], 0.3 * move @ t[:3, 3] + [5, -2, 1]) for t in truth]
+    located = [
+        pose(t[:3, :3] @ turn(rng.normal(size=3), 1.0), t[:3, 3] + rng.normal(0, 0.02, 3))
+        for t in truth
+    ]
+
+    report = compare(located, reference)
+
+    assert 0.8 < report.median_rotation_error_degrees < 1.2

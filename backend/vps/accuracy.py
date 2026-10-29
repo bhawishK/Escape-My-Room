@@ -3,7 +3,9 @@
 The reference is the test video's own COLMAP reconstruction: right in shape, but with its own
 scale, turn and origin. It is carried onto the located path by the similarity that fits them best
 (Umeyama's method), and the errors are then measured in the map's units: metres, as far as the
-map's scale is right.
+map's scale is right. Rotation errors use their own alignment, the turn that best carries the
+reference cameras' rotations onto the located ones: when the located frames lie along one line,
+their positions leave the similarity's turn about that line open.
 """
 
 from dataclasses import dataclass
@@ -36,6 +38,15 @@ def angle_degrees(rotation: np.ndarray) -> float:
     return float(np.degrees(np.arccos(np.clip((np.trace(rotation) - 1) / 2, -1.0, 1.0))))
 
 
+def mean_turn(located: list[np.ndarray], reference: list[np.ndarray]) -> np.ndarray:
+    """The rotation that best carries the reference cameras' rotations onto the located ones."""
+    summed = sum(
+        mine[:3, :3] @ theirs[:3, :3].T for mine, theirs in zip(located, reference, strict=True)
+    )
+    u, _, vt = np.linalg.svd(np.asarray(summed))
+    return u @ np.diag([1.0, 1.0, np.sign(np.linalg.det(u @ vt))]) @ vt
+
+
 def compare(located: list[np.ndarray], reference: list[np.ndarray]) -> Accuracy:
     """Located and reference camera-to-world poses of the same frames, in the same order."""
     found = np.array([pose[:3, 3] for pose in located])
@@ -43,8 +54,9 @@ def compare(located: list[np.ndarray], reference: list[np.ndarray]) -> Accuracy:
     scale, rotation, translation = similarity(known, found)
     carried = known @ (scale * rotation).T + translation
     position_errors = np.linalg.norm(found - carried, axis=1)
+    turned = mean_turn(located, reference)
     rotation_errors = [
-        angle_degrees(mine[:3, :3].T @ rotation @ theirs[:3, :3])
+        angle_degrees(mine[:3, :3].T @ turned @ theirs[:3, :3])
         for mine, theirs in zip(located, reference, strict=True)
     ]
     return Accuracy(
