@@ -49,6 +49,30 @@ def test_errors_are_measured_after_aligning_the_reference_path() -> None:
     assert report.frames == 60
 
 
+def test_a_few_wrong_fixes_are_counted_without_skewing_the_rest() -> None:
+    rng = np.random.default_rng(7)
+    truth = [
+        pose(turn(np.array([0, 1.0, 0]), 6 * i), np.array([0.1 * i, -1.4, 0.5 * np.sin(i / 5)]))
+        for i in range(60)
+    ]
+    move = turn(np.array([1.0, 2, 3]), 40)
+    reference = [pose(move @ t[:3, :3], 0.3 * move @ t[:3, 3] + [5, -2, 1]) for t in truth]
+    located = [
+        pose(t[:3, :3] @ turn(rng.normal(size=3), 1.0), t[:3, 3] + rng.normal(0, 0.02, 3))
+        for t in truth
+    ]
+    # Six fixes put the camera 2 m away, as a match on the wrong copy of a repeated pattern does.
+    for i in range(0, 60, 10):
+        located[i] = pose(located[i][:3, :3], located[i][:3, 3] + [2.0, 0, 0])
+
+    report = compare(located, reference)
+
+    assert 0.02 < report.median_position_error < 0.045
+    assert 0.9 < report.median_rotation_error_degrees < 1.1
+    assert report.wrong == 6
+    assert len(report.position_errors) == 60 and report.position_errors[10] > 1.5
+
+
 def test_rotation_error_holds_when_the_located_frames_lie_along_one_line() -> None:
     rng = np.random.default_rng(6)
     # Two short stretches of a straight walk, looking about: the positions leave the alignment's

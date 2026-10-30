@@ -8,8 +8,9 @@ video of the same place, as the reconstruction pipeline leaves it: `QUERY/sparse
 its placed frames is located against the map, with that video's own COLMAP intrinsics. Its COLMAP
 poses are the reference the located ones are aligned to and compared with.
 
-Prints one line per frame and a summary: the share located, the error of the located ones, and
-the time each step takes; `--report` also writes it all as JSON.
+Prints one line per frame and a summary: the share located, the error of the located ones, how
+many of them are confidently wrong, and the time each step takes; `--report` also writes it all as
+JSON, with each located frame's position error.
 """
 
 # torch and transformers are only installed on the GPU desktop.
@@ -52,7 +53,7 @@ def main(argv: list[str]) -> int:
     cameras = cameras[:: args.every]
     print(f"{len(vps.frames)} map frames; locating {len(cameras)} query frames", flush=True)
 
-    frames, located, reference = [], [], []
+    frames, located, reference, located_frames = [], [], [], []
     for camera in cameras:
         started = time.monotonic()
         keypoints, descriptors, _ = extractor.local(camera["path"])
@@ -86,6 +87,7 @@ def main(argv: list[str]) -> int:
         if fix.camera_to_world is not None:
             located.append(fix.camera_to_world)
             reference.append(camera["camera_to_world"])
+            located_frames.append(frames[-1])
         status = "located" if fix.camera_to_world is not None else f"not located: {fix.reason}"
         print(
             f"{camera['name']}: {len(keypoints)} keypoints, {fix.matches} matches, "
@@ -108,7 +110,11 @@ def main(argv: list[str]) -> int:
             "p90_position_error": round(accuracy.p90_position_error, 3),
             "median_rotation_error_degrees": round(accuracy.median_rotation_error_degrees, 2),
             "map_to_reference_scale": round(accuracy.scale, 4),
+            # Located frames more than half a metre off: confidently wrong fixes.
+            "wrong": accuracy.wrong,
         }
+        for frame, error in zip(located_frames, accuracy.position_errors, strict=True):
+            frame["position_error"] = error
         summary["passes"] = bool(
             share >= LOCATED_SHARE
             and accuracy.median_position_error <= MEDIAN_ERROR_M
