@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+import numpy as np
 from fastapi import (
     FastAPI,
     Form,
@@ -71,6 +72,7 @@ from backend.videos import (
     VideoStore,
     probe_from_environment,
 )
+from backend.vps.service import Positioning
 
 type Incoming = (
     PoseMessage
@@ -130,13 +132,19 @@ CARRYING = "Someone is carrying the box. Let go of it before changing the room."
 
 # Five minutes of poses ten times a second fits in well under this.
 MAX_MOVEMENT_LOG_BYTES = 2 * 1024 * 1024
+# A phone frame to locate is a JPEG of about 640 px, tens of kilobytes (#133).
+MAX_FRAME_BYTES = 1024 * 1024
 
 
 class OverviewChoice(WireModel):
     image_id: str
 
 
-def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -> FastAPI:
+def create_app(
+    prepared_dir: Path | None = None,
+    data_dir: Path | None = None,
+    positioning: Positioning | None = None,
+) -> FastAPI:
     repository = Path(__file__).resolve().parents[1]
     data = data_dir or Path(os.environ.get("ESCAPE_ROOM_DATA_DIR") or repository / "data")
     captures = CaptureStore(data / "captures", CaptureLimits.from_environment())
@@ -162,6 +170,8 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
     if not 0 <= delay_ms <= 5000:
         raise ValueError("ESCAPE_ROOM_SIMULATED_DELAY_MS must be from 0 to 5000.")
     room = PrototypeRoom(load_error=load_error, delivery_delay=delay_ms / 1000)
+    # Locates phone frames against the live room's positioning map (#133).
+    positioning = positioning or Positioning()
 
     def show(loaded: LoadedRoom) -> None:
         """Make this the shared room. Devices see its version change and reload it."""
@@ -173,6 +183,7 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
         room.map = loaded.map
         room.splat_placement = loaded.splat_placement
         room.load_error = None
+        positioning.use(live_rooms.directory, loaded.splat_placement, loaded.room_version)
 
     if prepared is not None:
         show(prepared)
@@ -241,7 +252,9 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
             log = json.loads(body)
         except ValueError as exc:
             raise HTTPException(400, "A movement log must be JSON.") from exc
-        if not isinstance(log, dict) or not isinstance(cast(dict[str, Any], log).get("entries"), list):
+        if not isinstance(log, dict) or not isinstance(
+            cast(dict[str, Any], log).get("entries"), list
+        ):
             raise HTTPException(400, "A movement log needs a list of entries.")
         entries = cast(list[Any], cast(dict[str, Any], log)["entries"])
         movement_logs.mkdir(parents=True, exist_ok=True)
@@ -251,6 +264,24 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
         pending.write_text(json.dumps(log, indent=2), encoding="utf-8")
         pending.replace(movement_logs / name)
         return {"file": name, "entries": len(entries)}
+
+    @app.post("/api/localize")
+    def localize(
+        image: UploadFile,
+        fx: float = Form(gt=0),
+        fy: float = Form(gt=0),
+        cx: float = Form(),
+        cy: float = Form(),
+        width: int = Form(gt=0, le=4096),
+        height: int = Form(gt=0, le=4096),
+    ) -> dict[str, Any]:
+        """Where the phone's camera stood for one frame, in room metres (#133). `fx`, `fy`, `cx`
+        and `cy` are its lens in that JPEG's pixels."""
+        jpeg = image.file.read(MAX_FRAME_BYTES + 1)
+        if len(jpeg) > MAX_FRAME_BYTES:
+            raise HTTPException(status_code=413, detail="The frame is larger than 1 MB.")
+        K = np.array([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]])
+        return positioning.locate(jpeg, K, (width, height)).wire()
 
     @app.get("/api/captures")
     def list_captures() -> dict[str, list[dict[str, Any]]]:
@@ -345,9 +376,7 @@ def create_app(prepared_dir: Path | None = None, data_dir: Path | None = None) -
                 message = f"The earlier room can no longer be loaded: {exc}"
                 raise LiveRoomError(message, 422) from exc
             loaded.room_version = version
-            await swap_in(
-                loaded, lambda: live_rooms.record(directory, version, previous.job_id)
-            )
+            await swap_in(loaded, lambda: live_rooms.record(directory, version, previous.job_id))
             return live_rooms.describe(loaded).model_dump()
 
     @app.get("/api/rooms/live")

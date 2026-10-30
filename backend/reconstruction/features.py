@@ -8,7 +8,8 @@
 - **Global:** DINOv2 (`facebook/dinov2-small`): its class token and mean patch token, joined and
   normalised, to pick the map frames worth matching.
 
-The phone's frames (#133) must use the same models; `map.json` names them.
+The phone's frames (#133) must use the same models; `map.json` names them. Each frame is a file
+or, for the phone's frames, its JPEG bytes.
 """
 
 # torch and transformers are only installed on the GPU desktop.
@@ -16,6 +17,7 @@ The phone's frames (#133) must use the same models; `map.json` names them.
 # pyright: reportMissingImports=false
 
 from pathlib import Path
+from typing import BinaryIO
 
 import numpy as np
 
@@ -45,7 +47,7 @@ class HuggingFaceExtractor:
         self.local_net.eval()
         self.global_net.eval()
 
-    def local(self, image: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def local(self, image: Path | BinaryIO) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         import torch
         from PIL import Image
 
@@ -71,7 +73,7 @@ class HuggingFaceExtractor:
             scores[strongest].astype(np.float32),
         )
 
-    def global_descriptor(self, image: Path) -> np.ndarray:
+    def global_descriptor(self, image: Path | BinaryIO) -> np.ndarray:
         import torch
         from PIL import Image
 
