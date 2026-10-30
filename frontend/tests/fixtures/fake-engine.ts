@@ -9,21 +9,42 @@ export interface EngineCalls {
   stops: number;
   recenters: number;
   cameraFeed: boolean;
+  /** Camera frames drawn for positioning, and read back (#133). */
+  framesDrawn: number;
+  framesRead: number;
 }
 
 /**
  * Stands in for the 8th Wall engine binary, following its camera pipeline module contract: modules
- * are added, `run` starts them, and `frame` delivers one tracking result to every module.
+ * are added, `run` starts them, and `frame` delivers one tracking result to every module. With
+ * `camera`, each frame also brings a camera image on the "GPU", which positioning (#133) can copy.
  */
-function installFakeEngine(): void {
+function installFakeEngine(options: { camera: boolean }): void {
   type Module = {
     name: string;
     onCameraStatusChange?: (args: { status: string }) => void;
     onStart?: (args: { canvas: unknown }) => void;
+    onProcessGpu?: (args: unknown) => void;
     onUpdate?: (args: unknown) => void;
   };
   let modules: Module[] = [];
-  const calls = { configure: [] as unknown[], origins: [] as unknown[], modules: [] as string[], runs: 0, stops: 0, recenters: 0, cameraFeed: false };
+  const calls = {
+    configure: [] as unknown[], origins: [] as unknown[], modules: [] as string[], runs: 0, stops: 0, recenters: 0, cameraFeed: false,
+    framesDrawn: 0, framesRead: 0,
+  };
+  // A grey 480 x 640 camera image, read back through a stand-in for the GPU context.
+  const gl = {
+    FRAMEBUFFER: 1, FRAMEBUFFER_BINDING: 2, RGBA: 3, UNSIGNED_BYTE: 4,
+    getParameter: () => null,
+    bindFramebuffer: () => undefined,
+    readPixels: (_x: number, _y: number, _w: number, _h: number, _f: number, _t: number, pixels: Uint8Array) => {
+      calls.framesRead++;
+      pixels.fill(128);
+    },
+  };
+  const camera = { computeTexture: {}, computeCtx: gl, textureWidth: 480, textureHeight: 640 };
+  // The projection 8th Wall gives for a canvas this frame covers: a 480-pixel focal length.
+  const intrinsics = [2, 0, 0, 0, 0, 1.5, 0, 0, 0, 0, -1, -1, 0, 0, -0.02, 0];
   const engine = {
     addCameraPipelineModule(module: Module) { modules.push(module); calls.modules.push(module.name); },
     addCameraPipelineModules(added: Module[]) { added.forEach(module => engine.addCameraPipelineModule(module)); },
@@ -46,24 +67,33 @@ function installFakeEngine(): void {
       device: () => ({ MOBILE: 'mobile', MOBILE_AND_HEADSETS: 'mobile-and-headsets', ANY: 'any' }),
       camera: () => ({ BACK: 'back', FRONT: 'front' }),
     },
-    GlTextureRenderer: { pipelineModule: () => { calls.cameraFeed = true; return { name: 'gltexturerenderer' }; } },
+    GlTextureRenderer: {
+      pipelineModule: () => { calls.cameraFeed = true; return { name: 'gltexturerenderer' }; },
+      ...options.camera ? {
+        create: () => ({ render: () => { calls.framesDrawn++; }, framebuffer: () => ({}), destroy: () => undefined }),
+      } : {},
+    },
   };
   const target = window as unknown as Record<string, unknown>;
   target.XR8 = engine;
   target.fakeEngine = {
     calls,
     frame(reality: Record<string, unknown>) {
-      const result = { trackingStatus: 'NORMAL', trackingReason: 'UNSPECIFIED', ...reality };
+      const result = { trackingStatus: 'NORMAL', trackingReason: 'UNSPECIFIED', intrinsics, ...reality };
+      if (options.camera) modules.forEach(module => module.onProcessGpu?.({ frameStartResult: camera }));
       modules.forEach(module => module.onUpdate?.({ processCpuResult: { reality: result } }));
     },
   };
 }
 
-/** Replaces the real engine with the fake, and grants motion permission when asked. */
-export async function useFakeEngine(page: Page): Promise<void> {
+/**
+ * Replaces the real engine with the fake, and grants motion permission when asked. With `camera`,
+ * frames come with a camera image that positioning can send to Python.
+ */
+export async function useFakeEngine(page: Page, options = { camera: false }): Promise<void> {
   // The page loads the real engine from the CDN; keep it from replacing the fake.
   await page.route('**/@8thwall/**', route => route.abort());
-  await page.addInitScript(installFakeEngine);
+  await page.addInitScript(installFakeEngine, options);
   await grantMotionPermission(page);
 }
 
