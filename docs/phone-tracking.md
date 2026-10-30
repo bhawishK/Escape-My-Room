@@ -100,6 +100,30 @@ For a check without video, mark the floor with tape 1 m from the start toward th
 
 The log shows how far the phone thought each mark was.
 
+### Visual positioning against the room (Issue 133)
+
+8th Wall loses the phone on turns, and after a restart it doesn't know where in the room it is. When the live room has a positioning map, which every reconstruction since #135 has, the phone also locates itself against the room. **It needs no setup.**
+
+1. **Sending frames:** about once a second, or twice a second while lost, the phone copies 8th Wall's camera image off the GPU at 640 px. It posts the image as a JPEG to `POST /api/localize`, with the lens from 8th Wall's projection.
+2. **Locating:** Python matches the frame against the map and answers where the camera stood, in room metres (`backend/vps/service.py`).
+3. **Lining up:** each fix is paired with 8th Wall's pose of the same frame. Together they give the turn, scale and shift from 8th Wall's world to the room, fitted over the last eight fixes. The scale comes from the fixes once they are spread over a metre; until then, the height scale is used.
+   - **A disagreeing fix is rejected:** more than 0.5 m or 20° from the line-up.
+   - **Three disagreeing fixes in a row that agree with each other replace the line-up.**
+   - **No jumps:** a new line-up blends in over half a second.
+4. **While lost:** a fix places the phone directly. When 8th Wall restarts, the restart carries on from that fix, and the map doesn't ask the person to tap where they are.
+
+A room without a map gets one request with a 404, and none after that. A server without the models gets a 503. Either way, tracking works exactly as before.
+
+**Filming for a good map:** walk through the middle of the room at chest height, and play shortly after filming. Fixes fail on things that moved since, such as bedding or bags, and on views the map never saw. On 30 October 2026, a bedroom video filmed minutes after the map located 96% of its frames, with a median error of 5.3 cm.
+
+**In the log:**
+- **`positioning` events:** each fix lined up, accepted, rejected (with why), placed while lost, not located, or failed.
+- **The tracking summary's `positioning` section:**
+  - frames sent, located, accepted, rejected and placed;
+  - median round trip and inliers;
+  - the rejection reasons;
+  - `restart_to_fix_ms`: how long each 8th Wall restart took to be placed by a fix.
+
 ## What is verified
 
 Automated, desktop only:
@@ -108,6 +132,13 @@ Automated, desktop only:
 - The turn math: an upright phone looks ahead, turning changes the heading by the same angle, tilting does not, and landscape matches portrait (`frontend/tests/phone-view.spec.ts`).
 - Step counting on synthetic motion with the phone tilted: a walk counts its steps, holding still or turning quickly counts none, and gentle steps need the high sensitivity. Steps follow the heading, and the floor's edge and the furniture stop or slide them (`frontend/tests/steps.spec.ts`).
 - Walking end to end: synthetic motion events count steps on the phone page, the desk stops the walk, and the headset page shows each position through Python, then the start position after **Back to start** and `inactive` after **Close** (`frontend/tests/connected-view.spec.ts`).
+
+- Visual positioning (`frontend/tests/positioning.spec.ts`):
+  - A fix puts the phone where the camera sees it, and 8th Wall moves it on from there.
+  - A fix while lost places the phone, and the restart carries on from it.
+  - A room without a map is asked once.
+  - The line-up maths: turn, scale, rejection, replacement and blending.
+  - Python's side (`tests/test_vps_service.py`) uses a synthetic map.
 
 On a real iPhone: turning works, as reported by the user on 19 October 2026. Landscape, permission refusal, and drift over time are not recorded. Walking is not yet tried on a phone: record whether steps are counted while walking, missed or added, and how far the view ends up from where you walked.
 

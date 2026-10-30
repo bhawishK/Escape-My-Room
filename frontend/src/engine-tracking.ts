@@ -5,12 +5,13 @@
 import * as THREE from 'three';
 import type { PhoneTracking } from './phone-tracking';
 import { PhoneLook, START_EYE, START_VIEW, pitchOf, type RoomPose } from './phone-view';
+import {
+  FixFusion, FrameGrabber, yawOf, type CameraFrame, type EngineReality, type GpuFrameStart, type TextureRenderers,
+} from './positioning';
 import type { Position, RoomLandmark, Rotation, TrackingStatus } from './protocol';
 
 /** One frame of the engine's world tracking. */
-interface Reality {
-  position: Position;
-  rotation: Rotation;
+interface Reality extends EngineReality {
   /** `NORMAL` or `LIMITED`. */
   trackingStatus?: string;
   /** Why tracking is limited, such as `INITIALIZING`. */
@@ -22,7 +23,14 @@ interface PipelineModule {
   onCameraStatusChange?: (args: { status: string }) => void;
   onException?: (error: unknown) => void;
   onStart?: (args: { canvas: HTMLCanvasElement }) => void;
+  onProcessGpu?: (args: { frameStartResult: GpuFrameStart }) => void;
   onUpdate?: (args: { processCpuResult: { reality?: Reality } }) => void;
+}
+
+/** Where camera frames for visual positioning (#133) go, and when one is wanted. */
+export interface FrameSink {
+  due(now: number, tracked: boolean): boolean;
+  take(frame: CameraFrame): void;
 }
 
 /** The parts of the engine's `XR8` global this page uses. */
@@ -42,6 +50,8 @@ export interface Engine {
     incompatibleReasons(options: { allowedDevices: unknown }): unknown[];
   };
   XrConfig: { device(): { MOBILE: unknown } };
+  /** Draws a camera texture into another; copying frames for positioning needs it. */
+  GlTextureRenderer?: TextureRenderers;
 }
 
 /** The engine, when it has loaded and can track on this device and browser; otherwise null. */
@@ -81,14 +91,23 @@ interface EngineEvents {
   status: (status: TrackingStatus, hint: string) => void;
   /** After a loss, the room was lined up again with where the phone was; `detail` says by how much. */
   realigned: (detail: string) => void;
-  /** After a loss, 8th Wall started a new world: placing and calibrating on the map are void. */
-  restarted: () => void;
+  /**
+   * After a loss, 8th Wall started a new world: placing and calibrating on the map are void.
+   * `placedByFix` when it was lined up with a positioning fix taken while lost, so the person need
+   * not place themselves.
+   */
+  restarted: (placedByFix: boolean) => void;
   /** The person placed the phone on the room's map, at `spot`, facing `heading` (null: unchanged). */
   placed: (spot: { x: number; z: number }, heading: number | null) => void;
   /** Two taps on the map calibrated 8th Wall; null when a restart or recentring undid it. */
   calibrated: (calibration: Calibration | null) => void;
   /** The scale was measured: `factor` times 8th Wall's distances is the room's. */
   scaled: (scale: EngineScale) => void;
+  /**
+   * A positioning fix was used or not (#133); `placed` when it put the phone in the room after a
+   * start, restart or loss.
+   */
+  positioned: (detail: string, placed: boolean) => void;
   error: (message: string) => void;
 }
 
@@ -98,14 +117,6 @@ const UP = new THREE.Vector3(0, 1, 0);
 const RESTART_NEAR = 0.5;
 const RESTART_FACING = 30 * Math.PI / 180;
 
-/**
- * The turn about the vertical, 0 facing the desk and positive to the left. Unlike the forward
- * vector's heading it stays steady when the phone points almost straight down, as before a loss.
- */
-function yawOf(orientation: Rotation): number {
-  const q = new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w);
-  return new THREE.Euler().setFromQuaternion(q, 'YXZ').y;
-}
 // Every loss on the iPhone came with the phone pointing this far down or more, at the plain floor.
 const STEEP_DOWN = -50 * Math.PI / 180;
 
@@ -159,6 +170,9 @@ const MAX_FACTOR = 2;
 class ScaleMeter {
   /** 8th Wall's distances times this are the room's; 1 until the first measurement. */
   private factor = 1;
+
+  /** The factor in force now. */
+  get current(): number { return this.factor; }
   private known = false;
   /** Heights 8th Wall reported in unbroken tracking, while the scale is being measured. */
   private heights: number[] = [];
@@ -259,6 +273,8 @@ export class EngineTracking implements PhoneTracking {
   /** The last good pose when tracking was lost, and the turn sensor's heading then. */
   private lostFrom: RoomPose | null = null;
   private turnAtLoss: number | null = null;
+  /** The last good pose came from a positioning fix taken while lost (#133). */
+  private lostAtFix = false;
   /** The orientation sensor, which keeps measuring turns while the engine is lost. */
   private readonly look = new PhoneLook();
 
@@ -269,6 +285,14 @@ export class EngineTracking implements PhoneTracking {
   /** The first tap on the map while calibrating, and where 8th Wall had the phone then. */
   private standingAt: { mark: RoomLandmark; at: Position } | null = null;
   private calibration: Calibration | null = null;
+  /** Lines 8th Wall's world up with the room from positioning fixes (#133), once there are some. */
+  private readonly fusion = new FixFusion();
+  /** Copies camera frames for positioning, when the engine can and a sink takes them. */
+  private grabber: FrameGrabber | null = null;
+  /** Counts 8th Wall's worlds, so a fix for a frame from an earlier one is not used. */
+  private world = 0;
+  /** The world each grabbed frame came from. */
+  private readonly frameWorlds = new WeakMap<CameraFrame, number>();
 
   constructor(
     private readonly engine: Engine,
@@ -276,6 +300,8 @@ export class EngineTracking implements PhoneTracking {
     private readonly events: EngineEvents,
     /** How high the phone is really held, in metres. */
     heldAt = HELD_AT,
+    /** Where camera frames go to be located (#133); none sends no frames. */
+    private readonly frames: FrameSink | null = null,
   ) {
     this.scale = new ScaleMeter(heldAt);
   }
@@ -350,12 +376,19 @@ export class EngineTracking implements PhoneTracking {
     this.latest = null;
     this.scale.restart(true);
     this.uncalibrate();
+    this.newWorld();
     this.engineStatus = '';
     this.normal = false;
     this.everNormal = false;
     this.straighten();
     const { engine } = this;
     engine.XrController.configure({ scale: 'absolute' });
+    this.grabber?.stop();
+    const sink = this.frames;
+    this.grabber = sink && engine.GlTextureRenderer ? new FrameGrabber(engine.GlTextureRenderer, frame => {
+      this.frameWorlds.set(frame, this.world);
+      sink.take(frame);
+    }) : null;
     engine.clearCameraPipelineModules();
     engine.addCameraPipelineModules([
       engine.XrController.pipelineModule(),
@@ -366,9 +399,11 @@ export class EngineTracking implements PhoneTracking {
         // In metres, x, z and facing start here once scale is known; the engine replaces this y
         // with the phone's measured height above the floor.
         onStart: () => engine.XrController.updateCameraProjectionMatrix({ origin: START_EYE, facing: TOWARD_DESK }),
+        onProcessGpu: ({ frameStartResult }) => this.grabber?.gpu(frameStartResult),
         onUpdate: ({ processCpuResult }) => {
           const reality = processCpuResult.reality;
           if (!reality) return;
+          this.grabFrames(reality);
           const { position: p, rotation: r } = reality;
           const engineStatus = `${reality.trackingStatus ?? 'unknown'} ${reality.trackingReason ?? 'unknown'}`;
           if (engineStatus !== this.engineStatus) {
@@ -381,6 +416,7 @@ export class EngineTracking implements PhoneTracking {
           if (wasNormal && !this.normal) this.scale.interrupted();
           if (wasNormal && !this.normal && this.latest) {
             this.lostFrom = this.latest;
+            this.lostAtFix = false;
             this.turnAtLoss = this.turnYaw();
           }
           if (this.normal) {
@@ -390,7 +426,8 @@ export class EngineTracking implements PhoneTracking {
             if (this.lostFrom) this.recover(engine, this.lostFrom);
             const measured = this.scale.sample(engine.position, performance.now());
             if (measured) this.events.scaled(measured);
-            this.latest = this.intoRoom({ position: this.scale.toRoom(engine.position), orientation: engine.orientation });
+            this.latest = this.fusion.toRoom(engine) ??
+              this.intoRoom({ position: this.scale.toRoom(engine.position), orientation: engine.orientation });
           }
           this.reportStatus();
           if (this.normal) this.events.moved(this.latest!);
@@ -402,6 +439,61 @@ export class EngineTracking implements PhoneTracking {
     this.reported = 'inactive';
     this.events.status('inactive', STARTING_HINT);
     engine.run({ canvas: this.canvas });
+  }
+
+  /** Hands 8th Wall's result to the frame grabber, and asks it for a frame when one is due. */
+  private grabFrames(reality: Reality): void {
+    const { grabber, frames } = this;
+    if (!grabber || !frames) return;
+    grabber.cpu(reality);
+    if (!grabber.busy && frames.due(performance.now(), reality.trackingStatus !== 'LIMITED')) grabber.request();
+  }
+
+  /**
+   * A positioning fix for `frame`: where Python put its camera in the room (#133). While 8th
+   * Wall tracks, it lines 8th Wall's world up with the room; while it is lost, the phone is placed
+   * there, and a restart is lined up with it. Returns what was done, for the log.
+   */
+  fix(frame: CameraFrame, room: RoomPose): string {
+    if (!this.running || this.pausedForCamera) return 'not used: tracking is stopped';
+    if (this.frameWorlds.get(frame) !== this.world) return 'not used: 8th Wall started a new world since the frame';
+    if (!frame.tracked || !this.normal) {
+      if (this.normal || !this.everNormal) return 'not used: 8th Wall was still starting when the frame was taken';
+      // Lost: a restart is lined up with this place, turned as far as the phone turns from now.
+      this.lostFrom = room;
+      this.lostAtFix = true;
+      this.turnAtLoss = this.turnYaw();
+      this.latest = room;
+      this.events.moved(room);
+      const detail = `placed while lost at ${describe(room.position)}`;
+      this.events.positioned(detail, true);
+      return detail;
+    }
+    const first = this.fusion.lineUp === null;
+    const verdict = this.fusion.add(frame.engine, room, this.scale.current);
+    if (!verdict.accepted) {
+      this.events.positioned(`rejected: ${verdict.reason}`, false);
+      return `rejected: ${verdict.reason}`;
+    }
+    this.lostFrom = null;
+    this.turnAtLoss = null;
+    // The view moves now, not at 8th Wall's next frame.
+    const here = this.engineAt ? this.fusion.toRoom(this.engineAt) : null;
+    if (here) {
+      this.latest = here;
+      this.events.moved(here);
+    }
+    const lineUp = this.fusion.lineUp!;
+    const how = verdict.replaced ? 'replaced the line-up' : first ? 'lined up' : 'accepted';
+    const detail = `${how}: turned ${(lineUp.yaw * 180 / Math.PI).toFixed(0)}°, x${lineUp.scale.toFixed(2)}, at ${describe(room.position)}`;
+    this.events.positioned(detail, first || verdict.replaced);
+    return detail;
+  }
+
+  /** 8th Wall starts a new world: fixes from before it no longer line it up. */
+  private newWorld(): void {
+    this.world++;
+    this.fusion.reset();
   }
 
   private reportStatus(): void {
@@ -421,6 +513,7 @@ export class EngineTracking implements PhoneTracking {
     this.attempts++;
     this.starting = false;
     this.look.stop();
+    this.grabber?.stop();
     if (!this.running) return;
     // A paused engine is stopped already.
     if (!this.pausedForCamera) this.engine.stop();
@@ -469,6 +562,8 @@ export class EngineTracking implements PhoneTracking {
     this.shift.set(spot.x - turned.x, (this.latest?.position.y ?? scaled.y) - turned.y, spot.z - turned.z);
     this.lostFrom = null;
     this.turnAtLoss = null;
+    // The person says where they are: fixes line the world up again from here.
+    this.fusion.reset();
     this.standingAt = { mark: { id: MAP_SPOT, label: 'spot on the map', aliases: [], ...spot }, at: { ...engine.position } };
     this.latest = this.intoRoom({ position: scaled, orientation: engine.orientation });
     this.events.moved(this.latest);
@@ -530,6 +625,7 @@ export class EngineTracking implements PhoneTracking {
     // The engine starts its world again here: scaled from that start, and measured again.
     this.scale.restart(false);
     this.uncalibrate();
+    this.newWorld();
     this.engine.XrController.recenter();
   }
 
@@ -561,8 +657,10 @@ export class EngineTracking implements PhoneTracking {
     // old world no longer holds.
     this.scale.restart(false);
     this.uncalibrate();
+    this.newWorld();
     this.lineUp({ position: this.scale.toRoom(engine.position), orientation: engine.orientation }, from);
-    this.events.restarted();
+    this.events.restarted(this.lostAtFix);
+    this.lostAtFix = false;
   }
 
   /**
@@ -596,7 +694,14 @@ export class EngineTracking implements PhoneTracking {
 
   pose(): RoomPose { return this.latest ?? START_VIEW; }
 
+  /** Whether positioning fixes line 8th Wall's world up with the room now (#133). */
+  get positioned(): boolean { return this.fusion.lineUp !== null; }
+
   reportedPose(): RoomPose { return this.pose(); }
 
   orientation(): Rotation | null { return this.latest?.orientation ?? null; }
+}
+
+function describe(p: Position): string {
+  return `(${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)})`;
 }

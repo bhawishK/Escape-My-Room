@@ -62,6 +62,17 @@ export class TrackingStats {
   private scaleStale = false;
   /** When recent frames were drawn, within the rate window. */
   private readonly frames: number[] = [];
+  /** Visual positioning (#133): frames sent and what came of them. */
+  private readonly positioning = {
+    sent: 0, located: 0, not_located: 0, failed: 0, accepted: 0, rejected: 0, placed: 0,
+    off_reason: null as string | null,
+  };
+  private readonly fixSeconds: number[] = [];
+  private readonly fixInliers: number[] = [];
+  private readonly rejections: string[] = [];
+  /** From each 8th Wall restart to the first fix that placed the phone, in milliseconds. */
+  private restartAt: number | null = null;
+  private readonly restartToFix: number[] = [];
 
   /** The room view opens and tracking starts: a new opening, timed to its own first pose. */
   opened(now = performance.now()): void {
@@ -94,6 +105,40 @@ export class TrackingStats {
 
   /** The engine starts again, so its earlier reasons no longer apply. */
   restarted(): void { this.engineReason = ''; }
+
+  /** 8th Wall started a new world after a loss: timed to the first fix that places the phone. */
+  worldRestarted(now = performance.now()): void { this.restartAt = now; }
+
+  /** A frame went to Python to be located (#133). */
+  fixSent(): void { this.positioning.sent++; }
+
+  /** Python answered: located or not, the round trip in seconds and the inliers. */
+  fixAnswered(located: boolean, seconds: number, inliers: number): void {
+    if (located) this.positioning.located++;
+    else this.positioning.not_located++;
+    this.keep(this.fixSeconds, seconds);
+    if (located) this.keep(this.fixInliers, inliers);
+  }
+
+  /** The request failed, or positioning is off for this room (`off`). */
+  fixFailed(off: string | null = null): void {
+    this.positioning.failed++;
+    if (off) this.positioning.off_reason = off;
+  }
+
+  /** A located fix was used (`placed` the phone, after a start, restart or loss) or rejected. */
+  fixUsed(accepted: boolean, placed: boolean, detail: string, now = performance.now()): void {
+    if (!accepted) {
+      this.positioning.rejected++;
+      this.keep(this.rejections, detail);
+      return;
+    }
+    this.positioning.accepted++;
+    if (!placed) return;
+    this.positioning.placed++;
+    if (this.restartAt !== null) this.restartToFix.push(Math.round(now - this.restartAt));
+    this.restartAt = null;
+  }
 
   /**
    * Tracking is now `status`; without a reason, the engine's own is given. A change of status or
@@ -172,6 +217,13 @@ export class TrackingStats {
       // Which correction 8th Wall's distances have now: two objects, its height, or none yet.
       scale_in_force: this.calibration ? 'calibration' : this.scaled && !this.scaleStale ? 'height' : 'none',
       splat,
+      positioning: {
+        ...this.positioning,
+        median_round_trip_s: median(this.fixSeconds),
+        median_inliers: median(this.fixInliers),
+        rejections: [...this.rejections],
+        restart_to_fix_ms: [...this.restartToFix],
+      },
       time_note: 'Times are milliseconds since the room view first opened, on this device.',
     };
   }
@@ -186,4 +238,10 @@ export class TrackingStats {
     changes.push(change);
     if (changes.length > KEPT_CHANGES) changes.shift();
   }
+}
+
+function median(values: readonly number[]): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  return Number(sorted[Math.floor(sorted.length / 2)].toFixed(3));
 }

@@ -10,6 +10,7 @@ import { TrackingStats } from './tracking-stats';
 import { CalibrationRefused, EngineTracking, HELD_AT, engineUnavailable, trackingEngine } from './engine-tracking';
 import { RoomMap, type Spot } from './room-map';
 import { MovementLog, type TrackingMode } from './movement-log';
+import { Positioner, PositioningOff, type CameraFrame } from './positioning';
 import { StepTracking, type PhoneTracking } from './phone-tracking';
 import { START_EYE, headingOf, pitchOf, type RoomPose } from './phone-view';
 import {
@@ -90,6 +91,36 @@ let measuredUnsent = false;
 let tracking: PhoneTracking = steps;
 /** What tracking did on this phone, sent to Python with Send log for device checks. */
 const movementLog = new MovementLog();
+/** Sends camera frames to Python to locate in the room (#133). */
+const positioner = new Positioner();
+/** The room version positioning last tried; a new room may have a map where the last had none. */
+let positioningRoom: number | null = null;
+/** The map was opened to ask where the person is after a restart; a fix answers that instead. */
+let mapOpenedForRestart = false;
+/** Sends a camera frame to Python to locate, and gives 8th Wall tracking the fix (#133). */
+async function locateFrame(frame: CameraFrame): Promise<void> {
+  trackingStats.fixSent();
+  const started = performance.now();
+  try {
+    const fix = await positioner.locate(frame);
+    const seconds = (performance.now() - started) / 1000;
+    trackingStats.fixAnswered(fix.located, seconds, fix.inliers);
+    if (!fix.located || !fix.position || !fix.orientation) {
+      movementLog.event('positioning', `not located in ${seconds.toFixed(2)} s: ${fix.reason ?? 'no reason given'}`);
+      return;
+    }
+    if (fix.room_version !== state?.room.room_version) {
+      movementLog.event('positioning', 'not used: the room changed');
+      return;
+    }
+    const detail = measured?.fix(frame, { position: fix.position, orientation: fix.orientation });
+    if (detail?.startsWith('not used')) movementLog.event('positioning', detail);
+  } catch (error) {
+    const off = error instanceof PositioningOff ? error.message : null;
+    trackingStats.fixFailed(off);
+    movementLog.event('positioning', off ? `off for this room: ${off}` : `failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
 const trackingMode = (): TrackingMode => (tracking === measured ? 'measured' : 'steps');
 /**
  * Tracks with the engine when it can run on this phone, and with steps otherwise. The engine may
@@ -126,12 +157,22 @@ function chooseTracking(): void {
         } else if (connected && ownHold() === null) publishTracking();
       },
       realigned: detail => movementLog.event('realigned', detail),
-      restarted: () => {
-        // 8th Wall's new world has its own place and scale: the person places themselves again.
-        if (!roomViewOpen) return;
+      restarted: placedByFix => {
+        trackingStats.worldRestarted();
+        // 8th Wall's new world has its own place and scale: the person places themselves again,
+        // unless a positioning fix has, or does it first.
+        if (!roomViewOpen || placedByFix) return;
         openPhoneMap(true);
+        mapOpenedForRestart = true;
         mapReply = 'Tracking restarted · tap where you are';
         showPhoneMap();
+      },
+      positioned: (detail, placed) => {
+        movementLog.event('positioning', detail);
+        trackingStats.fixUsed(!detail.startsWith('rejected'), placed, detail);
+        if (!placed || !mapOpenedForRestart) return;
+        openPhoneMap(false);
+        element('view-status').textContent = 'Found where you are · keep going';
       },
       placed: (spot, heading) => {
         trackingStats.placed(spot, heading);
@@ -156,7 +197,10 @@ function chooseTracking(): void {
         movementLog.event('scale', `x${scale.factor}: 8th Wall height ${scale.engine_height_m} m, real ${scale.real_height_m} m${scale.clamped ? ', clamped' : ''}`);
       },
       error: message => movementLog.event('engine error', message),
-    }, phoneHeight);
+    }, phoneHeight, {
+      due: (now, tracked) => positioner.due(now, tracked),
+      take: frame => void locateFrame(frame),
+    });
     if (tracking !== measured) {
       steps.stop();
       tracking = measured;
@@ -466,6 +510,10 @@ function applyState(next: SessionState): void {
   const otherHeld = state?.manipulation?.owner === otherRole;
   const before = ownHold();
   state = next;
+  if (next.room.room_version !== positioningRoom) {
+    positioningRoom = next.room.room_version;
+    positioner.roomChanged();
+  }
   view?.setLocalRole(role);
   for (const map of [phoneMap, pageMap]) {
     map.showRoom(next.room);
@@ -890,6 +938,7 @@ const phoneMapRoot = element('phone-map');
 let mapReply: string | null = null;
 function openPhoneMap(open: boolean): void {
   mapReply = null;
+  mapOpenedForRestart = false;
   phoneMapRoot.classList.toggle('expanded', open);
   element('phone-map-close').hidden = !open;
   element('phone-map-prompt').hidden = !open;
