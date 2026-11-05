@@ -6,12 +6,15 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "typecheck": "tsc --noEmit",
-    "build": "npm run typecheck && vite build",
+    "build": "npm run typecheck && vite build && npm run build:quest",
     "test": "playwright test",
     "typecheck:python": "pyright --project ..",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "dev:quest": "vite --config vite.quest.config.ts --host 127.0.0.1",
+    "build:quest": "vite build --config vite.quest.config.ts"
   },
   "dependencies": {
+    "@iwsdk/core": "1.0.1",
     "@mediapipe/tasks-vision": "1.0.1",
     "@sparkjsdev/spark": "2.3.1",
     "onnxruntime-web": "1.30.0",

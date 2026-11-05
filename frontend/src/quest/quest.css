@@ -1,0 +1,22 @@
+/* The headset page (#156): the shared colours and room map from style.css, laid out for the Quest's browser. */
+body { margin: 0; background: var(--fill); }
+.quest-page { max-width: 760px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+.quest-page h1 { font-size: 24px; margin: 0 0 4px; }
+.quest-page h2 { font-size: 17px; margin: 0 0 8px; }
+.quest-page .card { background: var(--bg); border-radius: var(--radius); padding: 16px; }
+.quest-page .hint { color: var(--label-2); margin: 8px 0 0; }
+.quest-page .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.quest-page button {
+  font: inherit; font-weight: 600; border: 0; border-radius: 980px; padding: 10px 18px;
+  color: #fff; background: var(--blue); cursor: pointer; width: auto;
+}
+.quest-page button:disabled { background: var(--tinted); color: var(--label-2); cursor: default; }
+.quest-page .error { color: var(--red); background: var(--red-fill); border-radius: 12px; padding: 8px 12px; }
+.quest-page .statuses { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; margin: 16px 0 0; }
+.quest-page dt { color: var(--label-2); font-size: 13px; }
+.quest-page dd { margin: 0; }
+.quest-page pre { white-space: pre-wrap; font-size: 12px; }
+#quest-map.picking .room-map-plan { cursor: crosshair; }
+/* The 3D view: what the headset sees, shown small on the page before VR. */
+.quest-scene { height: 320px; border-radius: var(--radius); overflow: hidden; background: #f5f5f7; }
+.quest-scene canvas { display: block; width: 100% !important; height: 100% !important; }
