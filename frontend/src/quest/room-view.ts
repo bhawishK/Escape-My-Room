@@ -145,17 +145,20 @@ export class QuestRoom {
 
   /** Outlines an object: what a ray, a point or the gaze is on; none for null. */
   showHighlight(id: string | null): void {
-    const root = id ? this.entityRoots.get(id) : undefined;
-    if (root) this.highlight.setFromObject(root);
-    this.highlight.visible = root !== undefined;
-    this.container.dataset.highlighted = root ? id! : '';
+    this.container.dataset.highlighted = this.outline(this.highlight, id) ? id! : '';
   }
 
   /** Outlines the object someone holds, or none for null. */
   showControl(id: string | null): void {
+    this.outline(this.control, id);
+  }
+
+  /** Puts `box` around an object, or hides it; whether the object is here to outline. */
+  private outline(box: THREE.BoxHelper, id: string | null): boolean {
     const root = id ? this.entityRoots.get(id) : undefined;
-    if (root) this.control.setFromObject(root);
-    this.control.visible = root !== undefined;
+    if (root) box.setFromObject(root);
+    box.visible = root !== undefined;
+    return box.visible;
   }
 
   /** Draws a held object where the headset's grip puts it, ahead of Python's answer; null stops. */
@@ -210,7 +213,7 @@ export class QuestRoom {
       const [scenes, splat] = await Promise.all([
         Promise.all(urls.map(url => this.loader.loadAsync(url).then(
           gltf => [url, gltf.scene] as const,
-          () => { throw new Error(`The prepared room asset ${url.split('/').pop()} could not be loaded.`); },
+          () => { throw new Error(`The prepared room asset ${fileName(url)} could not be loaded.`); },
         ))),
         room.splat_url ? this.loadSplat(room.splat_url) : null,
       ]);
@@ -279,7 +282,7 @@ export class QuestRoom {
 
   /** Downloads a room splat, loading Spark the first time one is needed. */
   private async loadSplat(url: string): Promise<SplatMesh> {
-    const failed = new Error(`The prepared room splat ${url.split('/').pop()} could not be loaded.`);
+    const failed = new Error(`The prepared room splat ${fileName(url)} could not be loaded.`);
     this.sparkReady ??= import('@sparkjsdev/spark').then(spark => {
       this.scene.add(new spark.SparkRenderer({ renderer: this.renderer }));
       return spark;
@@ -289,7 +292,7 @@ export class QuestRoom {
       if (!response.ok) throw failed;
       const mesh = new spark.SplatMesh({
         fileBytes: await response.arrayBuffer(),
-        fileName: url.split('/').pop(),
+        fileName: fileName(url),
         // Rays stop at the room's objects, not at hundreds of thousands of splats.
         raycastable: false,
       });
@@ -300,6 +303,8 @@ export class QuestRoom {
     }
   }
 }
+
+const fileName = (url: string) => url.split('/').pop() ?? url;
 
 /** A standing figure facing -z: a body, a head and a nose for the way they face. */
 function person(colour: number): THREE.Group {

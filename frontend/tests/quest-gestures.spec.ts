@@ -140,3 +140,12 @@ test('looking elsewhere or at nothing starts the dwell over', () => {
   dwell.update('clock', 1000);
   expect(dwell.update('clock', 2000).started).toBe(true);
 });
+
+test('a shake while facing backwards is still no, not a jump all the way round', () => {
+  // Facing 180°: the turn angle wraps from +180° to -180° within each swing.
+  const backwards = swinging('yaw', 15, 4).map(([yaw, pitch]): [number, number] => [180 + 7.5 + yaw, pitch]);
+  expect(watch(new HeadNods(), backwards).filter(Boolean)).toEqual(['no']);
+  // Turning slowly across 180°, one way only, is neither.
+  const across: [number, number][] = Array.from({ length: 20 }, (_, frame) => [170 + frame, 0]);
+  expect(watch(new HeadNods(), across).filter(Boolean)).toEqual([]);
+});

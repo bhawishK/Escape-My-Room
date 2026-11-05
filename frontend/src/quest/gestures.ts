@@ -3,7 +3,8 @@
  * pinches; the poses and head motions the visiting interactions need are read here, from joint
  * positions in metres.
  */
-import type { Position } from '../protocol';
+import { rayForward } from '../grab';
+import type { Position, Rotation } from '../protocol';
 
 /** WebXR hand joints by name, where the frame gave a pose for them. */
 export type HandJoints = Partial<Record<XRHandJoint, Position>>;
@@ -80,34 +81,40 @@ const NOD_WINDOW_MS = 1200;
 
 /** Turns of one angle back the other way: a nod is two of them in the head's tilt. */
 class Swings {
-  private extreme: number | null = null;
+  /** The angle last seen, and the same angle counted on past ±180° so a turn never wraps. */
+  private last: number | null = null;
+  private angle = 0;
+  /** The farthest point of the current move, and its way: 1 up or left, -1 down or right, 0 none yet. */
+  private extreme = 0;
   private direction = 0;
   private turns: number[] = [];
 
   /** The angle now, in degrees: how many times it turned back within the window. */
-  update(angle: number, now: number): number {
+  update(degrees: number, now: number): number {
     this.turns = this.turns.filter(at => now - at <= NOD_WINDOW_MS);
-    if (this.extreme === null) {
-      this.extreme = angle;
+    if (this.last === null) {
+      this.last = degrees;
+      this.angle = this.extreme = degrees;
       return this.turns.length;
     }
-    const moved = angle - this.extreme;
-    if (this.direction === 0 || Math.sign(moved) === this.direction) {
-      // Still going the same way, or the first move: the far point follows the head.
-      if (Math.abs(moved) > 0 && (this.direction === 0 ? Math.abs(moved) >= SWING_DEGREES : true)) {
-        this.direction = this.direction || Math.sign(moved);
-        this.extreme = angle;
-      }
+    // The shortest way from the last angle, so 179° to -179° is 2°, not -358°.
+    this.angle += ((degrees - this.last + 540) % 360) - 180;
+    this.last = degrees;
+    const moved = this.angle - this.extreme;
+    if (Math.sign(moved) === this.direction) {
+      // Still going the same way: the far point follows the head.
+      this.extreme = this.angle;
     } else if (Math.abs(moved) >= SWING_DEGREES) {
-      this.turns.push(now);
+      // Back the other way far enough; the first move only sets the way.
+      if (this.direction !== 0) this.turns.push(now);
       this.direction = Math.sign(moved);
-      this.extreme = angle;
+      this.extreme = this.angle;
     }
     return this.turns.length;
   }
 
   clear(): void {
-    this.extreme = null;
+    this.last = null;
     this.direction = 0;
     this.turns = [];
   }
@@ -119,14 +126,10 @@ export class HeadNods {
   private readonly turn = new Swings();
 
   /** The head's orientation at `now` milliseconds: yes or no when one is made, else null. */
-  update(orientation: { x: number; y: number; z: number; w: number }, now: number): 'yes' | 'no' | null {
-    const { x, y, z, w } = orientation;
-    // Where the head looks: its -Z axis.
-    const forwardX = -2 * (w * y + x * z);
-    const forwardY = 2 * (w * x - y * z);
-    const forwardZ = -1 + 2 * (x * x + y * y);
-    const pitch = Math.asin(Math.max(-1, Math.min(1, forwardY))) * 180 / Math.PI;
-    const yaw = Math.atan2(-forwardX, -forwardZ) * 180 / Math.PI;
+  update(orientation: Rotation, now: number): 'yes' | 'no' | null {
+    const forward = rayForward(orientation);
+    const pitch = Math.asin(Math.max(-1, Math.min(1, forward.y))) * 180 / Math.PI;
+    const yaw = Math.atan2(-forward.x, -forward.z) * 180 / Math.PI;
     const nodded = this.tilt.update(pitch, now) >= 2;
     const shook = this.turn.update(yaw, now) >= 2;
     if (!nodded && !shook) return null;
