@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Escape My Room · Headset</title>
+  </head>
+  <body>
+    <main class="quest-page">
+      <header>
+        <h1>Escape My Room · Headset</h1>
+        <p class="hint">The Quest's page, with hands or controllers. The phone opens the main page.</p>
+      </header>
+      <section class="card">
+        <div class="buttons">
+          <button id="connect" type="button">Connect headset</button>
+          <button id="enter-vr" type="button" disabled>Enter VR</button>
+          <button id="disconnect" type="button" disabled>Disconnect</button>
+        </div>
+        <p id="error" class="error" role="alert" hidden></p>
+        <dl class="statuses">
+          <div><dt>Connection</dt><dd id="connection" data-testid="connection" role="status">Not connected</dd></div>
+          <div><dt>Phone</dt><dd id="phone-status" data-testid="phone-status">Waiting for phone</dd></div>
+          <div><dt>Room</dt><dd id="room-status" data-testid="room-status">No room yet</dd></div>
+          <div><dt>Alignment</dt><dd id="alignment-status" data-testid="alignment-status">Not aligned</dd></div>
+          <div><dt>VR</dt><dd id="xr-status" data-testid="xr-status">Checking for VR…</dd></div>
+          <div><dt>Gesture</dt><dd id="gesture-status" data-testid="gesture-status">No gesture yet</dd></div>
+        </dl>
+      </section>
+      <section class="card">
+        <h2>Room map</h2>
+        <div id="quest-map"></div>
+        <p class="hint">Press where you want to stand and drag the way to face.</p>
+      </section>
+      <section class="card">
+        <h2>In VR</h2>
+        <ul class="hint">
+          <li>Controllers: A or X lines the room up; squeeze the grip on an object to move it.</li>
+          <li>Hands: pinch to line the room up; pinch on an object, or look at it and pinch, to move it.</li>
+          <li>Point with the index finger to show something; hold an open palm to pause in a calm view.</li>
+          <li>Look at an object for a moment to start a topic about it; nod for yes, shake for no.</li>
+        </ul>
+      </section>
+      <div id="scene" class="quest-scene" data-testid="quest-scene"></div>
+      <details class="card">
+        <summary>Diagnostic report</summary>
+        <pre id="report" data-testid="report"></pre>
+      </details>
+    </main>
+    <script type="module" src="../src/quest/main.ts"></script>
+  </body>
+</html>
