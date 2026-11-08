@@ -37,9 +37,7 @@ def pose(sequence, x, z):
 
 
 def box(state):
-    return next(entity for entity in state["room"]["entities"] if entity["id"] == "box")[
-        "position"
-    ]
+    return next(entity for entity in state["room"]["entities"] if entity["id"] == "box")["position"]
 
 
 def held(event):
@@ -116,7 +114,9 @@ def test_the_induced_delay_holds_back_every_state_not_just_the_first(start_servi
                         event = json.loads(phone.recv(timeout=left))
                     except TimeoutError:
                         break
-                    if event.get("type") == "state":
+                    # Only states carrying one of these poses count; the server also sends others,
+                    # such as physics starting (#160).
+                    if event.get("type") == "state" and event["state"]["marker"]["position"]:
                         x = event["state"]["marker"]["position"]["x"]
                         delays.append(time.monotonic() - sent_at[round(x / 0.01)])
     assert delays

@@ -173,7 +173,7 @@ def create_app(
         raise ValueError("ESCAPE_ROOM_SIMULATED_DELAY_MS must be from 0 to 5000.")
     room = PrototypeRoom(load_error=load_error, delivery_delay=delay_ms / 1000)
     # The server's one physics simulation (#159), started and stopped with the server.
-    physics = PhysicsWorker(room.physics_changed)
+    physics = PhysicsWorker(room.physics_changed, room.physics_moved)
     room.physics = physics
     # Locates phone frames against the live room's positioning map (#133).
     positioning = positioning or Positioning()

@@ -68,6 +68,14 @@ class Rotation(WireModel):
         return self
 
 
+class PhysicsMaterial(WireModel):
+    """What a movable object is made of, for physics (#161). Missing values use the defaults."""
+
+    mass: float | None = Field(default=None, gt=0, le=1000)  # kilograms
+    friction: float | None = Field(default=None, ge=0, le=2)
+    restitution: float | None = Field(default=None, ge=0, le=1)  # 0 thuds, 1 bounces back
+
+
 class SceneEntity(WireModel):
     """One room object as both clients receive it."""
 
@@ -80,6 +88,7 @@ class SceneEntity(WireModel):
     size: EntitySize
     position: Position
     rotation: Rotation
+    physics: PhysicsMaterial | None = None
 
 
 class SplatPlacement(WireModel):
@@ -227,6 +236,7 @@ class RoomEntity(WireModel):
     color: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
     size: EntitySize
     position: Position
+    physics: PhysicsMaterial | None = None
 
 
 class PreparedRoom(WireModel):
@@ -259,6 +269,7 @@ class AssetEntity(WireModel):
     size: EntitySize
     position: Position
     rotation: Rotation
+    physics: PhysicsMaterial | None = None
 
 
 # A splat file in the room's folder.
@@ -363,6 +374,7 @@ def _load_legacy(directory: Path, room: PreparedRoom) -> LoadedRoom:
                 size=entity.size,
                 position=entity.position,
                 rotation=Rotation(),
+                physics=entity.physics,
             )
             for entity in room.entities
         ],
@@ -411,6 +423,7 @@ def _load_scene(directory: Path, scene: PreparedScene) -> LoadedRoom:
                 size=entity.size,
                 position=entity.position,
                 rotation=entity.rotation,
+                physics=entity.physics,
             )
             for entity in scene.entities
         ],

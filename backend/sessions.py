@@ -19,6 +19,7 @@ from backend.prepared_room import (
     UNITS,
     RoomLandmark,
     RoomMap,
+    Rotation,
     SceneEntity,
     SplatPlacement,
 )
@@ -181,6 +182,8 @@ class PrototypeRoom:
                 if self.manipulation is not None and self.manipulation.entity == entity_id:
                     return "controlled"
                 entity.position = position
+                if self.physics is not None:
+                    self.physics.place(entity)
                 self.revision += 1
                 return "ok"
         return "unknown"
@@ -255,6 +258,8 @@ class PrototypeRoom:
             owner="mobile_master",
             rest_y=self.entity(entity_id).position.y,
         )
+        if self.physics is not None:
+            self.physics.hold(entity_id)
         self.carry()
         self.revision += 1
         return "ok"
@@ -287,6 +292,8 @@ class PrototypeRoom:
                 (place.x, place.y, place.z),
             ),
         )
+        if self.physics is not None:
+            self.physics.hold(entity_id)
         self.revision += 1
         return "ok"
 
@@ -376,6 +383,26 @@ class PrototypeRoom:
         self.physics_tasks.add(task)
         task.add_done_callback(self.physics_tasks.discard)
 
+    def physics_moved(self, poses: list[dict[str, Any]]) -> None:
+        """Physics moved some objects, or they came to rest: place them and tell both devices."""
+        task = asyncio.get_running_loop().create_task(self._apply_physics(poses))
+        self.physics_tasks.add(task)
+        task.add_done_callback(self.physics_tasks.discard)
+
+    async def _apply_physics(self, poses: list[dict[str, Any]]) -> None:
+        async with self.lock:
+            held = None if self.manipulation is None else self.manipulation.entity
+            for pose in poses:
+                if pose["id"] == held:
+                    continue
+                entity = next((entity for entity in self.entities if entity.id == pose["id"]), None)
+                if entity is None:
+                    continue
+                entity.position = Position.model_validate(pose["position"])
+                entity.rotation = Rotation.model_validate(pose["rotation"])
+            self.revision += 1
+            await self.broadcast()
+
     async def _publish_physics(self) -> None:
         async with self.lock:
             self.revision += 1
@@ -463,13 +490,18 @@ class PrototypeRoom:
         entity.position = Position(x=bounded(x), y=held.rest_y, z=bounded(z))
 
     def drop(self) -> None:
-        """End the hold. A phone aim falls back to its floor height; a headset grip stays put."""
+        """End the hold. A phone aim falls back to its floor height; a headset grip lets go where
+        it is, and the object falls there if physics runs (#161)."""
         held = self.manipulation
         if held is None:
             return
+        entity = self.entity(held.entity)
         if held.owner == "mobile_master":
-            entity = self.entity(held.entity)
             entity.position = Position(x=entity.position.x, y=held.rest_y, z=entity.position.z)
+            if self.physics is not None:
+                self.physics.place(entity)
+        elif self.physics is not None:
+            self.physics.release(entity)
         self.manipulation = None
 
     def disconnect(self, role: Role) -> None:
