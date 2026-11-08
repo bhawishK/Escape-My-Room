@@ -91,13 +91,26 @@ class SceneEntity(WireModel):
     physics: PhysicsMaterial | None = None
 
 
+def floor_pieces(entities: list[SceneEntity]) -> list[SceneEntity]:
+    """The entities that make up the floor: static and no thicker than FLOOR_THICKNESS."""
+    return [
+        entity
+        for entity in entities
+        if entity.kind == "static" and entity.size.height <= FLOOR_THICKNESS
+    ]
+
+
+def floor_top(entities: list[SceneEntity]) -> float | None:
+    """The height of the floor's top surface, or None for a room without a floor."""
+    tops = [piece.position.y + piece.size.height for piece in floor_pieces(entities)]
+    return max(tops) if tops else None
+
+
 def floor_bounds(entities: list[SceneEntity]) -> tuple[float, float, float, float] | None:
     """The floor's extent as (min x, max x, min z, max z), around each floor piece's corners."""
     xs: list[float] = []
     zs: list[float] = []
-    for entity in entities:
-        if entity.kind != "static" or entity.size.height > FLOOR_THICKNESS:
-            continue
+    for entity in floor_pieces(entities):
         q, half_w, half_d = entity.rotation, entity.size.width / 2, entity.size.depth / 2
         for x, z in ((-half_w, -half_d), (half_w, -half_d), (half_w, half_d), (-half_w, half_d)):
             # v' = v + 2w(u × v) + 2u × (u × v), with v = (x, 0, z).

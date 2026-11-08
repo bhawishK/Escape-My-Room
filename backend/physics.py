@@ -21,7 +21,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
-from backend.prepared_room import FLOOR_THICKNESS, SceneEntity, floor_bounds
+from backend.prepared_room import FLOOR_THICKNESS, SceneEntity, floor_bounds, floor_top
 from backend.protocol import Velocity
 
 REPOSITORY = Path(__file__).resolve().parents[1]
@@ -79,11 +79,8 @@ def walls_for(entities: list[SceneEntity]) -> list[dict[str, Any]]:
     bounds = floor_bounds(entities)
     if bounds is None:
         return []
-    floor_top = max(
-        entity.position.y + entity.size.height
-        for entity in entities
-        if entity.kind == "static" and entity.size.height <= FLOOR_THICKNESS
-    )
+    top = floor_top(entities)
+    assert top is not None  # A room with floor bounds has a floor.
     min_x, max_x, min_z, max_z = bounds
     width, depth, half = max_x - min_x, max_z - min_z, WALL_THICKNESS / 2
     centre_x, centre_z = (min_x + max_x) / 2, (min_z + max_z) / 2
@@ -98,7 +95,7 @@ def walls_for(entities: list[SceneEntity]) -> list[dict[str, Any]]:
             "id": name,
             "motion": "static",
             "size": {"width": size_x, "height": WALL_BELOW + WALL_HEIGHT, "depth": size_z},
-            "position": {"x": x, "y": floor_top - WALL_BELOW, "z": z},
+            "position": {"x": x, "y": top - WALL_BELOW, "z": z},
             "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
             "material": None,
             "epoch": 0,
@@ -159,6 +156,10 @@ class PhysicsWorker:
         # Bodies someone holds: physics leaves them alone, and reports of them don't count.
         self.held: set[str] = set()
         self.moving: list[str] = []
+
+    def is_moving(self, entity_id: str) -> bool:
+        """Whether physics is moving it now, as of the worker's latest report."""
+        return entity_id in self.moving
 
     def status(self) -> dict[str, Any]:
         return {
