@@ -3,13 +3,15 @@
 Python starts the worker with the server and talks to it in JSON lines over its standard input and
 output (the messages are described in ``physics/worker.mjs``). The session never waits on it: if it
 can't start, or exits, the status says so with a reason and the session works as it did without
-physics. Threads read the worker's output, so this works with any event loop, including
-uvicorn's on Windows, which can't run asyncio subprocesses.
+physics. Threads write to and read from the worker, so the event loop never waits on its pipes,
+and this works with any event loop, including uvicorn's on Windows, which can't run asyncio
+subprocesses.
 """
 
 import asyncio
 import json
 import os
+import queue
 import shutil
 import subprocess
 import threading
@@ -68,11 +70,13 @@ class PhysicsWorker:
         self.process: subprocess.Popen[str] | None = None
         self.loop: asyncio.AbstractEventLoop | None = None
         self.stopping = False
-        self.write_lock = threading.Lock()
-        self.errors: threading.Thread | None = None
+        # Messages for the worker, written by a thread; None closes its input.
+        self.outgoing: queue.Queue[dict[str, Any] | None] = queue.Queue()
         self.stderr: deque[str] = deque(maxlen=STDERR_LINES)
-        # The room to load once the worker is ready, or reload if it is sent before then.
-        self.pending: dict[str, Any] | None = None
+        self.stderr_reader: threading.Thread | None = None
+        # The latest room asked for: sent when the worker becomes ready, and the only room whose
+        # "loaded" answer counts.
+        self.wanted_room: dict[str, Any] | None = None
 
     def status(self) -> dict[str, Any]:
         return {
@@ -105,44 +109,51 @@ class PhysicsWorker:
         except OSError as exc:
             self._unavailable(f"The physics worker couldn't start: {exc}")
             return
-        self.errors = threading.Thread(target=self._read_errors, daemon=True)
-        self.errors.start()
+        self.stderr_reader = threading.Thread(target=self._read_errors, daemon=True)
+        self.stderr_reader.start()
         threading.Thread(target=self._read_output, daemon=True).start()
+        threading.Thread(target=self._write_input, daemon=True).start()
 
     def load(self, room_version: int, entities: list[SceneEntity]) -> None:
         """Replace the simulated room. Sent once the worker is ready if it isn't yet."""
-        self.pending = {
+        self.wanted_room = {
             "type": "load",
             "room_version": room_version,
             "bodies": bodies_for(entities),
         }
         if self.state == "running":
-            self._send(self.pending)
+            self.outgoing.put(self.wanted_room)
 
     def stop(self) -> None:
-        """Close the worker's input, so it exits; kill it if it doesn't."""
+        """Close the worker's input, so it exits; kill it if it doesn't. Never raises."""
         self.stopping = True
         process = self.process
         if process is None:
             return
+        self.outgoing.put(None)
         try:
-            if process.stdin is not None:
-                process.stdin.close()
             process.wait(timeout=STOP_TIMEOUT)
-        except (OSError, subprocess.TimeoutExpired):
+        except subprocess.TimeoutExpired:
             process.kill()
-            process.wait(timeout=STOP_TIMEOUT)
+            try:
+                process.wait(timeout=STOP_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                # The operating system reaps it; the server stops regardless.
+                pass
 
-    def _send(self, message: dict[str, Any]) -> None:
+    def _write_input(self) -> None:
         process = self.process
-        if process is None or process.stdin is None:
-            return
-        try:
-            with self.write_lock:
+        assert process is not None and process.stdin is not None
+        while (message := self.outgoing.get()) is not None:
+            try:
                 process.stdin.write(json.dumps(message) + "\n")
                 process.stdin.flush()
+            except OSError:
+                # The output reader sees the worker exit and says why.
+                return
+        try:
+            process.stdin.close()
         except OSError:
-            # The reader sees the worker exit and says why.
             pass
 
     def _read_output(self) -> None:
@@ -156,8 +167,8 @@ class PhysicsWorker:
             self._on_loop(lambda message=message: self._handle(message))
         code = process.wait()
         # Its last words are on standard error; let them arrive before saying why it stopped.
-        if self.errors is not None:
-            self.errors.join(timeout=STOP_TIMEOUT)
+        if self.stderr_reader is not None:
+            self.stderr_reader.join(timeout=STOP_TIMEOUT)
         self._on_loop(lambda: self._exited(code))
 
     def _read_errors(self) -> None:
@@ -182,10 +193,14 @@ class PhysicsWorker:
             self.state = "running"
             self.engine = message.get("engine")
             self.reason = None
-            if self.pending is not None:
-                self._send(self.pending)
+            if self.wanted_room is not None:
+                self.outgoing.put(self.wanted_room)
             self.on_change()
         elif kind == "loaded":
+            wanted = self.wanted_room
+            # An answer for a room that has since been replaced is out of date.
+            if wanted is None or message.get("room_version") != wanted["room_version"]:
+                return
             self.room_version = message.get("room_version")
             self.bodies = message.get("bodies")
             self.on_change()

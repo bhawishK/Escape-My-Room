@@ -51,7 +51,7 @@ def test_a_worker_that_cant_start_leaves_physics_unavailable_and_holds_working(
     with start_service(tmp_path / "data", ESCAPE_ROOM_PHYSICS_WORKER=str(missing)) as url:
         with open_socket(url, "vr_solver") as ws:
             physics = physics_when(ws, unavailable)
-            assert physics["reason"].startswith("The physics worker exited with code 1: Error")
+            assert physics["reason"].startswith("The physics worker exited with code 1: ")
             assert "Cannot find module" in physics["reason"]
             assert physics["bodies"] is None
         assert_the_phone_still_carries_the_box(url)

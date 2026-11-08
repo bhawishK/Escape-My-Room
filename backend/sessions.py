@@ -37,14 +37,8 @@ PRESENCE_STALE_AFTER = 1.5
 # A carried object sits where the screen's centre meets the floor, no nearer or further than this.
 CARRY_NEAREST = 0.3
 CARRY_FARTHEST = 4.0
-# The physics status before the server has started its worker.
-NO_PHYSICS: dict[str, Any] = {
-    "status": "starting",
-    "engine": None,
-    "reason": None,
-    "room_version": None,
-    "bodies": None,
-}
+# The physics status before the server has started its worker: a worker not yet started.
+NO_PHYSICS = PhysicsWorker(lambda: None).status()
 
 
 def floor_bounds(entities: list[SceneEntity]) -> tuple[float, float, float, float] | None:
@@ -125,6 +119,9 @@ class PrototypeRoom:
     presence_timers: dict[Role, asyncio.TimerHandle] = field(default_factory=dict)
     # The server's one physics simulation (#159), or None before the server has started it.
     physics: PhysicsWorker | None = None
+    physics_tasks: set[asyncio.Task[None]] = field(
+        default_factory=lambda: set[asyncio.Task[None]]()
+    )
 
     def snapshot(self) -> dict[str, Any]:
         available = self.load_error is None and self.room_version is not None
@@ -374,7 +371,10 @@ class PrototypeRoom:
 
     def physics_changed(self) -> None:
         """The physics status changed: tell both devices, after anything in progress."""
-        asyncio.get_running_loop().create_task(self._publish_physics())
+        task = asyncio.get_running_loop().create_task(self._publish_physics())
+        # The loop keeps only a weak reference to a task; hold it until it has run.
+        self.physics_tasks.add(task)
+        task.add_done_callback(self.physics_tasks.discard)
 
     async def _publish_physics(self) -> None:
         async with self.lock:
