@@ -30,6 +30,8 @@ FRAME = "y_up_right_handed"
 PIVOT = "bottom_center"
 QUATERNION_ORDER = "xyzw"
 ASSET_URL_PREFIX = "/assets/prepared-room"
+# Static entities this thin are floor, as the phone's walking treats them (frontend/src/steps.ts).
+FLOOR_THICKNESS = 0.05
 ENTITY_ID = r"^[a-z][a-z0-9_]{0,31}$"
 BOUNDS_TOLERANCE = 1e-4
 

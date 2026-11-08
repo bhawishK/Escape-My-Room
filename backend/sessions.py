@@ -11,7 +11,9 @@ from fastapi import WebSocket
 from backend.alignment import Alignment
 from backend.delivery import Outbox
 from backend.grab import grab_offset, grabbed_point, normalize
+from backend.physics import PhysicsWorker
 from backend.prepared_room import (
+    FLOOR_THICKNESS,
     FRAME,
     QUATERNION_ORDER,
     UNITS,
@@ -35,8 +37,8 @@ PRESENCE_STALE_AFTER = 1.5
 # A carried object sits where the screen's centre meets the floor, no nearer or further than this.
 CARRY_NEAREST = 0.3
 CARRY_FARTHEST = 4.0
-# Static entities this thin are floor, as the phone's walking treats them (frontend/src/steps.ts).
-FLOOR_THICKNESS = 0.05
+# The physics status before the server has started its worker: a worker not yet started.
+NO_PHYSICS = PhysicsWorker(lambda: None).status()
 
 
 def floor_bounds(entities: list[SceneEntity]) -> tuple[float, float, float, float] | None:
@@ -115,6 +117,11 @@ class PrototypeRoom:
     presence_seen: dict[Role, float] = field(default_factory=dict)
     # One timer per role, armed only while that person is tracked.
     presence_timers: dict[Role, asyncio.TimerHandle] = field(default_factory=dict)
+    # The server's one physics simulation (#159), or None before the server has started it.
+    physics: PhysicsWorker | None = None
+    physics_tasks: set[asyncio.Task[None]] = field(
+        default_factory=lambda: set[asyncio.Task[None]]()
+    )
 
     def snapshot(self) -> dict[str, Any]:
         available = self.load_error is None and self.room_version is not None
@@ -127,6 +134,7 @@ class PrototypeRoom:
             "marker": self.marker.model_dump(),
             "participants": {role: value.model_dump() for role, value in self.presence.items()},
             "alignment": {role: value.model_dump() for role, value in self.alignment.items()},
+            "physics": NO_PHYSICS if self.physics is None else self.physics.status(),
             "manipulation": None
             if self.manipulation is None
             else {
@@ -360,6 +368,18 @@ class PrototypeRoom:
             return
         seen = self.presence_seen[role]
         self.presence_timers[role] = loop.call_later(delay, self._presence_due, role, seen)
+
+    def physics_changed(self) -> None:
+        """The physics status changed: tell both devices, after anything in progress."""
+        task = asyncio.get_running_loop().create_task(self._publish_physics())
+        # The loop keeps only a weak reference to a task; hold it until it has run.
+        self.physics_tasks.add(task)
+        task.add_done_callback(self.physics_tasks.discard)
+
+    async def _publish_physics(self) -> None:
+        async with self.lock:
+            self.revision += 1
+            await self.broadcast()
 
     def _presence_due(self, role: Role, seen: float) -> None:
         self.presence_timers.pop(role, None)

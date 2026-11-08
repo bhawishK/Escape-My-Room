@@ -3,7 +3,8 @@
 import asyncio
 import json
 import os
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -34,6 +35,7 @@ from backend.delivery import Outbox
 from backend.env_file import load_env_file
 from backend.errors import Refusal
 from backend.live_room import LiveRoomError, LiveRooms
+from backend.physics import PhysicsWorker
 from backend.preparation import (
     RECONSTRUCTION_FOLDER,
     JobRequest,
@@ -170,6 +172,9 @@ def create_app(
     if not 0 <= delay_ms <= 5000:
         raise ValueError("ESCAPE_ROOM_SIMULATED_DELAY_MS must be from 0 to 5000.")
     room = PrototypeRoom(load_error=load_error, delivery_delay=delay_ms / 1000)
+    # The server's one physics simulation (#159), started and stopped with the server.
+    physics = PhysicsWorker(room.physics_changed)
+    room.physics = physics
     # Locates phone frames against the live room's positioning map (#133).
     positioning = positioning or Positioning()
 
@@ -183,6 +188,7 @@ def create_app(
         room.map = loaded.map
         room.splat_placement = loaded.splat_placement
         room.load_error = None
+        physics.load(loaded.room_version, room.entities)
         positioning.use(live_rooms.directory, loaded.splat_placement, loaded.room_version)
 
     if prepared is not None:
@@ -206,7 +212,15 @@ def create_app(
             room.revision += 1
             await room.broadcast()
 
-    app = FastAPI(title="Escape My Room prototype")
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        physics.start()
+        try:
+            yield
+        finally:
+            await asyncio.to_thread(physics.stop)
+
+    app = FastAPI(title="Escape My Room prototype", lifespan=lifespan)
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:

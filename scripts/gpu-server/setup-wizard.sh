@@ -364,6 +364,9 @@ stage "Build the website"
 cd "$REPO/frontend"
 run npm ci
 run npm run build
+# The server's physics worker (#159): Havok in Node, started by the server.
+cd "$REPO/physics"
+run npm ci
 
 # ── 11 ────────────────────────────────────────────────────────────────────
 stage "GPU check"

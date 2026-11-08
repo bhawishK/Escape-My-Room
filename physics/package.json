@@ -1,0 +1,14 @@
+{
+  "name": "escape-my-room-physics",
+  "private": true,
+  "version": "0.1.0",
+  "description": "The server's one physics simulation (#159): Havok in Node, driven by Python over JSON lines.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node worker.mjs"
+  },
+  "dependencies": {
+    "@babylonjs/havok": "1.3.14"
+  }
+}
