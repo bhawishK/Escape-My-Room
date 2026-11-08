@@ -84,7 +84,7 @@ def test_a_box_let_go_in_the_air_falls_and_settles_on_the_floor(start_service, t
         states = until_rest(headset)
 
         landed = next(at for at, state in states if box(state)["y"] < start["y"] + 0.02)
-        assert landed - released < 0.8
+        assert landed - released < 0.7
         final = states[-1][1]
         # Its bottom rests on the floor, where it started, the right way up or on another face.
         assert box(final)["y"] == pytest.approx(start["y"], abs=0.01)
@@ -97,6 +97,24 @@ def test_a_box_let_go_in_the_air_falls_and_settles_on_the_floor(start_service, t
         rate = (len(moving) - 1) / (moving[-1] - moving[0])
         assert 15 < rate < 45
         assert quiet(headset, 0.6)
+
+
+def test_a_box_held_in_the_air_falls_when_the_headset_leaves(start_service, tmp_path):
+    with start_service(tmp_path) as url, open_socket(url, "mobile_master") as phone:
+        with open_socket(url, "vr_solver") as headset:
+            start = ready(headset)
+            headset.send(json.dumps(acquire(start)))
+            held = receive_until(headset, lambda event: owned_by(event, "vr_solver"))["state"]
+            lifted = {"x": start["x"], "y": start["y"] + 0.6, "z": start["z"]}
+            headset.send(json.dumps(grip(1, lifted, held["manipulation"]["id"])))
+            receive_until(
+                headset,
+                lambda event: (
+                    owned_by(event, "vr_solver") and event["state"]["manipulation"]["sequence"] == 1
+                ),
+            )
+        rested = box(until_rest(phone)[-1][1])
+        assert rested["y"] == pytest.approx(start["y"], abs=0.01)
 
 
 def test_a_rejoin_after_the_box_settles_shows_where_it_rests(start_service, tmp_path):

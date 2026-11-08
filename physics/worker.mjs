@@ -10,7 +10,7 @@
 //
 // Python → worker:
 //   {"type": "load", "room_version": 1, "bodies": [{"id", "motion": "static" | "dynamic",
-//     "size": {"width", "height", "depth"}, "position", "rotation",
+//     "size": {"width", "height", "depth"}, "position", "rotation", "epoch",
 //     "material": {"mass"?, "friction"?, "restitution"?} | null}]}
 //   {"type": "hold", "id", "epoch"}: someone holds it; it leaves the simulation.
 //   {"type": "release", "id", "epoch", "position", "rotation"}: let go here; it falls from rest.
@@ -19,8 +19,8 @@
 //   {"type": "ready", "engine": "havok", "version": "1.3.14"} once Havok has loaded;
 //   {"type": "loaded", "room_version": 1, "bodies": {"static": 1, "dynamic": 1}};
 //   {"type": "poses", "bodies": [{"id", "epoch", "position", "rotation"}], "moving": ["box"]}
-//     about 30 times a second while anything moves; the last one has "moving": [] and gives
-//     where each body came to rest;
+//     about 30 times a second while anything moves, a body knocked by another included; the
+//     last one has "moving": [] and gives where each body came to rest;
 //   {"type": "error", "message": "..."} for a message it can't act on. If Havok can't load it
 //   writes its reason to standard error and exits with code 1.
 
@@ -75,12 +75,13 @@ const length = ([x, y, z]) => Math.hypot(x, y, z);
 
 /** One simulated body and what Python last told the worker about it. */
 class Body {
-  constructor(world, { id, motion, size, position, rotation, material }) {
+  constructor(world, { id, motion, size, position, rotation, material, epoch }) {
     this.id = id;
     this.world = world;
     this.size = size;
     this.dynamic = motion === 'dynamic';
-    this.epoch = 0;
+    this.epoch = epoch ?? 0;
+    this.held = false;
     this.still = 0;
     [, this.shape] = havok.HP_Shape_CreateBox(
       [0, 0, 0], [0, 0, 0, 1], [size.width, size.height, size.depth]);
@@ -137,11 +138,16 @@ class Body {
     };
   }
 
-  /** True once it has been still for long enough; then it is put to sleep. */
-  settled() {
+  /** True when it moves slower than a body at rest does. */
+  slow() {
     const [, velocity] = havok.HP_Body_GetLinearVelocity(this.body);
     const [, spin] = havok.HP_Body_GetAngularVelocity(this.body);
-    this.still = length(velocity) < REST_SPEED && length(spin) < REST_SPIN ? this.still + 1 : 0;
+    return length(velocity) < REST_SPEED && length(spin) < REST_SPIN;
+  }
+
+  /** True once it has been still for long enough; then it is put to sleep. */
+  settled() {
+    this.still = this.slow() ? this.still + 1 : 0;
     if (this.still < REST_STEPS) return false;
     havok.HP_Body_SetLinearVelocity(this.body, [0, 0, 0]);
     havok.HP_Body_SetAngularVelocity(this.body, [0, 0, 0]);
@@ -149,7 +155,8 @@ class Body {
     return true;
   }
 
-  release() {
+  /** Free its Havok handles. */
+  dispose() {
     havok.HP_World_RemoveBody(this.world, this.body);
     havok.HP_Body_Release(this.body);
     havok.HP_Shape_Release(this.shape);
@@ -185,6 +192,7 @@ class Room {
   hold(message) {
     const body = this.body(message);
     // Python moves it while it is held; nothing pushes it, and it isn't reported.
+    body.held = true;
     body.setMotion(havok.MotionType.KINEMATIC, false);
     this.moving.delete(body);
     this.report();
@@ -192,6 +200,7 @@ class Room {
 
   letGo(message) {
     const body = this.body(message);
+    body.held = false;
     body.setMotion(havok.MotionType.DYNAMIC, true);
     body.put(message.position, message.rotation);
     this.moving.add(body);
@@ -200,6 +209,7 @@ class Room {
 
   place(message) {
     const body = this.body(message);
+    body.held = false;
     body.setMotion(havok.MotionType.DYNAMIC, false);
     body.put(message.position, message.rotation);
     this.moving.delete(body);
@@ -220,6 +230,12 @@ class Room {
         owed -= STEP;
         havok.HP_World_Step(this.world, STEP);
         this.steps += 1;
+        // A body knocked by a moving one starts moving too.
+        for (const body of this.bodies.values()) {
+          if (body.dynamic && !body.held && !this.moving.has(body) && !body.slow()) {
+            this.moving.add(body);
+          }
+        }
         const settled = [...this.moving].filter(body => body.settled());
         for (const body of settled) this.moving.delete(body);
         if (settled.length > 0 || this.steps % STEPS_PER_POSE === 0) this.report(settled);
@@ -239,9 +255,10 @@ class Room {
     this.timer = null;
   }
 
-  release() {
+  /** Free its Havok handles. */
+  dispose() {
     this.stop();
-    for (const body of this.bodies.values()) body.release();
+    for (const body of this.bodies.values()) body.dispose();
     havok.HP_World_Release(this.world);
   }
 }
@@ -250,7 +267,7 @@ let room = null;
 
 function handle(message) {
   if (message.type === 'load') {
-    room?.release();
+    room?.dispose();
     room = new Room(message.bodies);
     send({ type: 'loaded', room_version: message.room_version, bodies: room.counts() });
     return;

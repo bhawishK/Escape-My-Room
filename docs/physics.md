@@ -13,7 +13,13 @@ The server runs **one** physics simulation of the room, so the phone and the hea
   - A rejoining device sees where it rests.
   - The phone's let-go works exactly as before: the object lands at its floor height, at rest. A direct move (`entity_transform`) also puts it down at rest.
   - Taking hold of a moving object stops it. While it is held, the session moves it and physics leaves it alone.
+- **Knocked objects:** an object that a falling one knocks into is reported while it moves too.
 - **Next:** throwing (#162) and catching (#163).
+
+### Known limits
+
+- **Furniture isn't solid yet.** In a room where an object stands on a table, such as the multi-asset room's mug and book, the object falls through the table once it is let go or knocked.
+- **Settling can leave a tiny tilt.** Contact with the floor can leave an object at rest tilted by about 0.0001 in its rotation. Nobody would see it, but tests that compare rotations exactly should allow for it.
 
 ## What objects are made of
 

@@ -90,12 +90,12 @@ def test_an_earlier_hold_cannot_move_or_end_the_new_one(service_url):
         headset.send(json.dumps(acquire(start)))
         grabbed = receive_until(headset, lambda event: owned(event, "vr_solver"))["state"]
         old_id = grabbed["manipulation"]["id"]
-        lifted = {"x": start["x"] + 0.3, "y": start["y"] + 0.4, "z": start["z"]}
+        lifted = {"x": start["x"] + 0.3, "y": start["y"], "z": start["z"]}
         headset.send(json.dumps(grip(1, lifted, old_id)))
         receive_until(headset, gripped)
         headset.send(json.dumps({"type": "release", "manipulation_id": old_id}))
         receive_until(headset, ended)
-        # Let go in the air, it falls (#161); the phone picks it up once it has settled.
+        # Physics settles the let-go box (#161); the phone picks it up once it has.
         until_rest(headset)
         drain(phone_ws)
         held = phone.pick_up()
