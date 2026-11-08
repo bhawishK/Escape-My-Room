@@ -21,7 +21,10 @@ The server runs **one** physics simulation of the room, so the phone and the hea
   - Python caps a throw at 8 m/s, so a tracking glitch can't fling it out of sight. A velocity that isn't a number is refused. The box isn't sent spinning; it tumbles from what it hits.
   - The speed is the held box's, not the bare hand's, so a flick of the wrist throws harder, as it does with a real object.
   - Invisible walls stand just outside the floor's edges, from 1 m below its top to 6 m above, so a thrown box always stays over the floor. The spec said low walls; these are tall so that nothing thrown at the cap goes over them. They follow the rectangle around the floor, which is the floor itself for one level, unrotated floor, as in every room so far.
-- **Next:** catching (#163).
+- **Catching (#163):**
+  - Either person can take hold of a box while it falls, flies or slides, under the usual rule that only one person holds it at a time.
+  - A box caught by the headset stops in the hand and follows the grip. Let go, and it falls or flies again from there.
+  - A box caught by the phone is carried as always: on the floor, where the screen's centre meets it, not at the height it was caught at. Let go, and it rests there.
 
 ### Known limits
 
@@ -81,6 +84,11 @@ One JSON message per line, over the worker's standard input and output. The mess
 Python writes to and reads from the worker on background threads. Its event loop never waits on the worker, and uvicorn's event loop on Windows can't run asyncio subprocesses anyway.
 
 ## Tests
+
+`tests/test_physics_catch.py` checks that:
+- the headset catches a falling box, which stops falling and follows the grip, and the phone can't take it then;
+- a caught box let go again falls and settles;
+- the phone catches a falling box and carries it on the floor.
 
 `tests/test_physics_throw.py` checks that:
 - a throw lands where its speed predicts, then rests on the floor on any face;

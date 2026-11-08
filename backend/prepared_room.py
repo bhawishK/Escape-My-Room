@@ -91,6 +91,16 @@ class SceneEntity(WireModel):
     physics: PhysicsMaterial | None = None
 
 
+def floor_top(entities: list[SceneEntity]) -> float | None:
+    """The height of the floor's top surface, or None for a room without a floor."""
+    tops = [
+        entity.position.y + entity.size.height
+        for entity in entities
+        if entity.kind == "static" and entity.size.height <= FLOOR_THICKNESS
+    ]
+    return max(tops) if tops else None
+
+
 def floor_bounds(entities: list[SceneEntity]) -> tuple[float, float, float, float] | None:
     """The floor's extent as (min x, max x, min z, max z), around each floor piece's corners."""
     xs: list[float] = []

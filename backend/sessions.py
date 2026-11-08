@@ -22,6 +22,7 @@ from backend.prepared_room import (
     SceneEntity,
     SplatPlacement,
     floor_bounds,
+    floor_top,
 )
 from backend.protocol import (
     MarkerState,
@@ -241,13 +242,22 @@ class PrototypeRoom:
             id=self.manipulation_count,
             entity=entity_id,
             owner="mobile_master",
-            rest_y=self.entity(entity_id).position.y,
+            rest_y=self.carry_height(entity_id),
         )
         if self.physics is not None:
             self.physics.hold(entity_id)
         self.carry()
         self.revision += 1
         return "ok"
+
+    def carry_height(self, entity_id: str) -> float:
+        """The height the phone carries an object at: where it rests, or the floor's height if
+        physics is moving it, as when the phone catches a falling object (#163)."""
+        resting = self.entity(entity_id).position.y
+        if self.physics is None or entity_id not in self.physics.moving:
+            return resting
+        floor = floor_top(self.entities)
+        return resting if floor is None else floor
 
     def acquire_grip(
         self,
