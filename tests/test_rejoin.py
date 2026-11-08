@@ -4,6 +4,7 @@ import json
 
 import pytest
 from test_manipulation import Phone, box, error_code, open_socket, receive_until
+from test_physics_fall import until_rest
 from test_solver_grab import acquire, grip, restore
 from websockets.exceptions import ConnectionClosed
 
@@ -104,28 +105,33 @@ def test_the_headset_rejoins_without_the_old_hold(service_url):
             headset.send(json.dumps(acquire(start)))
             grabbed = receive_until(
                 headset,
-                lambda event: ((event.get("state") or {}).get("manipulation") or {}).get("owner")
-                == "vr_solver",
+                lambda event: (
+                    ((event.get("state") or {}).get("manipulation") or {}).get("owner")
+                    == "vr_solver"
+                ),
             )["state"]
             old_id = grabbed["manipulation"]["id"]
             lifted = {"x": start["x"], "y": start["y"] + 0.5, "z": start["z"]}
             headset.send(json.dumps(grip(1, lifted, old_id)))
             receive_until(
                 phone,
-                lambda event: ((event.get("state") or {}).get("manipulation") or {}).get("sequence")
-                == 1,
+                lambda event: (
+                    ((event.get("state") or {}).get("manipulation") or {}).get("sequence") == 1
+                ),
             )
         left = receive_until(
             phone, lambda event: event.get("state", {}).get("vr_connected") is False
         )["state"]
         assert left["manipulation"] is None
         assert left["mobile_connected"] is True
-        assert box(left) == pytest.approx(lifted)
+        # Let go in the air as the headset left, the box falls and settles on the floor (#161).
+        rested = box(until_rest(phone)[-1][1])
+        assert rested["y"] == pytest.approx(start["y"], abs=0.01)
         with open_socket(service_url, "vr_solver") as headset:
             welcome = json.loads(headset.recv(timeout=2))["state"]
             assert welcome["manipulation"] is None
             assert welcome["mobile_connected"] is True
-            assert box(welcome) == pytest.approx(lifted)
+            assert box(welcome) == rested
             headset.send(json.dumps({"type": "release", "manipulation_id": old_id}))
             assert error_code(headset) == "stale_manipulation"
             headset.send(json.dumps(grip(1, {"x": 2.0, "y": 2.0, "z": 2.0}, old_id)))
@@ -133,12 +139,14 @@ def test_the_headset_rejoins_without_the_old_hold(service_url):
             headset.send(json.dumps(acquire({"x": 1.0, "y": 1.0, "z": 1.0})))
             fresh = receive_until(
                 phone,
-                lambda event: ((event.get("state") or {}).get("manipulation") or {}).get("owner")
-                == "vr_solver",
+                lambda event: (
+                    ((event.get("state") or {}).get("manipulation") or {}).get("owner")
+                    == "vr_solver"
+                ),
             )["state"]
             fresh_id = fresh["manipulation"]["id"]
             assert fresh_id != old_id
-            assert box(fresh) == pytest.approx(lifted)
+            assert box(fresh) == rested
             headset.send(json.dumps({"type": "release", "manipulation_id": fresh_id}))
 
             def released(event):

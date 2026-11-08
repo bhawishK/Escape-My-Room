@@ -4,6 +4,7 @@ import json
 
 import pytest
 from test_manipulation import Phone, box, error_code, open_socket, receive_until
+from test_physics_fall import until_rest
 from test_solver_grab import acquire, grip, restore
 
 
@@ -94,6 +95,8 @@ def test_an_earlier_hold_cannot_move_or_end_the_new_one(service_url):
         receive_until(headset, gripped)
         headset.send(json.dumps({"type": "release", "manipulation_id": old_id}))
         receive_until(headset, ended)
+        # Let go in the air, it falls (#161); the phone picks it up once it has settled.
+        until_rest(headset)
         drain(phone_ws)
         held = phone.pick_up()
         new_id = held["manipulation"]["id"]

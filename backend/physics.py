@@ -51,17 +51,30 @@ def bodies_for(entities: list[SceneEntity]) -> list[dict[str, Any]]:
                 "size": entity.size.model_dump(),
                 "position": entity.position.model_dump(),
                 "rotation": entity.rotation.model_dump(),
+                "material": None if entity.physics is None else entity.physics.model_dump(),
             }
         )
     return bodies
 
 
+def pose_of(entity: SceneEntity) -> dict[str, Any]:
+    return {"position": entity.position.model_dump(), "rotation": entity.rotation.model_dump()}
+
+
 class PhysicsWorker:
     """The Havok worker process, and the status the session reports for it."""
 
-    def __init__(self, on_change: Callable[[], None]) -> None:
+    def __init__(
+        self,
+        on_change: Callable[[], None],
+        on_moved: Callable[[list[dict[str, Any]]], None] = lambda poses: None,
+    ) -> None:
         # Called on the event loop whenever the status changes.
         self.on_change = on_change
+        # Called on the event loop with the poses of bodies that moved, about 30 times a second
+        # while anything moves, and once more when it comes to rest. The moving list in the
+        # status is current by then.
+        self.on_moved = on_moved
         self.state: PhysicsState = "starting"
         self.engine: str | None = None
         self.reason: str | None = None
@@ -77,6 +90,12 @@ class PhysicsWorker:
         # The latest room asked for: sent when the worker becomes ready, and the only room whose
         # "loaded" answer counts.
         self.wanted_room: dict[str, Any] | None = None
+        # Counts the commands about each body. The worker echoes the count in that body's poses,
+        # so poses from before the latest command are recognised and ignored.
+        self.epochs: dict[str, int] = {}
+        # Bodies whose latest command was a let-go: only they can be falling.
+        self.released: set[str] = set()
+        self.moving: list[str] = []
 
     def status(self) -> dict[str, Any]:
         return {
@@ -85,6 +104,7 @@ class PhysicsWorker:
             "reason": self.reason,
             "room_version": self.room_version,
             "bodies": self.bodies,
+            "moving": list(self.moving),
         }
 
     def start(self) -> None:
@@ -121,8 +141,35 @@ class PhysicsWorker:
             "room_version": room_version,
             "bodies": bodies_for(entities),
         }
+        self.epochs = {}
+        self.released = set()
+        self.moving = []
         if self.state == "running":
             self.outgoing.put(self.wanted_room)
+
+    def hold(self, entity_id: str) -> None:
+        """Someone holds it: the session moves it, and physics leaves it alone."""
+        self._command("hold", entity_id)
+
+    def release(self, entity: SceneEntity) -> None:
+        """Let go where it is: it falls from rest and settles."""
+        self._command("release", entity.id, pose_of(entity))
+
+    def place(self, entity: SceneEntity) -> None:
+        """Put it where it is, at rest, as the phone's let-go and a direct move do."""
+        self._command("place", entity.id, pose_of(entity))
+
+    def _command(self, kind: str, entity_id: str, pose: dict[str, Any] | None = None) -> None:
+        epoch = self.epochs.get(entity_id, 0) + 1
+        self.epochs[entity_id] = epoch
+        if kind == "release":
+            self.released.add(entity_id)
+        else:
+            self.released.discard(entity_id)
+            if entity_id in self.moving:
+                self.moving.remove(entity_id)
+        if self.state == "running":
+            self.outgoing.put({"type": kind, "id": entity_id, "epoch": epoch, **(pose or {})})
 
     def stop(self) -> None:
         """Close the worker's input, so it exits; kill it if it doesn't. Never raises."""
@@ -204,6 +251,17 @@ class PhysicsWorker:
             self.room_version = message.get("room_version")
             self.bodies = message.get("bodies")
             self.on_change()
+        elif kind == "poses":
+            bodies: list[dict[str, Any]] = message.get("bodies") or []
+            current = [body for body in bodies if self.epochs.get(body["id"]) == body["epoch"]]
+            reported: list[str] = message.get("moving") or []
+            moving = [entity_id for entity_id in reported if entity_id in self.released]
+            # A hold or place already took its body out of the moving list here; the worker's
+            # answer to it changes nothing, and the devices aren't sent a state for it.
+            if not current and moving == self.moving:
+                return
+            self.moving = moving
+            self.on_moved(current)
 
     def _exited(self, code: int) -> None:
         if self.stopping:
@@ -218,4 +276,5 @@ class PhysicsWorker:
         self.reason = reason
         self.room_version = None
         self.bodies = None
+        self.moving = []
         self.on_change()
