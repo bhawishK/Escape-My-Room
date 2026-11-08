@@ -10,6 +10,7 @@ subprocesses.
 
 import asyncio
 import json
+import math
 import os
 import queue
 import shutil
@@ -20,7 +21,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
-from backend.prepared_room import FLOOR_THICKNESS, SceneEntity
+from backend.prepared_room import FLOOR_THICKNESS, SceneEntity, floor_bounds
+from backend.protocol import Velocity
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 DEFAULT_WORKER = REPOSITORY / "physics" / "worker.mjs"
@@ -29,6 +31,15 @@ DEFAULT_WORKER = REPOSITORY / "physics" / "worker.mjs"
 STDERR_LINES = 40
 # Seconds the worker gets to exit on its own after its input closes.
 STOP_TIMEOUT = 2.0
+
+# A throw is no faster than this, in metres per second, and spins no faster than this, in
+# radians per second, so a tracking glitch can't fling an object out of sight (#162).
+MAX_SPEED = 8.0
+MAX_SPIN = 20.0
+# Invisible walls along the floor's edges keep thrown objects in the room. They are taller than a
+# throw at the cap rises from a hand, so nothing goes over them.
+WALL_HEIGHT = 5.0
+WALL_THICKNESS = 0.2
 
 PhysicsState = Literal["starting", "running", "unavailable"]
 
@@ -56,7 +67,44 @@ def bodies_for(entities: list[SceneEntity], epochs: dict[str, int]) -> list[dict
                 "epoch": epochs.get(entity.id, 0),
             }
         )
-    return bodies
+    return bodies + walls_for(entities)
+
+
+def walls_for(entities: list[SceneEntity]) -> list[dict[str, Any]]:
+    """Four static walls just outside the floor's edges, or none for a room without a floor."""
+    bounds = floor_bounds(entities)
+    if bounds is None:
+        return []
+    min_x, max_x, min_z, max_z = bounds
+    width, depth, half = max_x - min_x, max_z - min_z, WALL_THICKNESS / 2
+    centre_x, centre_z = (min_x + max_x) / 2, (min_z + max_z) / 2
+    sides = {
+        "wall_west": (min_x - half, centre_z, WALL_THICKNESS, depth + 2 * WALL_THICKNESS),
+        "wall_east": (max_x + half, centre_z, WALL_THICKNESS, depth + 2 * WALL_THICKNESS),
+        "wall_north": (centre_x, min_z - half, width, WALL_THICKNESS),
+        "wall_south": (centre_x, max_z + half, width, WALL_THICKNESS),
+    }
+    return [
+        {
+            "id": name,
+            "motion": "static",
+            "size": {"width": size_x, "height": WALL_HEIGHT, "depth": size_z},
+            "position": {"x": x, "y": 0.0, "z": z},
+            "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+            "material": None,
+            "epoch": 0,
+        }
+        for name, (x, z, size_x, size_z) in sides.items()
+    ]
+
+
+def capped(velocity: Velocity | None, limit: float) -> dict[str, float] | None:
+    """The velocity as the worker takes it, scaled down to `limit` if it is faster."""
+    if velocity is None:
+        return None
+    speed = math.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
+    scale = limit / speed if speed > limit else 1.0
+    return {"x": velocity.x * scale, "y": velocity.y * scale, "z": velocity.z * scale}
 
 
 def pose_of(entity: SceneEntity) -> dict[str, Any]:
@@ -173,9 +221,18 @@ class PhysicsWorker:
         """Someone holds it: the session moves it, and physics leaves it alone."""
         self._command("hold", entity_id)
 
-    def release(self, entity: SceneEntity) -> None:
-        """Let go where it is: it falls from rest and settles."""
-        self._command("release", entity.id, pose_of(entity))
+    def release(
+        self,
+        entity: SceneEntity,
+        velocity: Velocity | None = None,
+        angular_velocity: Velocity | None = None,
+    ) -> None:
+        """Let go where it is: it falls from rest, or flies off thrown at `velocity` (capped)."""
+        motion = {
+            "velocity": capped(velocity, MAX_SPEED),
+            "angular_velocity": capped(angular_velocity, MAX_SPIN),
+        }
+        self._command("release", entity.id, pose_of(entity) | motion)
 
     def place(self, entity: SceneEntity) -> None:
         """Put it where it is, at rest, as the phone's let-go and a direct move do."""

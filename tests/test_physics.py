@@ -27,10 +27,10 @@ def test_the_session_reports_physics_running_with_the_rooms_floor_and_box(servic
         assert physics["status"] == "running"
         assert physics["engine"] == "havok"
         assert physics["reason"] is None
-        # The prepared room's floor is solid and its box can move; the desk and cabinet aren't
-        # colliders yet.
+        # The prepared room's floor and the four walls along its edges (#162) are solid, and its
+        # box can move; the desk and cabinet aren't colliders yet.
         assert physics["room_version"] == 1
-        assert physics["bodies"] == {"static": 1, "dynamic": 1}
+        assert physics["bodies"] == {"static": 5, "dynamic": 1}
 
 
 def assert_the_phone_still_carries_the_box(url):
@@ -77,6 +77,6 @@ def test_making_a_room_live_loads_it_into_physics(start_service, tmp_path):
             physics_when(ws, lambda status: status["room_version"] == 1)
             assert activate(url, job).status_code == 200
             physics = physics_when(ws, lambda status: status["room_version"] == 2)
-        # The reconstructed room's floor and box.
+        # The reconstructed room's floor, its four edge walls and its box.
         assert physics["status"] == "running"
-        assert physics["bodies"] == {"static": 1, "dynamic": 1}
+        assert physics["bodies"] == {"static": 5, "dynamic": 1}

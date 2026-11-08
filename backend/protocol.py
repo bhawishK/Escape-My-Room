@@ -101,11 +101,24 @@ class AcquireMessage(WireModel):
     orientation: Orientation | None = None
 
 
+class Velocity(WireModel):
+    """A velocity in room metres per second, or a spin in radians per second about each axis."""
+
+    x: float = Field(ge=-100, le=100)
+    y: float = Field(ge=-100, le=100)
+    z: float = Field(ge=-100, le=100)
+
+
 class ReleaseMessage(WireModel):
-    """The holder lets go. The object stays where the hold left it and is not passed on."""
+    """The holder lets go. The object stays where the hold left it and is not passed on.
+
+    The headset may send how fast the object was moving as it was let go, which throws it (#162).
+    The phone never sends it, and a phone's let-go ignores it."""
 
     type: Literal["release"]
     manipulation_id: int = Field(ge=1)
+    velocity: Velocity | None = None
+    angular_velocity: Velocity | None = None
 
 
 class GripMessage(WireModel):

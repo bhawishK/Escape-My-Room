@@ -10,13 +10,14 @@ import type * as THREE from 'three';
 import { alignmentFromPose, roomDirection, roomOrientation, roomPoint, type CalibrationInput } from '../alignment';
 import { element } from '../dom';
 import { grabbedPosition, offsetOf, rayForward, targetAlongRay } from '../grab';
-import type { AlignmentState, PresenceInput, RoomEntity, SessionState } from '../protocol';
+import type { AlignmentState, Position, PresenceInput, RoomEntity, Rotation, SessionState } from '../protocol';
 import { RoomMap, type Spot } from '../room-map';
 import { SessionClient } from '../session';
 import { Dwell, GestureGate, HeadNods } from './gestures';
 import { readFrame, type FrameSample, type InputSample, type Pose, type Ray } from './hands';
 import { Hud } from './hud';
 import { QuestRoom, type DrawnRay } from './room-view';
+import { ThrowVelocity } from './throw';
 
 /** How often presence, a held object's grip and the report are sent or shown, in milliseconds. */
 const PRESENCE_MS = 50;
@@ -54,6 +55,9 @@ const pinching = new Set<XRInputSource>();
 let holder: XRInputSource | null = null;
 let grabOffset: { x: number; y: number; z: number } | null = null;
 let releasing: number | null = null;
+/** The held object's recent places, for the speed it is thrown at, and the latest grip. */
+const swing = new ThrowVelocity();
+let lastGripPose: { position: Position; orientation: Rotation } | null = null;
 /** Each input's holding and confirm last frame, to tell a press from a hold. */
 const wasHolding = new WeakMap<XRInputSource, boolean>();
 const wasConfirming = new WeakMap<XRInputSource, boolean>();
@@ -221,12 +225,21 @@ function confirmAlignment(): void {
   client.sendCalibration(calibrationNow ?? NO_CALIBRATION);
 }
 
-function release(): void {
+/**
+ * Let go of the held object. Opening the hand or the grip throws it at the speed it was moving
+ * (#162); losing tracking, the controller or the session, or pausing, only puts it down.
+ */
+function release(throwing = false): void {
   const mine = ownHold();
   holder = null;
+  const velocity = throwing ? swing.velocity(performance.now()) ?? undefined : undefined;
+  swing.clear();
   if (!mine || releasing === mine.id) return;
   releasing = mine.id;
-  client.sendRelease(mine.id);
+  // The object leaves from where the hand is now, not from the last grip sent up to 100 ms ago.
+  if (lastGripPose) client.sendGrip(mine.id, lastGripPose);
+  lastGripPose = null;
+  client.sendRelease(mine.id, velocity);
 }
 
 /**
@@ -351,7 +364,7 @@ function frame(xrFrame: XRFrame, time: number): void {
     wasHolding.set(input.source, input.holding);
     if (paused) continue;
     if (input.holding && !before && !holder) takeHold(input, looking);
-    if (!input.holding && before && holder === input.source) release();
+    if (!input.holding && before && holder === input.source) release(true);
   }
   const mine = ownHold();
   const holding = sample.inputs.find(input => input.source === holder);
@@ -360,8 +373,11 @@ function frame(xrFrame: XRFrame, time: number): void {
   if (mine && grip && grabOffset && alignment) {
     const position = roomPoint(alignment, grip.position);
     const orientation = roomOrientation(alignment, grip.orientation);
-    room?.predict(mine.entity, grabbedPosition(position, orientation, grabOffset));
-    if (time - lastGrip >= GRIP_MS && client.sendGrip(mine.id, { position, orientation })) lastGrip = time;
+    const carried = grabbedPosition(position, orientation, grabOffset);
+    room?.predict(mine.entity, carried);
+    swing.add(carried, performance.now());
+    lastGripPose = { position, orientation };
+    if (time - lastGrip >= GRIP_MS && client.sendGrip(mine.id, lastGripPose)) lastGrip = time;
   }
 
   // Rays: each controller's, a pinching hand's, and a pointing finger's; none while paused.

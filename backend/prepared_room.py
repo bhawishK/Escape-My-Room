@@ -91,6 +91,22 @@ class SceneEntity(WireModel):
     physics: PhysicsMaterial | None = None
 
 
+def floor_bounds(entities: list[SceneEntity]) -> tuple[float, float, float, float] | None:
+    """The floor's extent as (min x, max x, min z, max z), around each floor piece's corners."""
+    xs: list[float] = []
+    zs: list[float] = []
+    for entity in entities:
+        if entity.kind != "static" or entity.size.height > FLOOR_THICKNESS:
+            continue
+        q, half_w, half_d = entity.rotation, entity.size.width / 2, entity.size.depth / 2
+        for x, z in ((-half_w, -half_d), (half_w, -half_d), (half_w, half_d), (-half_w, half_d)):
+            # v' = v + 2w(u × v) + 2u × (u × v), with v = (x, 0, z).
+            tx, ty, tz = 2 * q.y * z, 2 * (q.z * x - q.x * z), -2 * q.y * x
+            xs.append(entity.position.x + x + q.w * tx + (q.y * tz - q.z * ty))
+            zs.append(entity.position.z + z + q.w * tz + (q.x * ty - q.y * tx))
+    return (min(xs), max(xs), min(zs), max(zs)) if xs else None
+
+
 class SplatPlacement(WireModel):
     """Where the splat sits in the room: scaled, then rotated, then moved."""
 

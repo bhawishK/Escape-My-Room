@@ -14,7 +14,13 @@ The server runs **one** physics simulation of the room, so the phone and the hea
   - The phone's let-go works exactly as before: the object lands at its floor height, at rest. A direct move (`entity_transform`) also puts it down at rest.
   - Taking hold of a moving object stops it. While it is held, the session moves it and physics leaves it alone.
 - **Knocked objects:** an object that a falling one knocks into is reported while it moves too.
-- **Next:** throwing (#162) and catching (#163).
+- **Throwing (#162):**
+  - Let go of the box while your hand moves, with the grip or a pinch, and it flies off at the speed it was moving. It tumbles, bounces and slides to a stop.
+  - The headset page works the speed out from where the held box was over the last 100 ms of frames. It sends one last grip and then the let-go with that velocity, so the box leaves from where your hand is.
+  - Letting go because tracking, the controller or the session was lost, or because you paused, only puts the box down; it doesn't throw.
+  - Python caps a throw at 8 m/s and a spin at 20 rad/s, so a tracking glitch can't fling it out of sight. A velocity that isn't a number is refused.
+  - Invisible walls 5 m tall stand just outside the floor's edges, so a thrown box always stays over the floor. The spec said low walls; these are tall so that nothing thrown at the cap goes over them.
+- **Next:** catching (#163).
 
 ### Known limits
 
@@ -45,7 +51,7 @@ Every `welcome` and `state` message has `state.physics`:
 | `engine` | `havok` once the worker has started |
 | `reason` | Why physics is unavailable, for example `The physics worker exited with code 1: …` with the worker's last error line; otherwise `null` |
 | `room_version` | The room the worker has loaded, or `null` |
-| `bodies` | How many bodies that room has, as `{"static": 1, "dynamic": 1}`, or `null` |
+| `bodies` | How many bodies that room has, as `{"static": 5, "dynamic": 1}` (the floor, its four edge walls and the box), or `null` |
 | `moving` | The objects physics is moving now, such as `["box"]`; `[]` once everything is at rest |
 
 If the worker can't start, or exits, the status says `unavailable` with its reason. Holds, grips, carries and releases then work exactly as they did before physics. A physics failure never stops the session.
@@ -67,13 +73,20 @@ If the worker can't start, or exits, the status says `unavailable` with its reas
 ## How Python and the worker talk
 
 One JSON message per line, over the worker's standard input and output. The messages are listed at the top of `physics/worker.mjs`.
-- **Python → worker:** `load` a room, then, for one object, `hold`, `release` (let go here; it falls) or `place` (put here, at rest).
+- **Python → worker:** `load` a room, then, for one object, `hold`, `release` (let go here; it falls, or flies at the `velocity` and `angular_velocity` it carries) or `place` (put here, at rest).
 - **Worker → Python:** `poses` while anything moves.
 - **Out-of-date poses:** each command counts up an `epoch` for its object, and the worker echoes it in that object's poses. Python ignores poses from before its latest command, such as the last ones of a fall someone has since caught.
 
 Python writes to and reads from the worker on background threads. Its event loop never waits on the worker, and uvicorn's event loop on Windows can't run asyncio subprocesses anyway.
 
 ## Tests
+
+`tests/test_physics_throw.py` checks that:
+- a throw lands where its speed predicts, then rests on the floor on any face;
+- a throw at the floor's edge stays inside the floor;
+- a throw faster than the cap flies as one at the cap;
+- a spinning throw lands turned;
+- a velocity that isn't a number is refused, and the box stays held.
 
 `tests/test_physics_fall.py` checks that:
 - a box let go 1 m up reaches the floor within 0.8 s, rests on it, and is reported about 30 times a second, then not at all;
