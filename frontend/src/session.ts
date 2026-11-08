@@ -163,12 +163,14 @@ export class SessionClient {
     return true;
   }
 
-  /** Lets go of a hold; the object stays where it is. */
-  sendRelease(manipulationId: number): void {
+  /** Let go. The headset may say how fast the object was moving, which throws it (#162). */
+  sendRelease(manipulationId: number, velocity?: Position): void {
     if (this.socket?.readyState !== WebSocket.OPEN) return;
     // The last aim goes first even on a congested connection, so the release commits it.
     this.flushPose(true);
-    this.socket.send(JSON.stringify({ type: 'release', manipulation_id: manipulationId }));
+    this.socket.send(JSON.stringify({
+      type: 'release', manipulation_id: manipulationId, ...(velocity ? { velocity } : {}),
+    }));
   }
 
   sendRoomLoaded(roomVersion: number): void {

@@ -30,6 +30,7 @@ It joins the same session as the phone's page, as the headset (`vr_solver`), wit
 | --- | --- | --- |
 | Line the room up | A or X | Pinch, before the room is lined up (each new VR session, and a reset, ask again) |
 | Move an object | Aim at it, squeeze the grip, let go to put it down | Aim the hand ray and pinch, or **look at it and pinch** |
+| Throw an object | Let go of the grip while swinging | Open the pinch while swinging: it flies at your hand's speed (capped at 8 m/s) |
 | Show something | — | **Point** with the index finger: its ray outlines what it is on |
 | Pause in a calm view | — | Hold an **open palm** for 0.8 s: the room fades, a held object is put down, and nothing is aimed or taken; again to come back |
 | Start a topic | Look at an object for 1.5 s | The same |

@@ -13,7 +13,6 @@ from backend.delivery import Outbox
 from backend.grab import grab_offset, grabbed_point, normalize
 from backend.physics import PhysicsWorker
 from backend.prepared_room import (
-    FLOOR_THICKNESS,
     FRAME,
     QUATERNION_ORDER,
     UNITS,
@@ -22,6 +21,7 @@ from backend.prepared_room import (
     Rotation,
     SceneEntity,
     SplatPlacement,
+    floor_bounds,
 )
 from backend.protocol import (
     MarkerState,
@@ -30,6 +30,7 @@ from backend.protocol import (
     PresenceMessage,
     PresenceState,
     Role,
+    Velocity,
 )
 
 # A tracked participant who stops sending is marked stale after this long. The last place stays.
@@ -40,22 +41,6 @@ CARRY_NEAREST = 0.3
 CARRY_FARTHEST = 4.0
 # The physics status before the server has started its worker: a worker not yet started.
 NO_PHYSICS = PhysicsWorker(lambda: None).status()
-
-
-def floor_bounds(entities: list[SceneEntity]) -> tuple[float, float, float, float] | None:
-    """The floor's extent as (min x, max x, min z, max z), around each floor piece's corners."""
-    xs: list[float] = []
-    zs: list[float] = []
-    for entity in entities:
-        if entity.kind != "static" or entity.size.height > FLOOR_THICKNESS:
-            continue
-        q, half_w, half_d = entity.rotation, entity.size.width / 2, entity.size.depth / 2
-        for x, z in ((-half_w, -half_d), (half_w, -half_d), (half_w, half_d), (-half_w, half_d)):
-            # v' = v + 2w(u × v) + 2u × (u × v), with v = (x, 0, z).
-            tx, ty, tz = 2 * q.y * z, 2 * (q.z * x - q.x * z), -2 * q.y * x
-            xs.append(entity.position.x + x + q.w * tx + (q.y * tz - q.z * ty))
-            zs.append(entity.position.z + z + q.w * tz + (q.x * ty - q.y * tx))
-    return (min(xs), max(xs), min(zs), max(zs)) if xs else None
 
 
 @dataclass
@@ -327,14 +312,18 @@ class PrototypeRoom:
         return "ok"
 
     def release(
-        self, role: Role, manipulation_id: int
+        self,
+        role: Role,
+        manipulation_id: int,
+        velocity: Velocity | None = None,
     ) -> Literal["ok", "stale", "controlled_by_other"]:
-        """The holder lets go. The other person cannot end the hold or take the object."""
+        """The holder lets go, throwing it if the headset sent its velocity (#162). The other
+        person cannot end the hold or take the object."""
         if self.manipulation is None or self.manipulation.id != manipulation_id:
             return "stale"
         if self.manipulation.owner != role:
             return "controlled_by_other"
-        self.drop()
+        self.drop(velocity)
         self.revision += 1
         return "ok"
 
@@ -489,7 +478,7 @@ class PrototypeRoom:
 
         entity.position = Position(x=bounded(x), y=held.rest_y, z=bounded(z))
 
-    def drop(self) -> None:
+    def drop(self, velocity: Velocity | None = None) -> None:
         """End the hold. A phone aim falls back to its floor height; a headset grip lets go where
         it is, and the object falls there if physics runs (#161)."""
         held = self.manipulation
@@ -501,7 +490,7 @@ class PrototypeRoom:
             if self.physics is not None:
                 self.physics.place(entity)
         elif self.physics is not None:
-            self.physics.release(entity)
+            self.physics.release(entity, velocity)
         self.manipulation = None
 
     def disconnect(self, role: Role) -> None:
