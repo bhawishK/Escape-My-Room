@@ -163,7 +163,6 @@ export class SessionClient {
     return true;
   }
 
-  /** Lets go of a hold; the object stays where it is. */
   /** Let go. The headset may say how fast the object was moving, which throws it (#162). */
   sendRelease(manipulationId: number, velocity?: Position): void {
     if (this.socket?.readyState !== WebSocket.OPEN) return;

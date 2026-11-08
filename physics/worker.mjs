@@ -13,8 +13,8 @@
 //     "size": {"width", "height", "depth"}, "position", "rotation", "epoch",
 //     "material": {"mass"?, "friction"?, "restitution"?} | null}]}
 //   {"type": "hold", "id", "epoch"}: someone holds it; it leaves the simulation.
-//   {"type": "release", "id", "epoch", "position", "rotation", "velocity"?, "angular_velocity"?}:
-//     let go here; it falls from rest, or flies off at that velocity (m/s) and spin (rad/s).
+//   {"type": "release", "id", "epoch", "position", "rotation", "velocity"?}: let go here; it
+//     falls from rest, or flies off at that velocity in m/s.
 //   {"type": "place", "id", "epoch", "position", "rotation"}: put here, at rest.
 // Worker → Python:
 //   {"type": "ready", "engine": "havok", "version": "1.3.14"} once Havok has loaded;
@@ -204,9 +204,8 @@ class Room {
     body.held = false;
     body.setMotion(havok.MotionType.DYNAMIC, true);
     body.put(message.position, message.rotation);
-    const { velocity, angular_velocity: spin } = message;
+    const { velocity } = message;
     if (velocity) havok.HP_Body_SetLinearVelocity(body.body, [velocity.x, velocity.y, velocity.z]);
-    if (spin) havok.HP_Body_SetAngularVelocity(body.body, [spin.x, spin.y, spin.z]);
     this.moving.add(body);
     this.run();
   }

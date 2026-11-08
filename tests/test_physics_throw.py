@@ -30,11 +30,8 @@ def lift(ws, start, height):
     return identity
 
 
-def throw(ws, identity, velocity, angular_velocity=None):
-    message = {"type": "release", "manipulation_id": identity, "velocity": velocity}
-    if angular_velocity is not None:
-        message["angular_velocity"] = angular_velocity
-    ws.send(json.dumps(message))
+def throw(ws, identity, velocity):
+    ws.send(json.dumps({"type": "release", "manipulation_id": identity, "velocity": velocity}))
 
 
 def centre_height(state):
@@ -83,33 +80,22 @@ def test_a_throw_at_the_floors_edge_comes_to_rest_inside_the_floor(start_service
 def test_a_throw_faster_than_the_cap_flies_as_one_at_the_cap(start_service, tmp_path):
     with start_service(tmp_path) as url, open_socket(url, "vr_solver") as headset:
         start = ready(headset)
-        throw(headset, lift(headset, start, 0.5), {"x": 0.0, "y": 40.0, "z": 0.0})
+        # Far faster than any hand, as a tracking glitch might report: capped, not refused.
+        throw(headset, lift(headset, start, 0.5), {"x": 0.0, "y": 400.0, "z": 0.0})
         states = until_rest(headset, timeout=12)
-        # Thrown straight up at the cap of 8 m/s it rises 8² / 2g = 3.3 m; at 40 m/s, 82 m.
+        # Thrown straight up at the cap of 8 m/s it rises 8² / 2g = 3.3 m; at 400 m/s, 8 km.
         peak = max(box(state)["y"] for _, state in states) - (start["y"] + 0.5)
         assert 2.8 < peak < 3.5
-
-
-def test_a_spinning_throw_lands_turned(start_service, tmp_path):
-    with start_service(tmp_path) as url, open_socket(url, "vr_solver") as headset:
-        start = ready(headset)
-        throw(
-            headset,
-            lift(headset, start, 0.5),
-            {"x": 0.0, "y": 2.0, "z": 0.0},
-            angular_velocity={"x": 0.0, "y": 5.0, "z": 0.0},
-        )
-        final = until_rest(headset)[-1][1]
-        assert abs(rotation(final)["w"]) < 0.999
 
 
 def test_a_velocity_that_isnt_a_number_is_refused_and_the_box_stays_held(start_service, tmp_path):
     with start_service(tmp_path) as url, open_socket(url, "vr_solver") as headset:
         start = ready(headset)
         identity = lift(headset, start, 0.5)
-        # Python's JSON writes Infinity, which browsers never send.
-        throw(headset, identity, {"x": math.inf, "y": 0.0, "z": 0.0})
-        assert error_code(headset) == "invalid_message"
+        # Python's JSON writes Infinity and NaN, which browsers never send.
+        for value in (math.inf, math.nan):
+            throw(headset, identity, {"x": value, "y": 0.0, "z": 0.0})
+            assert error_code(headset) == "invalid_message"
         headset.send(json.dumps(grip(2, start, identity)))
         still = receive_until(
             headset,

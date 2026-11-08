@@ -32,13 +32,14 @@ STDERR_LINES = 40
 # Seconds the worker gets to exit on its own after its input closes.
 STOP_TIMEOUT = 2.0
 
-# A throw is no faster than this, in metres per second, and spins no faster than this, in
-# radians per second, so a tracking glitch can't fling an object out of sight (#162).
+# A throw is no faster than this, in metres per second, so a tracking glitch can't fling an
+# object out of sight (#162).
 MAX_SPEED = 8.0
-MAX_SPIN = 20.0
-# Invisible walls along the floor's edges keep thrown objects in the room. They are taller than a
-# throw at the cap rises from a hand, so nothing goes over them.
-WALL_HEIGHT = 5.0
+# Invisible walls along the floor's edges keep thrown objects in the room. They rise higher above
+# the floor than a throw at the cap does from a raised hand (8² / 2g = 3.3 m, plus about 2 m), and
+# reach below it, so nothing goes over or under them.
+WALL_HEIGHT = 6.0
+WALL_BELOW = 1.0
 WALL_THICKNESS = 0.2
 
 PhysicsState = Literal["starting", "running", "unavailable"]
@@ -71,10 +72,18 @@ def bodies_for(entities: list[SceneEntity], epochs: dict[str, int]) -> list[dict
 
 
 def walls_for(entities: list[SceneEntity]) -> list[dict[str, Any]]:
-    """Four static walls just outside the floor's edges, or none for a room without a floor."""
+    """Four static walls just outside the floor's edges, or none for a room without a floor.
+
+    They follow the rectangle around all the floor pieces, which is the floor itself for the
+    rooms made so far: one level, unrotated floor."""
     bounds = floor_bounds(entities)
     if bounds is None:
         return []
+    floor_top = max(
+        entity.position.y + entity.size.height
+        for entity in entities
+        if entity.kind == "static" and entity.size.height <= FLOOR_THICKNESS
+    )
     min_x, max_x, min_z, max_z = bounds
     width, depth, half = max_x - min_x, max_z - min_z, WALL_THICKNESS / 2
     centre_x, centre_z = (min_x + max_x) / 2, (min_z + max_z) / 2
@@ -88,8 +97,8 @@ def walls_for(entities: list[SceneEntity]) -> list[dict[str, Any]]:
         {
             "id": name,
             "motion": "static",
-            "size": {"width": size_x, "height": WALL_HEIGHT, "depth": size_z},
-            "position": {"x": x, "y": 0.0, "z": z},
+            "size": {"width": size_x, "height": WALL_BELOW + WALL_HEIGHT, "depth": size_z},
+            "position": {"x": x, "y": floor_top - WALL_BELOW, "z": z},
             "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
             "material": None,
             "epoch": 0,
@@ -102,7 +111,7 @@ def capped(velocity: Velocity | None, limit: float) -> dict[str, float] | None:
     """The velocity as the worker takes it, scaled down to `limit` if it is faster."""
     if velocity is None:
         return None
-    speed = math.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
+    speed = math.hypot(velocity.x, velocity.y, velocity.z)
     scale = limit / speed if speed > limit else 1.0
     return {"x": velocity.x * scale, "y": velocity.y * scale, "z": velocity.z * scale}
 
@@ -221,17 +230,10 @@ class PhysicsWorker:
         """Someone holds it: the session moves it, and physics leaves it alone."""
         self._command("hold", entity_id)
 
-    def release(
-        self,
-        entity: SceneEntity,
-        velocity: Velocity | None = None,
-        angular_velocity: Velocity | None = None,
-    ) -> None:
-        """Let go where it is: it falls from rest, or flies off thrown at `velocity` (capped)."""
-        motion = {
-            "velocity": capped(velocity, MAX_SPEED),
-            "angular_velocity": capped(angular_velocity, MAX_SPIN),
-        }
+    def release(self, entity: SceneEntity, velocity: Velocity | None = None) -> None:
+        """Let go where it is: it falls from rest, or flies off thrown at `velocity` (capped).
+        It tumbles from what it hits."""
+        motion = {"velocity": capped(velocity, MAX_SPEED)}
         self._command("release", entity.id, pose_of(entity) | motion)
 
     def place(self, entity: SceneEntity) -> None:

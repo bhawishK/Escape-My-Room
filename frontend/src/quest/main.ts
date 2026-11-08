@@ -234,11 +234,12 @@ function release(throwing = false): void {
   holder = null;
   const velocity = throwing ? swing.velocity(performance.now()) ?? undefined : undefined;
   swing.clear();
+  const finalGrip = lastGripPose;
+  lastGripPose = null;
   if (!mine || releasing === mine.id) return;
   releasing = mine.id;
   // The object leaves from where the hand is now, not from the last grip sent up to 100 ms ago.
-  if (lastGripPose) client.sendGrip(mine.id, lastGripPose);
-  lastGripPose = null;
+  if (finalGrip) client.sendGrip(mine.id, finalGrip);
   client.sendRelease(mine.id, velocity);
 }
 

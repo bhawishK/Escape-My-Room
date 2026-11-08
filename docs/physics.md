@@ -18,8 +18,9 @@ The server runs **one** physics simulation of the room, so the phone and the hea
   - Let go of the box while your hand moves, with the grip or a pinch, and it flies off at the speed it was moving. It tumbles, bounces and slides to a stop.
   - The headset page works the speed out from where the held box was over the last 100 ms of frames. It sends one last grip and then the let-go with that velocity, so the box leaves from where your hand is.
   - Letting go because tracking, the controller or the session was lost, or because you paused, only puts the box down; it doesn't throw.
-  - Python caps a throw at 8 m/s and a spin at 20 rad/s, so a tracking glitch can't fling it out of sight. A velocity that isn't a number is refused.
-  - Invisible walls 5 m tall stand just outside the floor's edges, so a thrown box always stays over the floor. The spec said low walls; these are tall so that nothing thrown at the cap goes over them.
+  - Python caps a throw at 8 m/s, so a tracking glitch can't fling it out of sight. A velocity that isn't a number is refused. The box isn't sent spinning; it tumbles from what it hits.
+  - The speed is the held box's, not the bare hand's, so a flick of the wrist throws harder, as it does with a real object.
+  - Invisible walls stand just outside the floor's edges, from 1 m below its top to 6 m above, so a thrown box always stays over the floor. The spec said low walls; these are tall so that nothing thrown at the cap goes over them. They follow the rectangle around the floor, which is the floor itself for one level, unrotated floor, as in every room so far.
 - **Next:** catching (#163).
 
 ### Known limits
@@ -73,7 +74,7 @@ If the worker can't start, or exits, the status says `unavailable` with its reas
 ## How Python and the worker talk
 
 One JSON message per line, over the worker's standard input and output. The messages are listed at the top of `physics/worker.mjs`.
-- **Python → worker:** `load` a room, then, for one object, `hold`, `release` (let go here; it falls, or flies at the `velocity` and `angular_velocity` it carries) or `place` (put here, at rest).
+- **Python → worker:** `load` a room, then, for one object, `hold`, `release` (let go here; it falls, or flies at the `velocity` it carries) or `place` (put here, at rest).
 - **Worker → Python:** `poses` while anything moves.
 - **Out-of-date poses:** each command counts up an `epoch` for its object, and the worker echoes it in that object's poses. Python ignores poses from before its latest command, such as the last ones of a fall someone has since caught.
 
@@ -84,8 +85,7 @@ Python writes to and reads from the worker on background threads. Its event loop
 `tests/test_physics_throw.py` checks that:
 - a throw lands where its speed predicts, then rests on the floor on any face;
 - a throw at the floor's edge stays inside the floor;
-- a throw faster than the cap flies as one at the cap;
-- a spinning throw lands turned;
+- a throw far faster than the cap (400 m/s) flies as one at the cap rather than being refused;
 - a velocity that isn't a number is refused, and the box stays held.
 
 `tests/test_physics_fall.py` checks that:

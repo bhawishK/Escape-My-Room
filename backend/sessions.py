@@ -316,7 +316,6 @@ class PrototypeRoom:
         role: Role,
         manipulation_id: int,
         velocity: Velocity | None = None,
-        angular_velocity: Velocity | None = None,
     ) -> Literal["ok", "stale", "controlled_by_other"]:
         """The holder lets go, throwing it if the headset sent its velocity (#162). The other
         person cannot end the hold or take the object."""
@@ -324,7 +323,7 @@ class PrototypeRoom:
             return "stale"
         if self.manipulation.owner != role:
             return "controlled_by_other"
-        self.drop(velocity, angular_velocity)
+        self.drop(velocity)
         self.revision += 1
         return "ok"
 
@@ -479,9 +478,7 @@ class PrototypeRoom:
 
         entity.position = Position(x=bounded(x), y=held.rest_y, z=bounded(z))
 
-    def drop(
-        self, velocity: Velocity | None = None, angular_velocity: Velocity | None = None
-    ) -> None:
+    def drop(self, velocity: Velocity | None = None) -> None:
         """End the hold. A phone aim falls back to its floor height; a headset grip lets go where
         it is, and the object falls there if physics runs (#161)."""
         held = self.manipulation
@@ -493,7 +490,7 @@ class PrototypeRoom:
             if self.physics is not None:
                 self.physics.place(entity)
         elif self.physics is not None:
-            self.physics.release(entity, velocity, angular_velocity)
+            self.physics.release(entity, velocity)
         self.manipulation = None
 
     def disconnect(self, role: Role) -> None:

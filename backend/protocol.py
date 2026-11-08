@@ -102,11 +102,12 @@ class AcquireMessage(WireModel):
 
 
 class Velocity(WireModel):
-    """A velocity in room metres per second, or a spin in radians per second about each axis."""
+    """A velocity in room metres per second. Any finite speed is accepted, and physics caps it;
+    the bound only keeps the numbers sane."""
 
-    x: float = Field(ge=-100, le=100)
-    y: float = Field(ge=-100, le=100)
-    z: float = Field(ge=-100, le=100)
+    x: float = Field(ge=-1e6, le=1e6)
+    y: float = Field(ge=-1e6, le=1e6)
+    z: float = Field(ge=-1e6, le=1e6)
 
 
 class ReleaseMessage(WireModel):
@@ -118,7 +119,6 @@ class ReleaseMessage(WireModel):
     type: Literal["release"]
     manipulation_id: int = Field(ge=1)
     velocity: Velocity | None = None
-    angular_velocity: Velocity | None = None
 
 
 class GripMessage(WireModel):

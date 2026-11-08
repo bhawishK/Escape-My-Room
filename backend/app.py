@@ -568,12 +568,7 @@ def create_app(
                                 continue
                             result = room.acquire(role, incoming.room_version, incoming.id, grip)
                         else:
-                            result = room.release(
-                                role,
-                                incoming.manipulation_id,
-                                incoming.velocity,
-                                incoming.angular_velocity,
-                            )
+                            result = room.release(role, incoming.manipulation_id, incoming.velocity)
                         if result == "unavailable":
                             await reject(
                                 "room_unavailable",
