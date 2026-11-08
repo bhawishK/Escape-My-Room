@@ -6,7 +6,7 @@ import time
 import pytest
 from test_manipulation import box, error_code, open_socket, receive_until
 from test_physics_fall import ready, until_rest
-from test_physics_throw import centre_height, lift
+from test_physics_throw import centre_height, lift, throw
 from test_solver_grab import acquire, grip, owned_by
 
 HALF_BOX = 0.1
@@ -36,6 +36,24 @@ def states_for(ws, seconds):
         if event.get("type") == "state":
             seen.append(event["state"])
     return seen
+
+
+def ready_to_catch(phone):
+    """The phone has the box selected and stands tracked, 1.5 m up, looking 45° down."""
+    phone.send(json.dumps({"type": "select", "room_version": 1, "id": "box"}))
+    phone.send(
+        json.dumps(
+            {
+                "type": "pose",
+                "sequence": 1,
+                "tracking_status": "tracked",
+                "reference_space": "room",
+                "position": {"x": 0.0, "y": 1.5, "z": 1.6},
+                "heading": 0.0,
+                "pitch": -0.7853981633974483,
+            }
+        )
+    )
 
 
 def test_the_headset_catches_a_falling_box_which_then_follows_its_grip(start_service, tmp_path):
@@ -96,21 +114,7 @@ def test_the_phone_catches_a_falling_box_and_carries_it_on_the_floor(start_servi
         open_socket(url, "mobile_master") as phone,
     ):
         start = ready(headset)
-        # The phone has the box selected and stands tracked, 1.5 m up, looking 45° down.
-        phone.send(json.dumps({"type": "select", "room_version": 1, "id": "box"}))
-        phone.send(
-            json.dumps(
-                {
-                    "type": "pose",
-                    "sequence": 1,
-                    "tracking_status": "tracked",
-                    "reference_space": "room",
-                    "position": {"x": 0.0, "y": 1.5, "z": 1.6},
-                    "heading": 0.0,
-                    "pitch": -0.7853981633974483,
-                }
-            )
-        )
+        ready_to_catch(phone)
         identity = lift(headset, start, 1.5)
         headset.send(json.dumps({"type": "release", "manipulation_id": identity}))
         falling_past(headset, start["y"] + 1.2)
@@ -128,3 +132,31 @@ def test_the_phone_catches_a_falling_box_and_carries_it_on_the_floor(start_servi
             phone, lambda event: event.get("type") == "state" and not event["state"]["manipulation"]
         )["state"]
         assert box(dropped)["y"] == pytest.approx(start["y"])
+
+
+def test_the_phone_catches_a_thrown_box_mid_flight_and_the_headset_cant_take_it(
+    start_service, tmp_path
+):
+    with (
+        start_service(tmp_path) as url,
+        open_socket(url, "vr_solver") as headset,
+        open_socket(url, "mobile_master") as phone,
+    ):
+        start = ready(headset)
+        ready_to_catch(phone)
+        throw(headset, lift(headset, start, 1.0), {"x": 0.5, "y": 3.0, "z": 0.0})
+        # Rising or falling, it is in the air and moving.
+        receive_until(
+            headset,
+            lambda event: (
+                event.get("type") == "state"
+                and "box" in event["state"]["physics"]["moving"]
+                and box(event["state"])["y"] > start["y"] + 1.2
+            ),
+        )
+
+        phone.send(json.dumps({"type": "acquire", "room_version": 1, "id": "box"}))
+        carried = receive_until(phone, lambda event: owned_by(event, "mobile_master"))["state"]
+        assert box(carried)["y"] == pytest.approx(start["y"])
+        headset.send(json.dumps(acquire(box(carried))))
+        assert error_code(headset) == "controlled_by_other"

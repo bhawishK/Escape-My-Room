@@ -157,6 +157,10 @@ class PhysicsWorker:
         self.held: set[str] = set()
         self.moving: list[str] = []
 
+    def is_moving(self, entity_id: str) -> bool:
+        """Whether physics is moving it now, as of the worker's latest report."""
+        return entity_id in self.moving
+
     def status(self) -> dict[str, Any]:
         return {
             "status": self.state,
