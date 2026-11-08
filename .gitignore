@@ -10,6 +10,7 @@
 /.mypy_cache/
 /.ruff_cache/
 /frontend/node_modules/
+/physics/node_modules/
 /frontend/dist/
 /frontend/test-results/
 /frontend/playwright-report/

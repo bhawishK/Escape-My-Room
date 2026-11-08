@@ -81,6 +81,8 @@ Both units are in `scripts/gpu-server/`, with `@USER@` and `@REPO@` filled in by
 
 There is no separate worker service: reconstructions run as child processes of the server, one at a time, and stop with it (#137).
 
+The [physics worker](physics.md) (#159) is also a child process of the server: Node runs `physics/worker.mjs`, which starts and stops with `escape-room`. If it fails, the session state shows physics as unavailable with a reason, and the rest of the server keeps working.
+
 ## The GPU check
 
 `python -m backend.gpu_check` prints one line per check and exits 1 if any fails:
