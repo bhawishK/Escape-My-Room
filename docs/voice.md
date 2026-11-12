@@ -7,8 +7,8 @@ Issue #13. The phone user and the headset user talk while they share the room. I
 | Python passes the call's set-up messages | #169 | Done |
 | The two hear each other | #170 | Done on desktop browsers; not yet tried on the iPhone or the Quest |
 | Mute, stop, and messages when voice is refused or fails | #171 | Done on desktop browsers |
-| Different networks: STUN/TURN settings and the remote check | #172 | To do |
-| The check on the iPhone and the Quest in VR | #173 | To do |
+| Different networks: STUN/TURN settings and the remote check | #172 | Settings and reporting done; **the check on real networks is not yet run** |
+| The check on the iPhone and the Quest in VR | #173 | Voice status and mute inside VR done; **the device check is not yet run** |
 
 ## Using it
 
@@ -31,7 +31,7 @@ The status line, under **Voice** on each page:
 | Allow the microphone to talk | The browser is asking |
 | Voice on · waiting for the headset to start voice | This device is ready; the other has not started, or is not connected |
 | Voice connecting… | Both are ready and the two browsers are finding a path to each other |
-| Voice connected | Audio is flowing. It adds "you are muted" or "the headset is muted" when either is |
+| Voice connected · direct | Audio is flowing straight between the two devices. "relayed" instead means it goes through a TURN server. It also adds "you are muted" or "the headset is muted" when either is |
 | Voice failed · … | The two browsers found no path. See [different networks](#different-networks) |
 
 ### When something goes wrong
@@ -47,6 +47,15 @@ The status line, under **Voice** on each page:
 None of these stops the session: the room, the objects and the other person's presence carry on.
 
 **The one retry.** A call that has not connected after 12 seconds, or that dropped and has not come back in 12, is tried once more over a fresh path (an ICE restart, which the phone starts because it makes the offers). If that also takes 12 seconds, the call has failed. So a failure shows after about 24 seconds, not sooner.
+
+### Inside VR
+
+The headset's page and its buttons are out of sight in VR, so:
+
+- **The line of text in front of the eyes** says each change of the call for two seconds: waiting for the phone, connecting, connected, the phone muted, or failed. Other lines, such as what is being held, come first.
+- **"You are muted · press B or Y to unmute"** stays for as long as the headset is muted.
+- **B or Y on a controller** mutes and unmutes. With hands only there is no mute inside VR: leave VR and use the page's **Mute** button.
+- **Starting and stopping voice** are on the page, so do them before **Enter VR** or after leaving it.
 
 ## How it works
 
@@ -66,7 +75,60 @@ None of these stops the session: the room, the objects and the other person's pr
 
 ## Different networks
 
-Not checked yet; that is #172. For now each browser asks one public STUN server, `stun.l.google.com:19302`, for its public address. That is usually enough on home Wi-Fi and mobile data. Some networks, university ones especially, block direct paths, and then the call needs a TURN server to relay the audio. The STUN server sees each device's IP address and nothing else.
+Both devices reach the website through the Cloudflare tunnel, but the tunnel carries only the website and the session WebSocket. The audio has to find its own path between the two devices.
+
+- **STUN** tells each device its public address. It relays nothing, and is usually enough on home Wi-Fi and mobile data.
+- **TURN** relays the audio through a server. It is needed where a network blocks direct paths, which university networks often do.
+
+### Settings
+
+The servers are set in the server's `.env` (see `.env.example`), and the pages read them from `GET /api/voice/config` each time voice starts. Restart the server after changing them.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `ESCAPE_ROOM_VOICE_STUN_URLS` | `stun:stun.l.google.com:19302` | STUN servers, separated by commas. Empty turns STUN off. |
+| `ESCAPE_ROOM_VOICE_TURN_URLS` | none | TURN servers, such as `turn:host:3478,turns:host:5349` |
+| `ESCAPE_ROOM_VOICE_TURN_USERNAME`, `ESCAPE_ROOM_VOICE_TURN_CREDENTIAL` | none | The TURN login. Both are required with TURN servers. |
+| `ESCAPE_ROOM_VOICE_RELAY_ONLY` | `0` | `1` sends all audio through TURN, to prove the relay works |
+
+A wrong setting stops the server at start-up with its reason, for example a TURN server without its login.
+
+**The TURN login reaches the pages**, because each browser logs in to the relay itself. Anyone who can open the site can read it. Use a login made for this prototype, and change it after the contest.
+
+**Privacy:** a STUN server sees each device's IP address and nothing else. A TURN server carries the audio, encrypted between the two browsers, so it cannot listen.
+
+### How a call connected
+
+Once connected, the status line says **direct** or **relayed**. The diagnostic report on each page (and the phone's **Download diagnostic report**) has more, under `voice`:
+
+| Field | Meaning |
+| --- | --- |
+| `path.local`, `path.remote` | The kind of address each end used: `host` (its own), `srflx` or `prflx` (its public one), `relay` (TURN) |
+| `path.relayed` | Whether either end used TURN |
+| `ice_servers`, `relay_only` | The servers this page was given, without logins |
+| `retries`, `failures` | How often a call needed its one retry, and how often one failed, since the page loaded |
+
+### The remote check: not yet run
+
+Two devices on one Wi-Fi prove nothing about separate networks, so they don't count. For each row: connect both devices, start voice on both, wait up to 30 seconds, and write down the status line and each page's `voice.path`.
+
+| Phone on | Headset on | STUN only: result | With TURN: result | Date |
+| --- | --- | --- | --- | --- |
+| Mobile data | Home Wi-Fi | | | |
+| Mobile data | University Wi-Fi | | | |
+| University Wi-Fi | University Wi-Fi | | | |
+| University Wi-Fi | Home Wi-Fi | | | |
+
+If a row fails with STUN only ("Voice failed · The two devices found no way to reach each other"):
+
+1. Get a TURN server. The options, none chosen yet:
+   - a free tier of a hosted TURN service, which gives a login to paste in;
+   - [coturn](https://github.com/coturn/coturn) on a machine with a public address. The GPU desktop sits behind the university network, so it probably cannot be that machine.
+2. Put its address and login in `.env` and restart the server.
+3. Set `ESCAPE_ROOM_VOICE_RELAY_ONLY=1` once, and check the call connects and says **relayed**. That proves the relay works.
+4. Set it back to `0`, so calls that can go direct still do, and repeat the row.
+
+Record here which server was used and what the requirement turned out to be.
 
 ## Tests
 
@@ -83,7 +145,30 @@ Not checked yet; that is #172. For now each browser asks one public STUN server,
 
 The browser test gives each page the microphone permission outright. Only then does Chromium offer every local address, so the test also connects on a machine with a VPN that drops traffic to itself, as the development laptop's does.
 
+## The device check: not yet run
+
+Issue #173. On the iPhone 16 in Chrome and the Meta Quest 3, with the room open on both. Write the result beside each line, with the date and the browser versions.
+
+| Check | Result |
+| --- | --- |
+| The headset starts voice on the page, enters VR on `/quest/`, and both still hear each other | |
+| The line in the headset says "Voice connected" on entering, and the call survives leaving VR | |
+| B or Y mutes: the headset shows "You are muted · press B or Y to unmute", and the phone shows the headset is muted | |
+| The phone walks round the room with the room view open (8th Wall using the back camera) and voice stays up | |
+| **iPhone Chrome keeps the microphone running while 8th Wall uses the back camera** | |
+| The phone's screen locks and unlocks, and Chrome goes to the background and back: does the call drop, and does it come back? | |
+| A few grabs and throws in the headset while talking | |
+| Echo and volume with the phone on its loudspeaker, the headset user speaking | |
+| **Stop voice** and **Disconnect** on each device end the call, and the microphone indicator goes off | |
+| Refusing the microphone on the iPhone shows the reason, and allowing it afterwards works | |
+
+Things that may need a fix once seen on the devices:
+
+- **Microphone and camera together on the iPhone.** iPhone browsers have at times stopped one capture when another starts. If starting voice stops 8th Wall, or the other way round, the order they start in, or asking for both in one request, is the first thing to try.
+- **The phone in the background.** iPhone pauses the microphone when Chrome is not in front. The call should come back by itself within about 24 seconds (the one retry); if it does not, **Stop voice** and **Start voice**.
+- **Echo.** The browser's echo cancellation is on, but a phone on loudspeaker next to a quiet room is its hardest case. Earphones on the phone are the fallback.
+
 ## Not yet checked
 
-- On the iPhone and the Quest: #173. In particular, whether iPhone Chrome keeps the microphone running while 8th Wall uses the back camera, and whether the call carries on inside VR.
-- Between different networks: #172.
+Everything so far has run on desktop browsers only.
+

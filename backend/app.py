@@ -77,6 +77,7 @@ from backend.videos import (
     VideoStore,
     probe_from_environment,
 )
+from backend.voice import voice_config_from_environment
 from backend.vps.service import Positioning
 
 type Incoming = (
@@ -241,6 +242,14 @@ def create_app(
     @app.get("/api/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    # Read once, so a mistake in the settings stops the server at start-up with its reason.
+    voice_config = voice_config_from_environment()
+
+    @app.get("/api/voice/config")
+    def voice_settings() -> dict[str, Any]:
+        """The STUN and TURN servers the pages give WebRTC for the voice call (#172)."""
+        return voice_config
 
     @app.get("/api/room")
     async def prepared_room() -> dict[str, Any]:

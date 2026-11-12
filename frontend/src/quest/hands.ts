@@ -17,6 +17,8 @@ export interface InputSample {
   holding: boolean;
   /** A or X, on a controller. */
   confirm: boolean;
+  /** B or Y, on a controller: mutes and unmutes the voice call (#173). */
+  mute: boolean;
   /** Where a held object is carried from: the grip, or the hand's palm. */
   grip: Pose | null;
   /** The pointing ray the system gives: the controller's, or the hand's. */
@@ -74,7 +76,7 @@ export function readFrame(frame: XRFrame, reference: XRReferenceSpace, pinching:
     const grip = source.gripSpace ? frame.getPose(source.gripSpace, reference) : undefined;
     const sample: InputSample = {
       source, kind: source.hand ? 'hand' : 'controller',
-      holding: false, confirm: false,
+      holding: false, confirm: false, mute: false,
       grip: grip && !grip.emulatedPosition ? poseOf(grip.transform) : null,
       ray: rayOf(frame, source.targetRaySpace, reference),
       pose: 'none', fingerRay: null,
@@ -91,9 +93,10 @@ export function readFrame(frame: XRFrame, reference: XRReferenceSpace, pinching:
       if (sample.pose === 'point') sample.fingerRay = fingerRay(joints);
     } else {
       const buttons = source.gamepad?.buttons;
-      // On a Quest controller the grip is button 1, and A or X is button 4.
+      // On a Quest controller the grip is button 1, A or X is button 4, and B or Y is button 5.
       sample.holding = Boolean(buttons?.[1]?.pressed);
       sample.confirm = Boolean(buttons?.[4]?.pressed);
+      sample.mute = Boolean(buttons?.[5]?.pressed);
     }
     inputs.push(sample);
   }

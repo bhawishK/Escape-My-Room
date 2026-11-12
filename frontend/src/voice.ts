@@ -17,6 +17,20 @@ export interface VoiceStatus {
   /** Whether this device's microphone is muted, and whether the other person's is. */
   muted: boolean;
   peerMuted: boolean;
+  /** How the connected call reaches the other person; null until it is known. */
+  path: VoicePath | null;
+}
+
+/**
+ * The pair of addresses the call settled on. Each end is `host` (its own address), `srflx` or
+ * `prflx` (its public address, found with STUN or by the other end), or `relay` (a TURN server).
+ */
+export interface VoicePath {
+  local: string;
+  remote: string;
+  /** Whether the audio goes through a TURN relay rather than straight between the devices. */
+  relayed: boolean;
+  protocol: string | null;
 }
 
 interface VoiceOptions {
@@ -30,8 +44,20 @@ interface VoiceOptions {
   changed: (status: VoiceStatus) => void;
 }
 
-/** Finds each device's public address. Issue #172 makes this a server setting. */
-const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
+/** Used if the server's voice settings cannot be read: finds each device's public address. */
+const FALLBACK: RTCConfiguration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+/** The STUN and TURN servers from the server's settings (`GET /api/voice/config`, #172). */
+async function loadConfiguration(): Promise<RTCConfiguration> {
+  try {
+    const response = await fetch('/api/voice/config');
+    if (!response.ok) return FALLBACK;
+    const config = await response.json() as { ice_servers: RTCIceServer[]; relay_only: boolean };
+    return { iceServers: config.ice_servers, iceTransportPolicy: config.relay_only ? 'relay' : 'all' };
+  } catch {
+    return FALLBACK;
+  }
+}
 /** How often the call checks that audio is arriving, in milliseconds. */
 const STATS_MS = 1000;
 /**
@@ -81,6 +107,11 @@ export class VoiceCall {
   private receiving = false;
   private muted = false;
   private peerMuted = false;
+  private path: VoicePath | null = null;
+  private configuration: RTCConfiguration = FALLBACK;
+  /** How often a call has needed its one retry, and failed, since the page loaded. */
+  private retries = 0;
+  private failures = 0;
   private received = 0;
   private statsTimer: number | null = null;
   /** Start and stop requests are counted, so a slow microphone prompt cannot undo a later stop. */
@@ -101,7 +132,23 @@ export class VoiceCall {
   get status(): VoiceStatus {
     return {
       phase: this.phase, problem: this.problem, receiving: this.receiving,
-      muted: this.muted, peerMuted: this.peerMuted,
+      muted: this.muted, peerMuted: this.peerMuted, path: this.path,
+    };
+  }
+
+  /** For the diagnostic report. Addresses and TURN logins are left out. */
+  report(): Record<string, unknown> {
+    return {
+      phase: this.phase,
+      problem: this.problem,
+      receiving: this.receiving,
+      muted: this.muted,
+      peer_muted: this.peerMuted,
+      path: this.path,
+      ice_servers: (this.configuration.iceServers ?? []).flatMap(server => server.urls),
+      relay_only: this.configuration.iceTransportPolicy === 'relay',
+      retries: this.retries,
+      failures: this.failures,
     };
   }
 
@@ -143,6 +190,8 @@ export class VoiceCall {
       this.set('off', isSecureContext ? 'This browser has no microphone access.' : 'Voice needs the trusted HTTPS link.');
       return;
     }
+    // Asked for first, still inside the tap; the settings are read while the browser asks.
+    const settings = loadConfiguration();
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -152,6 +201,7 @@ export class VoiceCall {
       if (attempt === this.attempt) this.set('off', microphoneProblem(error));
       return;
     }
+    this.configuration = await settings;
     if (attempt !== this.attempt) {
       // Stopped while the browser was asking.
       for (const track of stream.getTracks()) track.stop();
@@ -250,7 +300,7 @@ export class VoiceCall {
   }
 
   private connect(peerSession: number): Call {
-    const peer = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const peer = new RTCPeerConnection(this.configuration);
     const call: Call = { peer, peerSession, early: [], described: false, retried: false, deadline: null };
     this.call = call;
     for (const track of this.microphone?.getTracks() ?? []) peer.addTrack(track, this.microphone!);
@@ -269,6 +319,7 @@ export class VoiceCall {
       if (state === 'connected') {
         this.await(call, false);
         this.set('connected', null);
+        void this.measure(call);
       } else if (state === 'failed') {
         this.struggling(call);
       } else if (state === 'disconnected') {
@@ -302,10 +353,12 @@ export class VoiceCall {
     if (this.call !== call) return;
     if (call.retried) {
       this.await(call, false);
+      this.failures += 1;
       this.set('failed', NO_PATH);
       return;
     }
     call.retried = true;
+    this.retries += 1;
     this.set('connecting', null);
     this.await(call, true);
     if (this.role === 'mobile_master') void this.offer(call, true);
@@ -323,9 +376,23 @@ export class VoiceCall {
   /** Whether the other person's audio has arrived since the last look. */
   private async measure(call: Call): Promise<void> {
     let bytes = 0;
+    let path: VoicePath | null = null;
     try {
-      for (const report of (await call.peer.getStats()).values()) {
+      const stats = await call.peer.getStats();
+      for (const report of stats.values()) {
         if (report.type === 'inbound-rtp' && report.kind === 'audio') bytes += report.bytesReceived ?? 0;
+        // The pair of addresses in use: named by the transport, or, in Firefox, marked selected.
+        const pair = report.type === 'transport' ? stats.get(report.selectedCandidatePairId)
+          : report.type === 'candidate-pair' && report.selected ? report : null;
+        const local = pair ? stats.get(pair.localCandidateId) : null;
+        const remote = pair ? stats.get(pair.remoteCandidateId) : null;
+        if (local && remote) {
+          path = {
+            local: local.candidateType, remote: remote.candidateType,
+            relayed: local.candidateType === 'relay' || remote.candidateType === 'relay',
+            protocol: local.relayProtocol ?? local.protocol ?? null,
+          };
+        }
       }
     } catch {
       return;
@@ -333,8 +400,10 @@ export class VoiceCall {
     if (this.call !== call) return;
     const receiving = bytes > this.received;
     this.received = bytes;
-    if (receiving !== this.receiving) {
+    const moved = JSON.stringify(path) !== JSON.stringify(this.path);
+    if (receiving !== this.receiving || (path && moved)) {
       this.receiving = receiving;
+      if (path) this.path = path;
       this.options.changed(this.status);
     }
   }
@@ -347,6 +416,7 @@ export class VoiceCall {
     this.call = null;
     this.speaker.srcObject = null;
     this.receiving = false;
+    this.path = null;
   }
 
   private end(problem: string | null, tell = true): void {
@@ -376,9 +446,31 @@ export function voiceLine(status: VoiceStatus, them: string): string {
     case 'waiting': return `Voice on · waiting for ${them} to start voice`;
     case 'connecting': return 'Voice connecting…';
     case 'connected': {
-      const notes = [status.muted ? 'you are muted' : null, status.peerMuted ? `${them} is muted` : null].filter(Boolean);
+      const notes = [
+        status.path ? (status.path.relayed ? 'relayed' : 'direct') : null,
+        status.muted ? 'you are muted' : null,
+        status.peerMuted ? `${them} is muted` : null,
+      ].filter(Boolean);
       return ['Voice connected', ...notes].join(' · ');
     }
     case 'failed': return `Voice failed · ${status.problem ?? NO_PATH}`;
+  }
+}
+
+/**
+ * A short line for inside VR, where the page and its buttons are out of sight (#173): what the
+ * person needs to know about the call now, or null when there is nothing to say. `them` names
+ * the other device, and `unmute` says how to unmute from here, such as "press B or Y".
+ */
+export function voiceNote(status: VoiceStatus, them: string, unmute: string): string | null {
+  switch (status.phase) {
+    case 'off': return status.problem ? 'Voice is off' : null;
+    case 'asking': return null;
+    case 'waiting': return `Voice · waiting for ${them}`;
+    case 'connecting': return 'Voice connecting…';
+    case 'failed': return 'Voice failed · leave VR to start it again';
+    case 'connected':
+      if (status.muted) return `You are muted · ${unmute} to unmute`;
+      return status.peerMuted ? `Voice connected · ${them} is muted` : 'Voice connected';
   }
 }

@@ -271,7 +271,7 @@ The page sends at most 20 presence updates a second and drops one when the socke
 
 ## Set up a voice call
 
-Issue #13, part 1 (#169). The two browsers send audio straight to each other with WebRTC. Python only passes the call's set-up messages between them. No audio reaches Python, and nothing here is kept. How the pages use these messages is in [voice](voice.md).
+Issue #13, part 1 (#169). The two browsers send audio straight to each other with WebRTC. Python only passes the call's set-up messages between them. No audio reaches Python, and nothing here is kept. How the pages use these messages is in [voice](voice.md). `GET /api/voice/config` gives the pages the STUN and TURN servers to use, as `{ "ice_servers": [...], "relay_only": false }`, from the server's settings.
 
 **Ready to talk.** Either role says when it has its microphone open, and when it stops:
 

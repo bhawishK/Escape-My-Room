@@ -1,4 +1,5 @@
 import { type Browser, type Page, expect, test } from '@playwright/test';
+import { voiceLine, voiceNote, type VoiceStatus } from '../src/voice';
 
 // The voice call between the phone's page and the headset's page (#13, #170). Chromium plays a
 // test tone as each page's microphone, so real audio flows between the two pages over WebRTC.
@@ -53,7 +54,7 @@ const microphones = (page: Page) => page.evaluate(() =>
 
 /** The call is up and the other person's audio is arriving. */
 async function expectTalking(page: Page): Promise<void> {
-  await expect(page.getByTestId('voice-status')).toHaveText('Voice connected', { timeout: 15_000 });
+  await expect(page.getByTestId('voice-status')).toHaveText('Voice connected · direct', { timeout: 15_000 });
   await expect(page.getByTestId('voice-status')).toHaveAttribute('data-receiving', 'true', { timeout: 15_000 });
 }
 
@@ -151,16 +152,16 @@ test('a mute silences this person, shows on both pages, and keeps the call', asy
   await expectTalking(headset);
 
   await headset.getByRole('button', { name: 'Mute', exact: true }).click();
-  await expect(headset.getByTestId('voice-status')).toHaveText('Voice connected · you are muted');
-  await expect(phone.getByTestId('voice-status')).toHaveText('Voice connected · the headset is muted');
+  await expect(headset.getByTestId('voice-status')).toHaveText('Voice connected · direct · you are muted');
+  await expect(phone.getByTestId('voice-status')).toHaveText('Voice connected · direct · the headset is muted');
   // The room view covers the phone's page, so it shows the line too.
-  await expect(phone.getByTestId('hud-voice-status')).toHaveText('Voice connected · the headset is muted');
+  await expect(phone.getByTestId('hud-voice-status')).toHaveText('Voice connected · direct · the headset is muted');
   // The headset's microphone is switched off, not closed: it sends silence, and the call stays.
   expect(await microphones(headset)).toEqual(['muted']);
   await expect(headset.getByTestId('voice-status')).toHaveAttribute('data-voice', 'connected');
 
   await headset.getByRole('button', { name: 'Unmute', exact: true }).click();
-  await expect(phone.getByTestId('voice-status')).toHaveText('Voice connected');
+  await expect(phone.getByTestId('voice-status')).toHaveText('Voice connected · direct');
   expect(await microphones(headset)).toEqual(['sending']);
   await expectTalking(phone);
   await phone.close();
@@ -251,4 +252,51 @@ test('a call that finds no path is tried once more, then both pages say it faile
   await expect(headset.getByTestId('voice-status')).toHaveText('Voice off');
   await phone.close();
   await headset.close();
+});
+
+test('each page reports how its call connected, using the servers from the settings', async ({ browser }) => {
+  const phone = await connectPhone(browser);
+  const headset = await browser.newPage(MICROPHONE);
+  const asked: string[] = [];
+  headset.on('request', request => { if (request.url().endsWith('/api/voice/config')) asked.push(request.method()); });
+  await connectHeadset(headset);
+  await phone.locator('#hud-voice').click();
+  await headset.getByRole('button', { name: 'Start voice', exact: true }).click();
+  await expectTalking(headset);
+  await expectTalking(phone);
+  expect(asked).toEqual(['GET']);
+  // Two pages on one machine reach each other straight, without a relay.
+  await expect(headset.getByTestId('voice-status')).toHaveAttribute('data-path', 'direct');
+  interface Report {
+    voice: { phase: string; path: { local: string; remote: string; relayed: boolean } | null; ice_servers: string[]; relay_only: boolean };
+  }
+  const read = async () => (JSON.parse(await headset.getByTestId('report').textContent() ?? '{}') as Report).voice;
+  await expect.poll(async () => (await read()).path?.relayed).toBe(false);
+  const voice = await read();
+  expect(voice.phase).toBe('connected');
+  expect(['host', 'srflx', 'prflx']).toContain(voice.path?.local);
+  expect(voice.ice_servers).toEqual(['stun:stun.l.google.com:19302']);
+  expect(voice.relay_only).toBe(false);
+  await phone.close();
+  await headset.close();
+});
+
+test('the line inside VR says what the person needs to know about the call', () => {
+  const status = (changes: Partial<VoiceStatus>): VoiceStatus => ({
+    phase: 'connected', problem: null, receiving: true, muted: false, peerMuted: false, path: null, ...changes,
+  });
+  const note = (changes: Partial<VoiceStatus>) => voiceNote(status(changes), 'the phone', 'press B or Y');
+  expect(note({})).toBe('Voice connected');
+  expect(note({ peerMuted: true })).toBe('Voice connected · the phone is muted');
+  // Being muted matters more than who else is.
+  expect(note({ muted: true, peerMuted: true })).toBe('You are muted · press B or Y to unmute');
+  expect(note({ phase: 'waiting' })).toBe('Voice · waiting for the phone');
+  expect(note({ phase: 'connecting' })).toBe('Voice connecting…');
+  expect(note({ phase: 'failed', problem: 'No path.' })).toBe('Voice failed · leave VR to start it again');
+  // Voice that was never started says nothing; voice that stopped for a reason does.
+  expect(note({ phase: 'off' })).toBeNull();
+  expect(note({ phase: 'off', problem: 'The microphone was not allowed.' })).toBe('Voice is off');
+  // The page's own line names the path once it is known.
+  const relayed = { local: 'relay', remote: 'srflx', relayed: true, protocol: 'udp' };
+  expect(voiceLine(status({ path: relayed, muted: true }), 'the phone')).toBe('Voice connected · relayed · you are muted');
 });

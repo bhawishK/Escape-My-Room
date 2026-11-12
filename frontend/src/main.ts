@@ -625,6 +625,7 @@ const voice = new VoiceCall({
       line.textContent = text;
       line.dataset.voice = status.phase;
       line.dataset.receiving = String(status.receiving);
+      line.dataset.path = status.path ? (status.path.relayed ? 'relayed' : 'direct') : '';
     }
     element('hud-voice-status').hidden = status.phase === 'off' && status.problem === null;
     for (const button of voiceButtons) button.textContent = status.phase === 'off' ? 'Start voice' : 'Stop voice';
@@ -1243,7 +1244,7 @@ element('send-log').addEventListener('click', () => {
 element('download-report').addEventListener('click', () => {
   const report = {
     recorded_at: new Date().toISOString(), role, xr: xr?.getReport() ?? null,
-    gaze: gaze.report(), floor_height: depth.report(), user_agent: navigator.userAgent,
+    gaze: gaze.report(), floor_height: depth.report(), voice: voice.report(), user_agent: navigator.userAgent,
     dom_overlay_hold_events: holdEvents, marker: state?.marker ?? null,
     motion: {
       ...motion.report({
