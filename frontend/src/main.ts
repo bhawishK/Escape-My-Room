@@ -613,17 +613,29 @@ function applyState(next: SessionState): void {
 
 /** The voice call with the other person (#13). */
 const voiceButtons = [element<HTMLButtonElement>('voice-toggle'), element<HTMLButtonElement>('hud-voice')];
+const muteButtons = [element<HTMLButtonElement>('voice-mute'), element<HTMLButtonElement>('hud-mute')];
 const voice = new VoiceCall({
   sendReady: ready => client.sendVoiceReady(ready),
   sendSignal: signal => client.sendVoiceSignal(signal),
+  sendMuted: muted => client.sendVoiceMuted(muted),
   changed: status => {
-    const line = element('voice-status');
-    line.textContent = voiceLine(status, role === 'vr_solver' ? 'the phone' : 'the headset');
-    line.dataset.voice = status.phase;
-    line.dataset.receiving = String(status.receiving);
+    const text = voiceLine(status, role === 'vr_solver' ? 'the phone' : 'the headset');
+    // The room view covers the page, so the phone's room view has the line too.
+    for (const line of [element('voice-status'), element('hud-voice-status')]) {
+      line.textContent = text;
+      line.dataset.voice = status.phase;
+      line.dataset.receiving = String(status.receiving);
+    }
+    element('hud-voice-status').hidden = status.phase === 'off' && status.problem === null;
     for (const button of voiceButtons) button.textContent = status.phase === 'off' ? 'Start voice' : 'Stop voice';
+    const talking = status.phase !== 'off' && status.phase !== 'asking';
+    for (const button of muteButtons) {
+      button.hidden = !talking;
+      button.textContent = status.muted ? 'Unmute' : 'Mute';
+    }
   },
 });
+for (const button of muteButtons) button.addEventListener('click', () => voice.setMuted(!voice.status.muted));
 for (const button of voiceButtons) {
   // Inside the tap: the browser asks for the microphone, and plays the other person, only then.
   button.addEventListener('click', () => {
@@ -676,7 +688,10 @@ const client = new SessionClient({
             vr_solver: { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } },
           },
           manipulation: null,
-          voice: { mobile_master: { ready: false, session: 0 }, vr_solver: { ready: false, session: 0 } },
+          voice: {
+            mobile_master: { ready: false, session: 0, muted: false },
+            vr_solver: { ready: false, session: 0, muted: false },
+          },
           delivery: { simulated_delay_ms: 0 },
           room: {
             available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,

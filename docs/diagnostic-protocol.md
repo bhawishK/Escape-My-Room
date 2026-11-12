@@ -283,14 +283,22 @@ The shared state then carries who is ready:
 
 ```json
 "voice": {
-  "mobile_master": { "ready": true, "session": 1 },
-  "vr_solver": { "ready": false, "session": 0 }
+  "mobile_master": { "ready": true, "session": 1, "muted": false },
+  "vr_solver": { "ready": false, "session": 0, "muted": false }
 }
 ```
 
 - `session` counts up each time that role becomes ready. Each device is sent only the newest state, so a quick stop and start can pass unseen; a new number tells the other device to set the call up again.
 - Saying the same thing twice changes nothing.
 - Disconnecting, or connecting the same role in a new tab, makes that role not ready. The new page says so again once it has a microphone.
+
+**Mute.** A ready role says when it mutes or unmutes its microphone. The call stays up, and `muted` in the shared state tells the other person:
+
+```json
+{ "type": "voice_mute", "muted": true }
+```
+
+Starting voice again starts unmuted, and leaving clears it. A mute from a role that has not started voice is refused with `voice_not_ready`.
 
 **Set-up messages.** Once both are ready, either role can send an offer, an answer or an ICE candidate:
 

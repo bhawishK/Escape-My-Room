@@ -40,6 +40,7 @@ const connectButton = element<HTMLButtonElement>('connect');
 const enterButton = element<HTMLButtonElement>('enter-vr');
 const disconnectButton = element<HTMLButtonElement>('disconnect');
 const voiceButton = element<HTMLButtonElement>('voice-toggle');
+const muteButton = element<HTMLButtonElement>('voice-mute');
 const sceneElement = element('scene');
 
 let connected = false;
@@ -150,7 +151,10 @@ const hud = new Hud();
 const voice = new VoiceCall({
   sendReady: ready => client.sendVoiceReady(ready),
   sendSignal: signal => client.sendVoiceSignal(signal),
+  sendMuted: muted => client.sendVoiceMuted(muted),
   changed: status => {
+    muteButton.hidden = status.phase === 'off' || status.phase === 'asking';
+    muteButton.textContent = status.muted ? 'Unmute' : 'Mute';
     const line = element('voice-status');
     line.textContent = voiceLine(status, 'the phone');
     line.dataset.voice = status.phase;
@@ -158,6 +162,7 @@ const voice = new VoiceCall({
     voiceButton.textContent = status.phase === 'off' ? 'Start voice' : 'Stop voice';
   },
 });
+muteButton.addEventListener('click', () => voice.setMuted(!voice.status.muted));
 // Inside the tap: the browser asks for the microphone, and plays the other person, only then.
 voiceButton.addEventListener('click', () => {
   if (voice.on) voice.stop();

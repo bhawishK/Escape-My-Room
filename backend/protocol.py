@@ -176,6 +176,13 @@ class VoiceReadyMessage(WireModel):
     ready: bool
 
 
+class VoiceMuteMessage(WireModel):
+    """This device has muted or unmuted its microphone; the call stays up (#171)."""
+
+    type: Literal["voice_mute"]
+    muted: bool
+
+
 class IceCandidate(WireModel):
     """One way a browser may be reached for audio, as WebRTC's `RTCIceCandidateInit`."""
 

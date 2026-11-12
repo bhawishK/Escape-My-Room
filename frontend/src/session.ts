@@ -186,6 +186,12 @@ export class SessionClient {
     this.socket.send(JSON.stringify({ type: 'voice_ready', ready }));
   }
 
+  /** Says this device's microphone is muted or not; the call stays up (#171). */
+  sendVoiceMuted(muted: boolean): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: 'voice_mute', muted }));
+  }
+
   /** One step of setting up the voice call, which Python passes to the other person. */
   sendVoiceSignal(signal: VoiceSignalInput): void {
     if (this.socket?.readyState !== WebSocket.OPEN) return;

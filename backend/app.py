@@ -63,6 +63,7 @@ from backend.protocol import (
     Role,
     RoomLoadedMessage,
     SelectMessage,
+    VoiceMuteMessage,
     VoiceReadyMessage,
     VoiceSignalMessage,
     WireModel,
@@ -90,6 +91,7 @@ type Incoming = (
     | GripMessage
     | PresenceMessage
     | VoiceReadyMessage
+    | VoiceMuteMessage
     | VoiceSignalMessage
 )
 # The message model for each incoming `type`.
@@ -105,6 +107,7 @@ INCOMING: dict[str, type[Incoming]] = {
     "grip": GripMessage,
     "presence": PresenceMessage,
     "voice_ready": VoiceReadyMessage,
+    "voice_mute": VoiceMuteMessage,
     "voice_signal": VoiceSignalMessage,
 }
 
@@ -449,7 +452,7 @@ def create_app(
                 room.presence_seen.pop(role, None)
                 room.cancel_presence_timer(role)
                 # A new page has no microphone open yet, whatever the tab it replaced had.
-                room.voice_ready[role] = False
+                room.stop_voice(role)
                 if role == "mobile_master":
                     room.marker = MarkerState()
                     room.selection = None
@@ -521,6 +524,11 @@ def create_app(
                     elif isinstance(incoming, VoiceReadyMessage):
                         if room.set_voice_ready(role, incoming.ready):
                             await room.broadcast()
+                    elif isinstance(incoming, VoiceMuteMessage):
+                        if room.set_voice_muted(role, incoming.muted) != "ok":
+                            await reject(*VOICE_REFUSALS["not_ready"])
+                            continue
+                        await room.broadcast()
                     elif isinstance(incoming, VoiceSignalMessage):
                         refusal = room.voice_refusal(role)
                         if refusal is not None:

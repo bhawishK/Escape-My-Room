@@ -186,6 +186,66 @@ def test_a_message_to_someone_who_is_not_connected_is_refused(service_url):
         assert error(phone) == "voice_peer_unavailable"
 
 
+def mute(socket, value=True):
+    socket.send(json.dumps({"type": "voice_mute", "muted": value}))
+
+
+def test_a_mute_shows_to_both_and_keeps_the_call(service_url):
+    with (
+        open_socket(service_url, "mobile_master") as phone,
+        open_socket(service_url, "vr_solver") as headset,
+    ):
+        both_ready(phone, headset)
+        mute(headset)
+        for socket in (phone, headset):
+            seen = receive_until(socket, lambda event: voice(event, "vr_solver").get("muted"))
+            assert voice(seen, "vr_solver")["ready"] is True
+            assert voice(seen, "mobile_master")["muted"] is False
+        # Set-up messages still pass while muted.
+        phone.send(json.dumps(OFFER))
+        assert next_signal(headset)["kind"] == "offer"
+        mute(headset, False)
+        receive_until(phone, lambda event: voice(event, "vr_solver").get("muted") is False)
+
+
+def test_starting_voice_again_starts_unmuted(service_url):
+    with (
+        open_socket(service_url, "mobile_master") as phone,
+        open_socket(service_url, "vr_solver") as headset,
+    ):
+        both_ready(phone, headset)
+        session = None
+        mute(phone)
+        muted = receive_until(headset, lambda event: voice(event, "mobile_master").get("muted"))
+        session = voice(muted, "mobile_master")["session"]
+        ready(phone, False)
+        ready(phone)
+        again = receive_until(
+            headset, lambda event: voice(event, "mobile_master").get("session") == session + 1
+        )
+        assert voice(again, "mobile_master")["muted"] is False
+
+
+def test_a_mute_before_starting_voice_is_refused(service_url):
+    with open_socket(service_url, "mobile_master") as phone:
+        phone.recv(timeout=2)
+        mute(phone)
+        assert error(phone) == "voice_not_ready"
+
+
+def test_leaving_clears_a_mute(service_url):
+    with open_socket(service_url, "mobile_master") as phone:
+        phone.recv(timeout=2)
+        with open_socket(service_url, "vr_solver") as headset:
+            both_ready(phone, headset)
+            mute(headset)
+            receive_until(phone, lambda event: voice(event, "vr_solver").get("muted"))
+        gone = receive_until(
+            phone, lambda event: event.get("state", {}).get("vr_connected") is False
+        )
+        assert voice(gone, "vr_solver")["muted"] is False
+
+
 def test_leaving_ends_that_persons_readiness_and_a_new_page_starts_without_it(service_url):
     with open_socket(service_url, "mobile_master") as phone:
         phone.recv(timeout=2)
@@ -220,6 +280,8 @@ def test_a_second_tab_in_the_same_role_starts_without_readiness(service_url):
     [
         {"type": "voice_ready"},
         {"type": "voice_ready", "ready": "yes"},
+        {"type": "voice_mute"},
+        {"type": "voice_mute", "muted": 1},
         {"type": "voice_signal", "kind": "offer"},
         {"type": "voice_signal", "kind": "offer", "sdp": ""},
         {"type": "voice_signal", "kind": "offer", "sdp": "v=0", "candidate": None, "extra": 1},

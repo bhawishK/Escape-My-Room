@@ -86,7 +86,7 @@ export interface SessionState {
   /** The hold in progress, if any: the held object follows its owner's phone. */
   manipulation: { id: number; entity: string; owner: Role; sequence: number | null } | null;
   /** Who has a microphone open for the voice call (#13); `session` counts each time they start. */
-  voice: Record<Role, { ready: boolean; session: number }>;
+  voice: Record<Role, { ready: boolean; session: number; muted: boolean }>;
   room: RoomState;
 }
 

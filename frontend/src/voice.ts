@@ -14,6 +14,9 @@ export interface VoiceStatus {
   problem: string | null;
   /** Whether the other person's audio is arriving. */
   receiving: boolean;
+  /** Whether this device's microphone is muted, and whether the other person's is. */
+  muted: boolean;
+  peerMuted: boolean;
 }
 
 interface VoiceOptions {
@@ -21,6 +24,8 @@ interface VoiceOptions {
   sendReady: (ready: boolean) => void;
   /** Passes one set-up message to the other person through Python. */
   sendSignal: (signal: VoiceSignalInput) => void;
+  /** Tells Python, and so the other person, that this microphone is muted or not. */
+  sendMuted: (muted: boolean) => void;
   /** Called whenever the status changes. */
   changed: (status: VoiceStatus) => void;
 }
@@ -29,6 +34,12 @@ interface VoiceOptions {
 const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
 /** How often the call checks that audio is arriving, in milliseconds. */
 const STATS_MS = 1000;
+/**
+ * A call that has not connected this long after it was set up, or after it dropped, is tried once
+ * more over a fresh path. If that takes this long too, the call has failed.
+ */
+const CONNECT_MS = 12_000;
+const NO_PATH = 'The two devices found no way to reach each other. Stop voice and start it again, or try another network.';
 /** Kept for this tab, so pressing Connect after a reload brings voice back. */
 const WANTED_KEY = 'escape-my-room-voice';
 
@@ -40,6 +51,10 @@ interface Call {
   /** Candidates that arrived before the description they belong to. */
   early: RTCIceCandidateInit[];
   described: boolean;
+  /** Whether the one retry over a fresh path has been used. */
+  retried: boolean;
+  /** Runs out when the call takes too long to connect. */
+  deadline: number | null;
 }
 
 const other = (role: Role): Role => (role === 'mobile_master' ? 'vr_solver' : 'mobile_master');
@@ -47,10 +62,12 @@ const other = (role: Role): Role => (role === 'mobile_master' ? 'vr_solver' : 'm
 /** Why the microphone could not be opened, in words for the person. */
 function microphoneProblem(error: unknown): string {
   const name = error instanceof DOMException ? error.name : '';
-  if (name === 'NotAllowedError' || name === 'SecurityError') return 'The microphone was not allowed.';
-  if (name === 'NotFoundError' || name === 'OverconstrainedError') return 'No microphone was found.';
-  if (name === 'NotReadableError') return 'The microphone is in use by something else.';
-  return 'The microphone could not be opened.';
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return 'The microphone was not allowed. Allow it for this site in the browser, then press Start voice again.';
+  }
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') return 'No microphone was found on this device.';
+  if (name === 'NotReadableError') return 'The microphone is in use by something else. Close that, then press Start voice again.';
+  return 'The microphone could not be opened. Press Start voice to try again.';
 }
 
 export class VoiceCall {
@@ -62,6 +79,8 @@ export class VoiceCall {
   private phase: VoicePhase = 'off';
   private problem: string | null = null;
   private receiving = false;
+  private muted = false;
+  private peerMuted = false;
   private received = 0;
   private statsTimer: number | null = null;
   /** Start and stop requests are counted, so a slow microphone prompt cannot undo a later stop. */
@@ -75,10 +94,24 @@ export class VoiceCall {
     this.speaker.hidden = true;
     this.speaker.dataset.testid = 'voice-speaker';
     document.body.append(this.speaker);
+    // Leaving the page lets the microphone go at once, without waiting for the browser to tidy up.
+    window.addEventListener('pagehide', () => this.connectionLost());
   }
 
   get status(): VoiceStatus {
-    return { phase: this.phase, problem: this.problem, receiving: this.receiving };
+    return {
+      phase: this.phase, problem: this.problem, receiving: this.receiving,
+      muted: this.muted, peerMuted: this.peerMuted,
+    };
+  }
+
+  /** Mutes or unmutes this microphone. The call stays up, and the other person is told. */
+  setMuted(muted: boolean): void {
+    if (!this.microphone || muted === this.muted) return;
+    this.muted = muted;
+    for (const track of this.microphone.getAudioTracks()) track.enabled = !muted;
+    this.options.sendMuted(muted);
+    this.options.changed(this.status);
   }
 
   /** Whether voice is on: the microphone is open or being asked for. */
@@ -148,6 +181,10 @@ export class VoiceCall {
     if (!this.microphone || !this.role) return;
     const mine = state.voice[this.role];
     const theirs = state.voice[other(this.role)];
+    if (theirs.muted !== this.peerMuted) {
+      this.peerMuted = theirs.muted;
+      this.options.changed(this.status);
+    }
     // A rejoin starts not ready on the server; say so again.
     if (!mine.ready && !this.announced) this.announce();
     const call = this.call;
@@ -194,7 +231,7 @@ export class VoiceCall {
         if (this.call === call) this.options.sendSignal({ kind: 'answer', sdp: call.peer.localDescription?.sdp ?? '' });
       }
     } catch {
-      if (this.call === call) this.set('failed', 'The call could not be set up.');
+      if (this.call === call) this.set('failed', 'The call could not be set up. Stop voice and start it again.');
     }
   }
 
@@ -214,7 +251,7 @@ export class VoiceCall {
 
   private connect(peerSession: number): Call {
     const peer = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    const call: Call = { peer, peerSession, early: [], described: false };
+    const call: Call = { peer, peerSession, early: [], described: false, retried: false, deadline: null };
     this.call = call;
     for (const track of this.microphone?.getTracks() ?? []) peer.addTrack(track, this.microphone!);
     peer.addEventListener('icecandidate', event => {
@@ -229,22 +266,57 @@ export class VoiceCall {
     peer.addEventListener('connectionstatechange', () => {
       if (this.call !== call) return;
       const state = peer.connectionState;
-      if (state === 'connected') this.set('connected', null);
-      else if (state === 'failed') this.set('failed', 'The call could not connect.');
-      else if (state === 'disconnected' || state === 'connecting') this.set('connecting', null);
+      if (state === 'connected') {
+        this.await(call, false);
+        this.set('connected', null);
+      } else if (state === 'failed') {
+        this.struggling(call);
+      } else if (state === 'disconnected') {
+        // A dropped path often comes back by itself; give it the same time as a new call.
+        this.set('connecting', null);
+        this.await(call, true);
+      }
     });
     this.received = 0;
     this.statsTimer = window.setInterval(() => void this.measure(call), STATS_MS);
     this.set('connecting', null);
+    this.await(call, true);
     return call;
   }
 
-  private async offer(call: Call): Promise<void> {
+  /** Starts, or with `false` stops, the wait for this call to connect. */
+  private await(call: Call, waiting: boolean): void {
+    if (call.deadline !== null) clearTimeout(call.deadline);
+    call.deadline = waiting ? window.setTimeout(() => {
+      call.deadline = null;
+      if (this.call === call && call.peer.connectionState !== 'connected') this.struggling(call);
+    }, CONNECT_MS) : null;
+  }
+
+  /**
+   * The call could not connect, or dropped and did not come back. The first time, it is tried
+   * once more over a fresh path: the phone, which makes the offers, restarts it, and the headset
+   * waits for that. The second time, the call has failed, and both pages say so.
+   */
+  private struggling(call: Call): void {
+    if (this.call !== call) return;
+    if (call.retried) {
+      this.await(call, false);
+      this.set('failed', NO_PATH);
+      return;
+    }
+    call.retried = true;
+    this.set('connecting', null);
+    this.await(call, true);
+    if (this.role === 'mobile_master') void this.offer(call, true);
+  }
+
+  private async offer(call: Call, restart = false): Promise<void> {
     try {
-      await call.peer.setLocalDescription(await call.peer.createOffer());
+      await call.peer.setLocalDescription(await call.peer.createOffer({ iceRestart: restart }));
       if (this.call === call) this.options.sendSignal({ kind: 'offer', sdp: call.peer.localDescription?.sdp ?? '' });
     } catch {
-      if (this.call === call) this.set('failed', 'The call could not be set up.');
+      if (this.call === call) this.set('failed', 'The call could not be set up. Stop voice and start it again.');
     }
   }
 
@@ -270,6 +342,7 @@ export class VoiceCall {
   private hangUp(): void {
     if (this.statsTimer !== null) clearInterval(this.statsTimer);
     this.statsTimer = null;
+    if (this.call) this.await(this.call, false);
     this.call?.peer.close();
     this.call = null;
     this.speaker.srcObject = null;
@@ -283,6 +356,8 @@ export class VoiceCall {
     this.microphone = null;
     if (was && tell && this.announced) this.options.sendReady(false);
     this.announced = false;
+    this.muted = false;
+    this.peerMuted = false;
     this.set('off', problem);
   }
 
@@ -300,7 +375,10 @@ export function voiceLine(status: VoiceStatus, them: string): string {
     case 'asking': return 'Allow the microphone to talk';
     case 'waiting': return `Voice on · waiting for ${them} to start voice`;
     case 'connecting': return 'Voice connecting…';
-    case 'connected': return 'Voice connected';
-    case 'failed': return `Voice failed · ${status.problem ?? 'The call could not connect.'}`;
+    case 'connected': {
+      const notes = [status.muted ? 'you are muted' : null, status.peerMuted ? `${them} is muted` : null].filter(Boolean);
+      return ['Voice connected', ...notes].join(' · ');
+    }
+    case 'failed': return `Voice failed · ${status.problem ?? NO_PATH}`;
   }
 }
