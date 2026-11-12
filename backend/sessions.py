@@ -106,6 +106,19 @@ class PrototypeRoom:
     presence_timers: dict[Role, asyncio.TimerHandle] = field(default_factory=dict)
     # The server's one physics simulation (#159), or None before the server has started it.
     physics: PhysicsWorker | None = None
+    # Who has a microphone open for the voice call (#13). Never touches an object or a hold.
+    voice_ready: dict[Role, bool] = field(
+        default_factory=lambda: {"mobile_master": False, "vr_solver": False}
+    )
+    # Who has muted their microphone while staying in the call. Starting voice starts unmuted.
+    voice_muted: dict[Role, bool] = field(
+        default_factory=lambda: {"mobile_master": False, "vr_solver": False}
+    )
+    # Counts each time a role becomes ready. Devices are sent only the newest state, so a quick
+    # stop and start can pass unseen; a new number tells the other device to set the call up again.
+    voice_sessions: dict[Role, int] = field(
+        default_factory=lambda: {"mobile_master": 0, "vr_solver": 0}
+    )
     physics_tasks: set[asyncio.Task[None]] = field(
         default_factory=lambda: set[asyncio.Task[None]]()
     )
@@ -122,6 +135,14 @@ class PrototypeRoom:
             "participants": {role: value.model_dump() for role, value in self.presence.items()},
             "alignment": {role: value.model_dump() for role, value in self.alignment.items()},
             "physics": NO_PHYSICS if self.physics is None else self.physics.status(),
+            "voice": {
+                role: {
+                    "ready": ready,
+                    "session": self.voice_sessions[role],
+                    "muted": self.voice_muted[role],
+                }
+                for role, ready in self.voice_ready.items()
+            },
             "manipulation": None
             if self.manipulation is None
             else {
@@ -185,6 +206,42 @@ class PrototypeRoom:
         """Drop a device's alignment after its reference space resets or its VR session ends."""
         self.alignment[role] = Alignment()
         self.revision += 1
+
+    def set_voice_ready(self, role: Role, ready: bool) -> bool:
+        """Record whether a device is ready to talk. Returns whether anything changed."""
+        if self.voice_ready[role] == ready:
+            return False
+        self.voice_ready[role] = ready
+        self.voice_muted[role] = False
+        if ready:
+            self.voice_sessions[role] += 1
+        self.revision += 1
+        return True
+
+    def stop_voice(self, role: Role) -> None:
+        """A device that left, or was replaced by a new page, has no microphone open."""
+        self.voice_ready[role] = False
+        self.voice_muted[role] = False
+
+    def set_voice_muted(self, role: Role, muted: bool) -> str:
+        """Record a mute. Only a device that has started voice has a microphone to mute."""
+        if not self.voice_ready[role]:
+            return "not_ready"
+        if self.voice_muted[role] != muted:
+            self.voice_muted[role] = muted
+            self.revision += 1
+        return "ok"
+
+    def voice_refusal(self, role: Role) -> str | None:
+        """Why a call set-up message from this role can't be passed on, or None when it can."""
+        other: Role = "vr_solver" if role == "mobile_master" else "mobile_master"
+        if not self.voice_ready[role]:
+            return "not_ready"
+        if other not in self.outboxes:
+            return "peer_gone"
+        if not self.voice_ready[other]:
+            return "peer_not_ready"
+        return None
 
     def select(
         self, room_version: int, entity_id: str | None
@@ -512,6 +569,7 @@ class PrototypeRoom:
         self.cancel_presence_timer(role)
         self.presence[role] = PresenceState(tracking_status="lost")
         self.presence_seen.pop(role, None)
+        self.stop_voice(role)
         # The object stays at the last accepted place. The other person keeps their own hold.
         if self.manipulation is not None and self.manipulation.owner == role:
             self.drop()

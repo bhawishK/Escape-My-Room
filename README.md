@@ -34,6 +34,7 @@ The agreed first target is **iPhone 16 Chrome for the mobile page and Meta Quest
 - [Start the diagnostic](docs/diagnostic-startup.md) — installation, HTTPS/WSS, and checks.
 - [Connection and pose contract](docs/diagnostic-protocol.md) — shared device status, validation, and the phone's pose message.
 - [Phone view and tracking](docs/phone-tracking.md) — the room view, turning, the dropped printed-tag attempt, and the options for position.
+- [Voice](docs/voice.md) — the phone and the headset talk over WebRTC, with set-up messages through Python (#13).
 - [The GPU desktop as the server](docs/gpu-server.md) — set it up with `scripts/gpu-server/setup-wizard.sh`, deploy updates, and troubleshoot (#139).
 - [Room video captures](docs/room-video.md) — record or choose a room video and upload it in chunks through the tunnel (#136).
 - [Reconstruction pipeline](docs/reconstruction.md) — room video to splat room and positioning map on the GPU desktop (#135).

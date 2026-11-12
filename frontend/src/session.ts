@@ -1,11 +1,13 @@
 import type { CalibrationInput } from './alignment';
-import type { PoseInput, Position, PresenceInput, Role, Rotation, SelectionResult, ServerEvent, SessionState } from './protocol';
+import type { PoseInput, Position, PresenceInput, Role, Rotation, SelectionResult, ServerEvent, SessionState, VoiceSignal, VoiceSignalInput } from './protocol';
 
 interface SessionEvents {
   state: (state: SessionState) => void;
   connection: (connected: boolean) => void;
   selection: (result: SelectionResult) => void;
   error: (message: string) => void;
+  /** A voice call set-up message from the other person (#13). */
+  voice?: (signal: VoiceSignal) => void;
   poseSent?: (sequence: number) => void;
   poseReplaced?: () => void;
 }
@@ -57,7 +59,12 @@ export class SessionClient {
               this.events.state(message.state);
             } else if (message.type === 'selection') {
               this.events.selection({ id: message.id, rejected: message.rejected });
+            } else if (message.type === 'voice_signal') {
+              this.events.voice?.(message);
             } else if (message.type === 'error') {
+              // A set-up message that crossed with the other person stopping voice; the shared
+              // state already shows the call is over.
+              if (message.code.startsWith('voice_')) return;
               this.events.error(message.message);
             }
           } catch {
@@ -171,6 +178,36 @@ export class SessionClient {
     this.socket.send(JSON.stringify({
       type: 'release', manipulation_id: manipulationId, ...(velocity ? { velocity } : {}),
     }));
+  }
+
+  /** Says this device has its microphone open for the voice call, or has stopped (#13). */
+  sendVoiceReady(ready: boolean): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: 'voice_ready', ready }));
+  }
+
+  /** Says this device's microphone is muted or not; the call stays up (#171). */
+  sendVoiceMuted(muted: boolean): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: 'voice_mute', muted }));
+  }
+
+  /** One step of setting up the voice call, which Python passes to the other person. */
+  sendVoiceSignal(signal: VoiceSignalInput): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    if (signal.kind !== 'candidate') {
+      this.socket.send(JSON.stringify({ type: 'voice_signal', kind: signal.kind, sdp: signal.sdp }));
+      return;
+    }
+    const from = signal.candidate;
+    // Only the fields Python accepts; browsers add others.
+    const candidate = from && from.candidate ? {
+      candidate: from.candidate,
+      sdpMid: from.sdpMid ?? null,
+      sdpMLineIndex: from.sdpMLineIndex ?? null,
+      usernameFragment: from.usernameFragment ?? null,
+    } : null;
+    this.socket.send(JSON.stringify({ type: 'voice_signal', kind: 'candidate', candidate }));
   }
 
   sendRoomLoaded(roomVersion: number): void {

@@ -13,6 +13,7 @@ import { grabbedPosition, offsetOf, rayForward, targetAlongRay } from '../grab';
 import type { AlignmentState, Position, PresenceInput, RoomEntity, Rotation, SessionState } from '../protocol';
 import { RoomMap, type Spot } from '../room-map';
 import { SessionClient } from '../session';
+import { VoiceCall, voiceLine, voiceNote } from '../voice';
 import { Dwell, GestureGate, HeadNods } from './gestures';
 import { readFrame, type FrameSample, type InputSample, type Pose, type Ray } from './hands';
 import { Hud } from './hud';
@@ -38,6 +39,8 @@ const BLOCKED = 'The other person is holding that object.';
 const connectButton = element<HTMLButtonElement>('connect');
 const enterButton = element<HTMLButtonElement>('enter-vr');
 const disconnectButton = element<HTMLButtonElement>('disconnect');
+const voiceButton = element<HTMLButtonElement>('voice-toggle');
+const muteButton = element<HTMLButtonElement>('voice-mute');
 const sceneElement = element('scene');
 
 let connected = false;
@@ -61,6 +64,11 @@ let lastGripPose: { position: Position; orientation: Rotation } | null = null;
 /** Each input's holding and confirm last frame, to tell a press from a hold. */
 const wasHolding = new WeakMap<XRInputSource, boolean>();
 const wasConfirming = new WeakMap<XRInputSource, boolean>();
+const wasMuting = new WeakMap<XRInputSource, boolean>();
+/** What the voice call last said in the headset, and until when (#173). */
+let voiceSaid: { text: string; until: number } | null = null;
+/** How to unmute from inside VR, as the headset's line says it. */
+const UNMUTE = 'press B or Y';
 /** Since when each hand has pointed. */
 const pointingSince = new WeakMap<XRInputSource, number>();
 /** Shown in the headset after a loss, a reset or the phone leaving, until the person acts. */
@@ -100,6 +108,7 @@ const phoneHolds = (id: string | null): boolean =>
 function controls(): void {
   connectButton.disabled = connected || busy;
   disconnectButton.disabled = !connected;
+  voiceButton.disabled = !connected;
   enterButton.disabled = !connected || !xrSupported || xrActive || busy;
   element('quest-map').classList.toggle('picking', connected);
   element('xr-status').textContent = !isSecureContext ? 'VR needs the trusted HTTPS link'
@@ -129,6 +138,7 @@ function report(): void {
     room_version: state?.room.room_version ?? null,
     splat: sceneElement.dataset.splat === 'shown',
     gestures: gestureLog.slice(-20),
+    voice: voice.report(),
     user_agent: navigator.userAgent,
   }, null, 2);
 }
@@ -143,12 +153,42 @@ let world: World | null = null;
 let room: QuestRoom | null = null;
 const hud = new Hud();
 
+/** The voice call with the phone user (#13). Started on the page, before Enter VR. */
+const voice = new VoiceCall({
+  sendReady: ready => client.sendVoiceReady(ready),
+  sendSignal: signal => client.sendVoiceSignal(signal),
+  sendMuted: muted => client.sendVoiceMuted(muted),
+  changed: status => {
+    muteButton.hidden = status.phase === 'off' || status.phase === 'asking';
+    muteButton.textContent = status.muted ? 'Unmute' : 'Mute';
+    const line = element('voice-status');
+    line.textContent = voiceLine(status, 'the phone');
+    line.dataset.voice = status.phase;
+    line.dataset.receiving = String(status.receiving);
+    line.dataset.path = status.path ? (status.path.relayed ? 'relayed' : 'direct') : '';
+    voiceButton.textContent = status.phase === 'off' ? 'Start voice' : 'Stop voice';
+    // In VR the page is out of sight: say each change of the call in the headset for a moment.
+    const note = voiceNote(status, 'the phone', UNMUTE);
+    if (note !== voiceSaid?.text) voiceSaid = note === null ? null : { text: note, until: performance.now() + SAID_MS };
+    // The report shows how the call connected, and outside VR nothing else refreshes it.
+    report();
+  },
+});
+muteButton.addEventListener('click', () => voice.setMuted(!voice.status.muted));
+// Inside the tap: the browser asks for the microphone, and plays the other person, only then.
+voiceButton.addEventListener('click', () => {
+  if (voice.on) voice.stop();
+  else if (connected) void voice.start('vr_solver');
+});
+
 const client = new SessionClient({
   state: applyState,
+  voice: signal => { void voice.signal(signal); },
   connection: value => {
     connected = value;
     element('connection').textContent = value ? 'Connected · VR headset' : 'Not connected';
     if (!value) {
+      voice.connectionLost();
       state = null;
       holder = null;
       grabOffset = null;
@@ -166,6 +206,7 @@ function applyState(next: SessionState): void {
   const phoneWas = state?.mobile_connected ?? false;
   const phoneHeld = state?.manipulation?.owner === 'mobile_master';
   state = next;
+  voice.applyState(next);
   map.showRoom(next.room);
   map.showPlayers(next.participants, 'vr_solver');
   room?.align(next.alignment.vr_solver);
@@ -361,6 +402,9 @@ function frame(xrFrame: XRFrame, time: number): void {
   for (const input of sample.inputs) {
     if (input.confirm && !wasConfirming.get(input.source)) confirmAlignment();
     wasConfirming.set(input.source, input.confirm);
+    // B or Y mutes and unmutes: the page's Mute button cannot be reached from inside VR.
+    if (input.mute && !wasMuting.get(input.source) && voice.on) voice.setMuted(!voice.status.muted);
+    wasMuting.set(input.source, input.mute);
     const before = wasHolding.get(input.source) ?? false;
     wasHolding.set(input.source, input.holding);
     if (paused) continue;
@@ -432,8 +476,10 @@ function showHud(time: number, blocked: boolean): void {
     ?? (held?.owner === 'mobile_master' ? `Phone is holding ${label(held.entity)}` : null)
     ?? (held?.owner === 'vr_solver' ? `Holding ${label(held.entity)} · let go to put it down` : null)
     ?? gestureLine?.text
-    ?? (aligned() ? null : 'Stand where you like, then press A or pinch to line up');
-  hud.show(text, text === gestureLine?.text);
+    ?? (aligned() ? null : 'Stand where you like, then press A or pinch to line up')
+    // A change in the call shows for a moment; being muted stays, so nobody talks to no one.
+    ?? (voiceSaid && (time <= voiceSaid.until || voice.status.muted) ? voiceSaid.text : null);
+  hud.show(text, text === gestureLine?.text || (text === voiceSaid?.text && voice.status.phase === 'connected' && !voice.status.muted));
 }
 
 async function start(): Promise<void> {
@@ -502,7 +548,10 @@ connectButton.addEventListener('click', () => {
   busy = true;
   showError(null);
   controls();
-  void client.join('vr_solver').catch(error => {
+  void client.join('vr_solver').then(() => {
+    // Voice was on in this tab before a reload or a disconnect: bring it back with the connection.
+    if (voice.wanted) void voice.start('vr_solver');
+  }).catch(error => {
     showError(error instanceof Error ? error.message : 'Unable to connect. Try again.');
   }).finally(() => {
     busy = false;
