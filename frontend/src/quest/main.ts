@@ -13,6 +13,7 @@ import { grabbedPosition, offsetOf, rayForward, targetAlongRay } from '../grab';
 import type { AlignmentState, Position, PresenceInput, RoomEntity, Rotation, SessionState } from '../protocol';
 import { RoomMap, type Spot } from '../room-map';
 import { SessionClient } from '../session';
+import { VoiceCall, voiceLine } from '../voice';
 import { Dwell, GestureGate, HeadNods } from './gestures';
 import { readFrame, type FrameSample, type InputSample, type Pose, type Ray } from './hands';
 import { Hud } from './hud';
@@ -38,6 +39,7 @@ const BLOCKED = 'The other person is holding that object.';
 const connectButton = element<HTMLButtonElement>('connect');
 const enterButton = element<HTMLButtonElement>('enter-vr');
 const disconnectButton = element<HTMLButtonElement>('disconnect');
+const voiceButton = element<HTMLButtonElement>('voice-toggle');
 const sceneElement = element('scene');
 
 let connected = false;
@@ -100,6 +102,7 @@ const phoneHolds = (id: string | null): boolean =>
 function controls(): void {
   connectButton.disabled = connected || busy;
   disconnectButton.disabled = !connected;
+  voiceButton.disabled = !connected;
   enterButton.disabled = !connected || !xrSupported || xrActive || busy;
   element('quest-map').classList.toggle('picking', connected);
   element('xr-status').textContent = !isSecureContext ? 'VR needs the trusted HTTPS link'
@@ -143,12 +146,32 @@ let world: World | null = null;
 let room: QuestRoom | null = null;
 const hud = new Hud();
 
+/** The voice call with the phone user (#13). Started on the page, before Enter VR. */
+const voice = new VoiceCall({
+  sendReady: ready => client.sendVoiceReady(ready),
+  sendSignal: signal => client.sendVoiceSignal(signal),
+  changed: status => {
+    const line = element('voice-status');
+    line.textContent = voiceLine(status, 'the phone');
+    line.dataset.voice = status.phase;
+    line.dataset.receiving = String(status.receiving);
+    voiceButton.textContent = status.phase === 'off' ? 'Start voice' : 'Stop voice';
+  },
+});
+// Inside the tap: the browser asks for the microphone, and plays the other person, only then.
+voiceButton.addEventListener('click', () => {
+  if (voice.on) voice.stop();
+  else if (connected) void voice.start('vr_solver');
+});
+
 const client = new SessionClient({
   state: applyState,
+  voice: signal => { void voice.signal(signal); },
   connection: value => {
     connected = value;
     element('connection').textContent = value ? 'Connected · VR headset' : 'Not connected';
     if (!value) {
+      voice.connectionLost();
       state = null;
       holder = null;
       grabOffset = null;
@@ -166,6 +189,7 @@ function applyState(next: SessionState): void {
   const phoneWas = state?.mobile_connected ?? false;
   const phoneHeld = state?.manipulation?.owner === 'mobile_master';
   state = next;
+  voice.applyState(next);
   map.showRoom(next.room);
   map.showPlayers(next.participants, 'vr_solver');
   room?.align(next.alignment.vr_solver);
@@ -502,7 +526,10 @@ connectButton.addEventListener('click', () => {
   busy = true;
   showError(null);
   controls();
-  void client.join('vr_solver').catch(error => {
+  void client.join('vr_solver').then(() => {
+    // Voice was on in this tab before a reload or a disconnect: bring it back with the connection.
+    if (voice.wanted) void voice.start('vr_solver');
+  }).catch(error => {
     showError(error instanceof Error ? error.message : 'Unable to connect. Try again.');
   }).finally(() => {
     busy = false;

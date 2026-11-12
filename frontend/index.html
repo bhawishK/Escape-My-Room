@@ -60,6 +60,7 @@
                 <li><strong>Measure height</strong> measures once how high the phone is, from the back camera. It downloads 76 MB the first time.</li>
               </ul>
             </div>
+            <button id="voice-toggle" class="secondary" disabled>Start voice</button>
             <button id="disconnect" class="secondary" disabled>Disconnect</button>
             <p id="error" class="error-message" role="alert" hidden></p>
           </div>
@@ -75,6 +76,7 @@
               <div><dt>Room</dt><dd><p id="room-status" data-testid="room-status" class="device-status" role="status">Room not loaded</p></dd></div>
               <div><dt>Object</dt><dd><p id="control-status" data-testid="control-status" class="device-status" role="status">No object is being moved</p></dd></div>
               <div><dt>Alignment</dt><dd><p id="alignment-status" data-testid="alignment-status" class="device-status" role="status">Not aligned</p></dd></div>
+              <div><dt>Voice</dt><dd><p id="voice-status" data-testid="voice-status" class="device-status" role="status">Voice off</p></dd></div>
             </dl>
           </div>
         </div>
@@ -110,6 +112,7 @@
         <button id="recentre" class="secondary" hidden>Recentre</button>
         <button id="walk-reset" class="secondary" hidden>Back to start</button>
         <button id="walk-length" class="secondary" hidden>Step 0.6 m</button>
+        <button id="hud-voice" class="secondary" disabled>Start voice</button>
         <button id="gaze-toggle">Gaze cursor</button>
         <button id="depth-toggle">Measure height</button>
         <button id="depth-default" class="secondary" hidden>Default height</button>

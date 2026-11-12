@@ -85,7 +85,23 @@ export interface SessionState {
   delivery: { simulated_delay_ms: number };
   /** The hold in progress, if any: the held object follows its owner's phone. */
   manipulation: { id: number; entity: string; owner: Role; sequence: number | null } | null;
+  /** Who has a microphone open for the voice call (#13); `session` counts each time they start. */
+  voice: Record<Role, { ready: boolean; session: number }>;
   room: RoomState;
+}
+
+/** One step of setting up the voice call, as this device sends it. */
+export type VoiceSignalInput =
+  | { kind: 'offer' | 'answer'; sdp: string }
+  | { kind: 'candidate'; candidate: RTCIceCandidateInit | null };
+
+/** A set-up message from the other person, with their voice session, as Python passes it on. */
+export interface VoiceSignal {
+  from: Role;
+  session: number;
+  kind: 'offer' | 'answer' | 'candidate';
+  sdp: string | null;
+  candidate: RTCIceCandidateInit | null;
 }
 
 export interface PoseInput {
@@ -114,4 +130,5 @@ export type ServerEvent =
   | { type: 'welcome'; state: SessionState }
   | ({ type: 'selection' } & SelectionResult)
   | { type: 'state'; state: SessionState }
+  | ({ type: 'voice_signal' } & VoiceSignal)
   | { type: 'error'; code: string; message: string };

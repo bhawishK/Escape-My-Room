@@ -14,6 +14,7 @@
       <section class="card">
         <div class="buttons">
           <button id="connect" type="button">Connect headset</button>
+          <button id="voice-toggle" type="button" disabled>Start voice</button>
           <button id="enter-vr" type="button" disabled>Enter VR</button>
           <button id="disconnect" type="button" disabled>Disconnect</button>
         </div>
@@ -23,6 +24,7 @@
           <div><dt>Phone</dt><dd id="phone-status" data-testid="phone-status">Waiting for phone</dd></div>
           <div><dt>Room</dt><dd id="room-status" data-testid="room-status">No room yet</dd></div>
           <div><dt>Alignment</dt><dd id="alignment-status" data-testid="alignment-status">Not aligned</dd></div>
+          <div><dt>Voice</dt><dd id="voice-status" data-testid="voice-status" role="status">Voice off</dd></div>
           <div><dt>VR</dt><dd id="xr-status" data-testid="xr-status">Checking for VR…</dd></div>
           <div><dt>Gesture</dt><dd id="gesture-status" data-testid="gesture-status">No gesture yet</dd></div>
         </dl>
@@ -35,6 +37,7 @@
       <section class="card">
         <h2>In VR</h2>
         <ul class="hint">
+          <li>Voice: press Start voice and allow the microphone before Enter VR; the call carries on inside VR.</li>
           <li>Controllers: A or X lines the room up; squeeze the grip on an object to move it.</li>
           <li>Hands: pinch to line the room up; pinch on an object, or look at it and pinch, to move it.</li>
           <li>Point with the index finger to show something; hold an open palm to pause in a calm view.</li>

@@ -21,6 +21,7 @@ import { SessionClient } from './session';
 import { DiagnosticScene } from './scene';
 import { STEP_LENGTHS } from './step-walk';
 import { floorplan, type Floorplan } from './steps';
+import { VoiceCall, voiceLine } from './voice';
 import { XRDiagnostic, xrError, type ControllerSample } from './xr';
 
 const phoneButton = element<HTMLButtonElement>('connect-phone');
@@ -406,6 +407,7 @@ function controls(): void {
   phoneButton.disabled = connected || busy;
   vrButton.disabled = connected || busy;
   disconnectButton.disabled = !connected;
+  for (const button of voiceButtons) button.disabled = !connected;
   alignButton.disabled = !connected;
   startButton.disabled = !connected || busy || xrActive || xr === null;
   endButton.disabled = !xrActive;
@@ -510,6 +512,7 @@ function applyState(next: SessionState): void {
   const otherHeld = state?.manipulation?.owner === otherRole;
   const before = ownHold();
   state = next;
+  voice.applyState(next);
   if (next.room.room_version !== positioningRoom) {
     positioningRoom = next.room.room_version;
     positioner.roomChanged();
@@ -608,8 +611,30 @@ function applyState(next: SessionState): void {
   }
 }
 
+/** The voice call with the other person (#13). */
+const voiceButtons = [element<HTMLButtonElement>('voice-toggle'), element<HTMLButtonElement>('hud-voice')];
+const voice = new VoiceCall({
+  sendReady: ready => client.sendVoiceReady(ready),
+  sendSignal: signal => client.sendVoiceSignal(signal),
+  changed: status => {
+    const line = element('voice-status');
+    line.textContent = voiceLine(status, role === 'vr_solver' ? 'the phone' : 'the headset');
+    line.dataset.voice = status.phase;
+    line.dataset.receiving = String(status.receiving);
+    for (const button of voiceButtons) button.textContent = status.phase === 'off' ? 'Start voice' : 'Stop voice';
+  },
+});
+for (const button of voiceButtons) {
+  // Inside the tap: the browser asks for the microphone, and plays the other person, only then.
+  button.addEventListener('click', () => {
+    if (voice.on) voice.stop();
+    else if (role && connected) void voice.start(role);
+  });
+}
+
 const client = new SessionClient({
   state: applyState,
+  voice: signal => { void voice.signal(signal); },
   connection: value => {
     connected = value;
     element('connection').textContent = value
@@ -618,6 +643,7 @@ const client = new SessionClient({
         ? 'Disconnected · press Connect to rejoin the same room'
         : 'Not connected';
     if (!value) {
+      voice.connectionLost();
       state = null;
       holding = false;
       carryFloor = null;
@@ -650,6 +676,7 @@ const client = new SessionClient({
             vr_solver: { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } },
           },
           manipulation: null,
+          voice: { mobile_master: { ready: false, session: 0 }, vr_solver: { ready: false, session: 0 } },
           delivery: { simulated_delay_ms: 0 },
           room: {
             available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
@@ -859,6 +886,8 @@ async function connect(roleToJoin: Role): Promise<void> {
   controls();
   try {
     await client.join(roleToJoin);
+    // Voice was on in this tab before a reload or a disconnect: bring it back with the connection.
+    if (voice.wanted) void voice.start(roleToJoin);
     if (roleToJoin === 'mobile_master') {
       setRoomView(true);
       // Motion may have started before the connection did; tell Python where the phone starts.
