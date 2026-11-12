@@ -63,6 +63,8 @@ from backend.protocol import (
     Role,
     RoomLoadedMessage,
     SelectMessage,
+    VoiceReadyMessage,
+    VoiceSignalMessage,
     WireModel,
 )
 from backend.sessions import PrototypeRoom
@@ -87,6 +89,8 @@ type Incoming = (
     | ReleaseMessage
     | GripMessage
     | PresenceMessage
+    | VoiceReadyMessage
+    | VoiceSignalMessage
 )
 # The message model for each incoming `type`.
 INCOMING: dict[str, type[Incoming]] = {
@@ -100,6 +104,15 @@ INCOMING: dict[str, type[Incoming]] = {
     "release": ReleaseMessage,
     "grip": GripMessage,
     "presence": PresenceMessage,
+    "voice_ready": VoiceReadyMessage,
+    "voice_signal": VoiceSignalMessage,
+}
+
+# Why a voice call set-up message was not passed on (#13), as the page shows it.
+VOICE_REFUSALS = {
+    "not_ready": ("voice_not_ready", "Start voice before setting up a call."),
+    "peer_gone": ("voice_peer_unavailable", "The other person is not connected."),
+    "peer_not_ready": ("voice_peer_not_ready", "The other person has not started voice."),
 }
 
 ROOM_VERSION_MISMATCH = (
@@ -435,6 +448,8 @@ def create_app(
                 room.presence[role] = PresenceState()
                 room.presence_seen.pop(role, None)
                 room.cancel_presence_timer(role)
+                # A new page has no microphone open yet, whatever the tab it replaced had.
+                room.voice_ready[role] = False
                 if role == "mobile_master":
                     room.marker = MarkerState()
                     room.selection = None
@@ -503,6 +518,29 @@ def create_app(
                         presence_sequence = incoming.sequence
                         room.accept_presence(role, incoming)
                         await room.broadcast()
+                    elif isinstance(incoming, VoiceReadyMessage):
+                        if room.set_voice_ready(role, incoming.ready):
+                            await room.broadcast()
+                    elif isinstance(incoming, VoiceSignalMessage):
+                        refusal = room.voice_refusal(role)
+                        if refusal is not None:
+                            await reject(*VOICE_REFUSALS[refusal])
+                            continue
+                        # Passed to the other person alone, in order, and never kept: it is not
+                        # shared state, so it does not ride on a state broadcast.
+                        other: Role = "vr_solver" if role == "mobile_master" else "mobile_master"
+                        room.outboxes[other].reply(
+                            {
+                                "type": "voice_signal",
+                                "from": role,
+                                "session": room.voice_sessions[role],
+                                "kind": incoming.kind,
+                                "sdp": incoming.sdp,
+                                "candidate": None
+                                if incoming.candidate is None
+                                else incoming.candidate.model_dump(),
+                            }
+                        )
                     elif isinstance(incoming, RoomLoadedMessage):
                         result = room.accept_room_version(role, incoming.room_version)
                         if result == "mismatch":

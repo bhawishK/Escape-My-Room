@@ -269,6 +269,55 @@ Either role can publish where that person is. A presence update changes only tha
 
 The page sends at most 20 presence updates a second and drops one when the socket already has 16 KiB waiting. If a tracked participant sends nothing for 1.5 seconds, Python marks that entry `stale` and keeps the last position and heading. Disconnecting sets that role to `lost` and clears the position and heading. A new tab in the same role starts at `inactive`. Each page draws the other person's marker and hides its own. See [participant presence](participant-presence.md).
 
+## Set up a voice call
+
+Issue #13, part 1 (#169). The two browsers send audio straight to each other with WebRTC. Python only passes the call's set-up messages between them. No audio reaches Python, and nothing here is kept. The pages do not use these messages yet; that is #170.
+
+**Ready to talk.** Either role says when it has its microphone open, and when it stops:
+
+```json
+{ "type": "voice_ready", "ready": true }
+```
+
+The shared state then carries who is ready:
+
+```json
+"voice": {
+  "mobile_master": { "ready": true, "session": 1 },
+  "vr_solver": { "ready": false, "session": 0 }
+}
+```
+
+- `session` counts up each time that role becomes ready. Each device is sent only the newest state, so a quick stop and start can pass unseen; a new number tells the other device to set the call up again.
+- Saying the same thing twice changes nothing.
+- Disconnecting, or connecting the same role in a new tab, makes that role not ready. The new page says so again once it has a microphone.
+
+**Set-up messages.** Once both are ready, either role can send an offer, an answer or an ICE candidate:
+
+```json
+{ "type": "voice_signal", "kind": "offer", "sdp": "v=0…" }
+{ "type": "voice_signal", "kind": "answer", "sdp": "v=0…" }
+{ "type": "voice_signal", "kind": "candidate", "candidate": { "candidate": "candidate:1 1 udp …", "sdpMid": "0", "sdpMLineIndex": 0, "usernameFragment": "abcd" } }
+{ "type": "voice_signal", "kind": "candidate", "candidate": null }
+```
+
+A null candidate means the browser has no more to give. Python passes each message to the other role alone, in the order sent, adding who sent it and the sender's voice session:
+
+```json
+{ "type": "voice_signal", "from": "mobile_master", "session": 1, "kind": "offer", "sdp": "v=0…", "candidate": null }
+```
+
+The sender gets nothing back when it is passed on. It is not shared state: it never rides on a `state` event, and it does not change the revision, an object or a hold.
+
+| Refused with | When |
+| --- | --- |
+| `voice_not_ready` | The sender has not said it is ready |
+| `voice_peer_unavailable` | The other person is not connected |
+| `voice_peer_not_ready` | The other person is connected but has not started voice |
+| `invalid_message` | A missing or extra field, an offer or answer without `sdp` or with a candidate, a candidate with `sdp`, an `sdp` over 12,000 characters, or a candidate line over 2,048 |
+
+A refusal leaves the session as it was. Tests: `tests/test_voice.py`.
+
 ## Prepared room
 
 `GET /api/room` returns the same room descriptor served in `state.room`, without `loaded_by`. Python loads `manifest.json` from `assets/prepared-room/`, or from `ESCAPE_ROOM_PREPARED_DIR` when set, at startup. The manifest is the identity contract: room version, entity IDs, static or movable kind, selectable flag, and bottom-center placement in meters. Node names in the assets are only pointers. If the manifest is missing or invalid, or an asset disagrees with it, the room is unavailable. The [prepared room note](prepared-room.md) lists both manifest forms and their checks. `/api/room` then returns HTTP 503 with that reason, and both sockets receive `room.available: false` plus the same `room.error`. Neither device is given a different room.

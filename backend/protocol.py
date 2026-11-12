@@ -167,3 +167,40 @@ class PresenceMessage(WireModel):
         elif self.position is not None or self.heading is not None:
             raise ValueError("Unavailable presence must not supply a position or heading")
         return self
+
+
+class VoiceReadyMessage(WireModel):
+    """This device has its microphone and wants to talk (#13), or has stopped."""
+
+    type: Literal["voice_ready"]
+    ready: bool
+
+
+class IceCandidate(WireModel):
+    """One way a browser may be reached for audio, as WebRTC's `RTCIceCandidateInit`."""
+
+    candidate: str = Field(max_length=2048)
+    sdpMid: str | None = Field(default=None, max_length=64)
+    sdpMLineIndex: int | None = Field(default=None, ge=0, le=64)
+    usernameFragment: str | None = Field(default=None, max_length=256)
+
+
+class VoiceSignalMessage(WireModel):
+    """One step of setting up the voice call, passed to the other person and never kept.
+
+    An offer or an answer carries its `sdp`. A candidate carries `candidate`, or null once the
+    browser has no more to give. Python reads none of it."""
+
+    type: Literal["voice_signal"]
+    kind: Literal["offer", "answer", "candidate"]
+    sdp: str | None = Field(default=None, min_length=1, max_length=12000)
+    candidate: IceCandidate | None = None
+
+    @model_validator(mode="after")
+    def check_kind(self) -> Self:
+        if self.kind == "candidate":
+            if self.sdp is not None:
+                raise ValueError("A candidate carries no session description")
+        elif self.sdp is None or self.candidate is not None:
+            raise ValueError("An offer or an answer carries a session description alone")
+        return self
