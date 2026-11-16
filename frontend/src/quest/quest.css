@@ -25,3 +25,10 @@ body { margin: 0; background: var(--fill); }
 .furniture-list { display: flex; flex-wrap: wrap; gap: 8px; }
 .furniture-list button { background: var(--tinted); color: var(--label); }
 .furniture-list button[aria-pressed="true"] { background: var(--blue); color: #ffffff; }
+
+/* Making a piece from a description (#186): the field and buttons on one line, then its picture. */
+.furniture-make { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.furniture-make label { flex-basis: 100%; font-weight: 600; }
+.furniture-make input { flex: 1 1 220px; min-width: 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--separator); font: inherit; }
+.furniture-preview { display: block; width: 160px; height: 160px; margin-top: 12px; border-radius: 12px; object-fit: cover; }
+.furniture-preview[hidden] { display: none; }

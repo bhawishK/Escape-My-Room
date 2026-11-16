@@ -37,6 +37,8 @@ export interface CatalogueItem {
   node: string;
   size: { width: number; height: number; depth: number };
   model_url: string;
+  /** Made from a description (#186), rather than built in. */
+  generated?: boolean;
 }
 
 export interface RoomState {

@@ -1,12 +1,13 @@
-"""Catalogue furniture both devices see at true size (#181); HTTP and WebSocket seams, real Havok."""
+"""Catalogue furniture both devices see at true size (#181); HTTP and WebSocket seams, real Havok.
+"""
 
 import json
 import math
 
 import httpx
 import pytest
-from test_manipulation import error_code, open_socket, receive_until
 from test_live_room import activate, next_state, reconstructed
+from test_manipulation import error_code, open_socket, receive_until
 from test_physics_fall import ready, until_rest
 from test_reconstruction_jobs import settings
 
@@ -82,7 +83,9 @@ def test_a_placed_armchair_falls_to_the_floor_at_true_size_and_both_devices_see_
         assert armchair["rotation"]["w"] == pytest.approx(math.cos(math.pi / 4), abs=0.01)
         assert states[-1][1]["physics"]["bodies"]["dynamic"] == 2
         # The phone was sent it too.
-        seen = receive_until(phone, lambda event: event["type"] == "state" and furniture(event["state"]))
+        seen = receive_until(
+            phone, lambda event: event["type"] == "state" and furniture(event["state"])
+        )
         assert furniture(seen["state"])[0]["id"] == armchair["id"]
 
 
@@ -131,7 +134,11 @@ def test_a_room_holds_at_most_24_pieces(start_service, tmp_path):
         headset.recv(timeout=2)
         # Rugs side by side, 0.5 m apart, on the 4 m floor.
         for index in range(24):
-            add(headset, "rug", {"x": -1.0 + (index % 5) * 0.5, "y": 0.0, "z": -1.25 + (index // 5) * 0.5})
+            add(
+                headset,
+                "rug",
+                {"x": -1.0 + (index % 5) * 0.5, "y": 0.0, "z": -1.25 + (index // 5) * 0.5},
+            )
         add(headset, "rug", {"x": 0.0, "y": 0.0, "z": 0.0})
 
         assert error_code(headset) == "too_much_furniture"
@@ -142,7 +149,9 @@ def room(url):
     return httpx.get(f"{url}/api/room", timeout=5).json()
 
 
-def test_a_device_that_joins_later_gets_the_furniture_where_it_came_to_rest(start_service, tmp_path):
+def test_a_device_that_joins_later_gets_the_furniture_where_it_came_to_rest(
+    start_service, tmp_path
+):
     with start_service(tmp_path) as url:
         with open_socket(url, "vr_solver") as headset:
             ready(headset)
@@ -164,7 +173,9 @@ def test_making_another_room_live_clears_the_furniture(start_service, tmp_path):
         with open_socket(url, "vr_solver") as headset:
             ready(headset)
             add(headset, "lamp", {"x": 0.5, "y": 0.0, "z": 0.5})
-            receive_until(headset, lambda event: event["type"] == "state" and furniture(event["state"]))
+            receive_until(
+                headset, lambda event: event["type"] == "state" and furniture(event["state"])
+            )
 
             assert activate(url, job).status_code == 200
             state = next_state(headset, 2)

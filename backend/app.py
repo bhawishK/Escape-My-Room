@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -35,6 +36,12 @@ from backend.delivery import Outbox
 from backend.env_file import load_env_file
 from backend.errors import Refusal
 from backend.furniture import Catalogue
+from backend.furniture_generation import (
+    FurnitureGeneration,
+    GenerationRequest,
+    generator_from_environment,
+    timeout_from_environment,
+)
 from backend.live_room import LiveRoomError, LiveRooms
 from backend.physics import PhysicsWorker
 from backend.preparation import (
@@ -201,6 +208,10 @@ def create_app(
     if not 0 <= delay_ms <= 5000:
         raise ValueError("ESCAPE_ROOM_SIMULATED_DELAY_MS must be from 0 to 5000.")
     catalogue = Catalogue()
+    # Furniture made from a description (#186), kept with the data so it survives a restart.
+    generation = FurnitureGeneration(
+        data / "furniture", catalogue, generator_from_environment(), timeout_from_environment()
+    )
     room = PrototypeRoom(load_error=load_error, delivery_delay=delay_ms / 1000)
     # The server's one physics simulation (#159), started and stopped with the server.
     physics = PhysicsWorker(room.physics_changed, room.physics_moved)
@@ -434,9 +445,48 @@ def create_app(
     @app.get("/api/furniture")
     async def furniture_catalogue() -> dict[str, Any]:
         """The pieces the designer can place, with their true sizes and models (#181)."""
-        if catalogue.error is not None:
+        items = catalogue.listed()
+        # Without the built-in file, pieces made from descriptions (#186) are still listed.
+        if catalogue.error is not None and not items:
             raise HTTPException(503, catalogue.error)
-        return {"items": [item.model_dump() for item in catalogue.items.values()]}
+        return {"items": [item.model_dump() for item in items]}
+
+    @app.post("/api/furniture/jobs", status_code=202)
+    async def start_generation(request: GenerationRequest) -> dict[str, Any]:
+        """Make a piece from a description (#186): a picture first, then the 3D piece."""
+        if not generation.available:
+            raise HTTPException(
+                503, "Making furniture from a description isn't set up on this server."
+            )
+        return generation.start(request.description).model_dump()
+
+    @app.get("/api/furniture/jobs/{job_id}")
+    async def generation_job(job_id: str) -> dict[str, Any]:
+        job = generation.get(job_id)
+        if job is None:
+            raise HTTPException(404, "That furniture job does not exist.")
+        return job.model_dump()
+
+    @app.post("/api/furniture/jobs/{job_id}/cancel")
+    async def cancel_generation(job_id: str) -> dict[str, Any]:
+        job = generation.cancel(job_id)
+        if job is None:
+            raise HTTPException(404, "That furniture job does not exist.")
+        return job.model_dump()
+
+    @app.get("/api/furniture/jobs/{job_id}/image")
+    async def generation_image(job_id: str) -> FileResponse:
+        path = generation.image(job_id) if re.fullmatch(r"[0-9a-f]{12}", job_id) else None
+        if path is None:
+            raise HTTPException(404, "That job has no picture yet.")
+        return FileResponse(path, media_type="image/png")
+
+    @app.get("/api/furniture/generated/{item_id}/model.glb")
+    async def generated_model(item_id: str) -> FileResponse:
+        path = generation.model(item_id)
+        if path is None:
+            raise HTTPException(404, "That piece does not exist.")
+        return FileResponse(path, media_type="model/gltf-binary")
 
     @app.get("/api/furniture/{name}")
     async def furniture_model(name: str) -> FileResponse:
@@ -667,7 +717,7 @@ def create_app(
                             continue
                         result = room.add_furniture(
                             incoming.room_version,
-                            catalogue.items.get(incoming.item),
+                            catalogue.get(incoming.item),
                             incoming.position,
                             incoming.yaw,
                         )

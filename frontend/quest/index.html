@@ -38,6 +38,13 @@
       <section class="card">
         <h2>Furniture</h2>
         <div id="furniture-list" class="furniture-list" data-testid="furniture-list"></div>
+        <form id="furniture-make" class="furniture-make">
+          <label for="furniture-description">Make a new piece</label>
+          <input id="furniture-description" name="description" type="text" minlength="3" maxlength="200" placeholder="A green mid-century sofa, 2 m long" autocomplete="off">
+          <button id="furniture-make-button" type="submit">Make it</button>
+          <button id="furniture-cancel" class="secondary" type="button" hidden>Stop</button>
+        </form>
+        <img id="furniture-preview" class="furniture-preview" data-testid="furniture-preview" alt="The picture the new piece is made from" hidden>
         <p id="furniture-status" class="hint" data-testid="furniture-status">Choose a piece, then press on the room map where it goes and drag the way it faces.</p>
       </section>
       <section class="card">
