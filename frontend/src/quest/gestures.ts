@@ -44,6 +44,14 @@ export function handPose(joints: HandJoints): HandPose {
   return 'none';
 }
 
+/** Where a hand pinches: between its thumb tip and index tip, or null when either is unseen. */
+export function pinchPoint(joints: HandJoints): Position | null {
+  const thumb = joints['thumb-tip'];
+  const index = joints['index-finger-tip'];
+  if (!thumb || !index) return null;
+  return { x: (thumb.x + index.x) / 2, y: (thumb.y + index.y) / 2, z: (thumb.z + index.z) / 2 };
+}
+
 /**
  * Lets a pose through once it has been held `holdMs`, so a hand passing through it does nothing.
  * It then fires again only after it is let go and `cooldownMs` has passed since it fired.

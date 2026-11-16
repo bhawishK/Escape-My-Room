@@ -3,7 +3,9 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { STANDING_EYE_HEIGHT } from '../alignment';
 import type { AlignmentState, Position, PresenceState, SessionState } from '../protocol';
+import { RAY_REACH_METERS } from '../grab';
 import { applyPlacement, placeEntities } from '../room';
+import { scaleLabel, type DollhouseView } from './dollhouse';
 
 /** A ray drawn from a controller, a hand or a fingertip, in the `local` reference space. */
 export interface DrawnRay {
@@ -14,7 +16,7 @@ export interface DrawnRay {
 }
 
 const RAY_COLOURS = { miss: 0x30b0c7, target: 0xff9500, blocked: 0xff3b30 } as const;
-const REACH_METRES = 4;
+const REACH_METRES = RAY_REACH_METERS;
 /** The calm view (#156): the room fades to this while an open palm pauses the visit. */
 const CALM_COLOUR = new THREE.Color('#203040');
 const ROOM_BACKGROUND = new THREE.Color('#f5f5f7');
@@ -27,6 +29,8 @@ const ROOM_BACKGROUND = new THREE.Color('#f5f5f7');
 export class QuestRoom {
   /** Holds the room in room metres; turned and moved by the headset's alignment. */
   readonly anchor = new THREE.Group();
+  /** Draws the aligned room smaller, turned and moved as the dollhouse (#180); life size by default. */
+  private readonly dollhouse = new THREE.Group();
   private readonly loader = new GLTFLoader();
   private readonly phone: THREE.Group;
   private readonly highlight = new THREE.BoxHelper(new THREE.Object3D(), 0xffcc00);
@@ -53,7 +57,9 @@ export class QuestRoom {
     private readonly container: HTMLElement,
   ) {
     this.anchor.name = 'room-anchor';
-    scene.add(this.anchor);
+    this.dollhouse.name = 'dollhouse';
+    this.dollhouse.add(this.anchor);
+    scene.add(this.dollhouse);
     scene.background = ROOM_BACKGROUND;
     scene.add(new THREE.HemisphereLight(0xdff7ff, 0x344156, 2));
     const light = new THREE.DirectionalLight(0xffffff, 2);
@@ -107,6 +113,16 @@ export class QuestRoom {
       this.anchor.position.set(0, this.presenting ? -STANDING_EYE_HEIGHT : 0, 0);
     }
     this.container.dataset.view = alignment.status === 'aligned' ? 'calibrated' : 'overview';
+  }
+
+  /** Draws the aligned room as the dollhouse `view` says: life size, or smaller in front of the person. */
+  setDollhouse(view: DollhouseView): void {
+    this.dollhouse.position.set(view.offset.x, view.offset.y, view.offset.z);
+    this.dollhouse.rotation.y = view.yaw;
+    this.dollhouse.scale.setScalar(view.scale);
+    // Outlines are measured from world matrices now, not at the next render.
+    this.dollhouse.updateMatrixWorld(true);
+    this.container.dataset.scale = scaleLabel(view.scale);
   }
 
   /** The calm view: the room fades away until it is called again with false. */
