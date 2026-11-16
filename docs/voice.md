@@ -53,8 +53,8 @@ None of these stops the session: the room, the objects and the other person's pr
 The headset's page and its buttons are out of sight in VR, so:
 
 - **The line of text in front of the eyes** says each change of the call for two seconds: waiting for the phone, connecting, connected, the phone muted, or failed. Other lines, such as what is being held, come first.
-- **"You are muted · press B or Y to unmute"** stays for as long as the headset is muted.
-- **B or Y on a controller** mutes and unmutes. With hands only there is no mute inside VR: leave VR and use the page's **Mute** button.
+- **Hold up a fist** for about a second to mute, and again to unmute (#175). On a controller, **B or Y** does the same. How the fist is recognised is in [the headset page](quest-headset-page.md#how-the-gestures-work); it has not been tried on the Quest yet.
+- **"You are muted · hold up a fist to unmute"** stays for as long as the headset is muted. With controllers it says "press B or Y".
 - **Starting and stopping voice** are on the page, so do them before **Enter VR** or after leaving it.
 
 ## How it works
@@ -154,6 +154,7 @@ Issue #173. On the iPhone 16 in Chrome and the Meta Quest 3, with the room open 
 | The headset starts voice on the page, enters VR on `/quest/`, and both still hear each other | |
 | The line in the headset says "Voice connected" on entering, and the call survives leaving VR | |
 | B or Y mutes: the headset shows "You are muted · press B or Y to unmute", and the phone shows the headset is muted | |
+| With hands, a fist held up mutes and unmutes; see [the fist's own checklist](quest-headset-page.md#the-fist-on-the-quest-not-yet-checked) | |
 | The phone walks round the room with the room view open (8th Wall using the back camera) and voice stays up | |
 | **iPhone Chrome keeps the microphone running while 8th Wall uses the back camera** | |
 | The phone's screen locks and unlocks, and Chrome goes to the background and back: does the call drop, and does it come back? | |
