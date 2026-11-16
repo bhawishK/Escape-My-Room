@@ -48,7 +48,6 @@ interface ModelLoader { loadAsync(url: string): Promise<{ scene: THREE.Object3D 
  * away those that are gone. Each new entity gets its own copy of its node; each asset loads once.
  */
 export class LateEntities {
-  private readonly assets = new Map<string, Promise<THREE.Object3D>>();
   private readonly loading = new Set<string>();
   /** Entities whose model couldn't be drawn: tried again only with the next room. */
   private readonly failed = new Set<string>();
@@ -56,7 +55,7 @@ export class LateEntities {
   private current: Map<string, THREE.Object3D> | null = null;
   private latest: readonly RoomEntity[] = [];
 
-  constructor(private readonly loader: ModelLoader) {}
+  constructor(private readonly models: ModelCopies) {}
 
   /**
    * Brings `roots`, and the drawn `group` that holds them, in line with `entities`: new ones are
@@ -107,17 +106,29 @@ export class LateEntities {
 
   /** A placed copy of the entity's node, or null if its model can't be drawn. */
   private async copy(entity: RoomEntity): Promise<THREE.Object3D | null> {
-    let scene = this.assets.get(entity.asset_url);
-    if (!scene) {
-      scene = this.loader.loadAsync(entity.asset_url).then(gltf => gltf.scene);
-      this.assets.set(entity.asset_url, scene);
-      // A failed load may work for the next room.
-      scene.catch(() => this.assets.delete(entity.asset_url));
-    }
-    const node = (await scene.catch(() => null))?.getObjectByName(entity.node);
+    const node = await this.models.copy(entity.asset_url, entity.node);
     if (!node) return null;
-    const roots = placeEntities(new Map([[entity.asset_url, node.clone(true)]]), [{ ...entity, node: node.name }]);
+    const roots = placeEntities(new Map([[entity.asset_url, node]]), [{ ...entity, node: node.name }]);
     return roots.get(entity.id) ?? null;
+  }
+}
+
+/** Copies of nodes from glTF models, each model loaded once (#181, #184). */
+export class ModelCopies {
+  private readonly assets = new Map<string, Promise<THREE.Object3D>>();
+
+  constructor(private readonly loader: ModelLoader) {}
+
+  /** A fresh copy of the named node, or null if its model or node can't be had. */
+  async copy(url: string, node: string): Promise<THREE.Object3D | null> {
+    let scene = this.assets.get(url);
+    if (!scene) {
+      scene = this.loader.loadAsync(url).then(gltf => gltf.scene);
+      this.assets.set(url, scene);
+      // A failed load may work next time it's asked for.
+      scene.catch(() => this.assets.delete(url));
+    }
+    return (await scene.catch(() => null))?.getObjectByName(node)?.clone(true) ?? null;
   }
 }
 

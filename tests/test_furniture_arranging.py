@@ -302,3 +302,19 @@ def test_a_chair_fits_in_the_corner_beside_a_turned_sofa(start_service, tmp_path
 
         assert chair["position"]["x"] == pytest.approx(0.8, abs=0.02)
         assert chair["position"]["z"] == pytest.approx(1.3, abs=0.02)
+
+
+def test_a_chair_let_go_in_a_tenth_size_dollhouse_settles_at_the_matching_room_point(
+    start_service, tmp_path
+):
+    """The headset turns the fingertip into room metres (#184): a tenth-size dollhouse on a
+    table 1 m ahead at 0.8 m, unturned, aligned facing -z with the floor 1.6 m below the eyes.
+    A fingertip at (0.1, 0.82, -0.9) is 1 m right, 1 m back and 1.8 m up in the room."""
+    with start_service(tmp_path) as url, open_socket(url, "vr_solver") as headset:
+        ready(headset)
+        chair = placed(headset, "chair", {"x": 1.0, "y": 1.8, "z": 1.0})
+
+        # It fell the 1.8 m to the floor, where the fingertip pointed.
+        assert chair["position"]["x"] == pytest.approx(1.0, abs=0.02)
+        assert chair["position"]["z"] == pytest.approx(1.0, abs=0.02)
+        assert chair["position"]["y"] == pytest.approx(0.0, abs=0.01)

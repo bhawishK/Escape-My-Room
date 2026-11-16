@@ -7,7 +7,7 @@ import type { SplatDrawn } from './tracking-stats';
 import type {
   AlignmentState, Position, PresenceState, Role, RoomEntity, SessionState,
 } from './protocol';
-import { LateEntities, applyPlacement, placeEntities, roomOwn } from './room';
+import { LateEntities, ModelCopies, applyPlacement, placeEntities, roomOwn } from './room';
 
 const emptyRoom = (): SessionState['room'] => ({
   available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
@@ -26,7 +26,7 @@ export class DiagnosticScene {
   private localRole: Role | null = null;
   private readonly grid: THREE.GridHelper;
   private readonly loader = new GLTFLoader();
-  private readonly late = new LateEntities(this.loader);
+  private readonly late = new LateEntities(new ModelCopies(this.loader));
   private readonly container: HTMLElement;
   private readonly roomAnchor = new THREE.Group();
   private roomGroup: THREE.Group | null = null;

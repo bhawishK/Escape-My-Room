@@ -18,7 +18,8 @@ import { RoomMap, type Spot } from '../room-map';
 import { SessionClient } from '../session';
 import { VoiceCall, voiceLine, voiceNote } from '../voice';
 import {
-  DollhouseCarry, DollhouseScaling, fromDollhouse, yawOf, orientationFromDollhouse, scaleLabel, velocityFromDollhouse,
+  DollhouseCarry, DollhouseScaling, GripSmoother, dollhousePlacement, fromDollhouse, paletteSlots,
+  slotAt, throwInRoom, yawOf, orientationFromDollhouse, scaleLabel, velocityFromDollhouse,
 } from './dollhouse';
 import { Dwell, GestureGate, HeadNods } from './gestures';
 import { readFrame, type FrameSample, type InputSample, type Pose, type Ray } from './hands';
@@ -70,6 +71,12 @@ let grabOffset: { x: number; y: number; z: number } | null = null;
 let releasing: number | null = null;
 /** The held object's recent places, for the speed it is thrown at, and the latest grip. */
 const swing = new ThrowVelocity();
+/** Steadies the holding hand in a small room, where its tremble is many times larger (#184). */
+const smoother = new GripSmoother();
+/** The catalogue, for the palette above the hand while the room is small (#184). */
+let catalogueItems: CatalogueItem[] = [];
+/** A piece taken from the palette, the input holding it, and where it was last held. */
+let taking: { item: CatalogueItem; source: XRInputSource; last: Pose | null } | null = null;
 let lastGripPose: { position: Position; orientation: Rotation } | null = null;
 /** Each input's holding and confirm last frame, to tell a press from a hold. */
 const wasHolding = new WeakMap<XRInputSource, boolean>();
@@ -216,7 +223,12 @@ const client = new SessionClient({
     controls();
   },
   selection: () => {},
-  error: message => showError(message),
+  error: message => {
+    showError(message);
+    // In VR the page is out of sight, so a refusal, such as a piece let go off the floor, is
+    // said in the headset too.
+    if (xrActive) gesture(message, performance.now());
+  },
 });
 
 function applyState(next: SessionState): void {
@@ -418,6 +430,7 @@ async function showCatalogue(): Promise<void> {
     const response = await fetch('/api/furniture');
     if (!response.ok) throw new Error();
     const { items } = await response.json() as { items: CatalogueItem[] };
+    catalogueItems = items;
     furnitureList.replaceChildren(...items.map(item => {
       const button = document.createElement('button');
       button.type = 'button';
@@ -453,8 +466,21 @@ function pickOnMap(spot: Spot, heading: number | null): void {
 const map = new RoomMap(element('quest-map'), 'quest-map', { pick: pickOnMap });
 void showCatalogue();
 
+/** Places the piece taken from the palette where it was last held (#184); it then falls there. */
+function placeTaken(): void {
+  const piece = taking;
+  taking = null;
+  const alignment = aligned();
+  const version = state?.room.room_version;
+  if (!piece?.last || !alignment || version === null || version === undefined) return;
+  const { position, yaw } = dollhousePlacement(scaling.view, alignment, piece.last.position, piece.last.orientation);
+  // Python takes a yaw from -π to π.
+  client.sendAddFurniture(version, piece.item.id, position, Math.atan2(Math.sin(yaw), Math.cos(yaw)));
+}
+
 /** Back to life size: the dollhouse is drawn from an alignment that is about to change or is gone. */
 function lifeSize(): void {
+  taking = null;
   carry.end();
   carrier = null;
   scaling.reset();
@@ -475,7 +501,8 @@ function confirmAlignment(): void {
 function release(throwing = false): void {
   const mine = ownHold();
   holder = null;
-  const velocity = throwing ? swing.velocity(performance.now()) ?? undefined : undefined;
+  const moving = throwing ? swing.velocity(performance.now()) : null;
+  const velocity = moving ? throwInRoom(scaling.view, moving) ?? undefined : undefined;
   swing.clear();
   const finalGrip = lastGripPose;
   lastGripPose = null;
@@ -567,6 +594,7 @@ function takeHold(input: InputSample, gazeTarget: string | null): 'held' | 'refu
   const position = inRoom(alignment, grip.position);
   const orientation = turnInRoom(alignment, grip.orientation);
   holder = input.source;
+  smoother.reset();
   grabOffset = offsetOf(position, orientation, entity.position);
   client.sendAcquire(version, entity.id, { position, orientation });
   return 'held';
@@ -614,7 +642,7 @@ function frame(xrFrame: XRFrame, time: number): void {
   // The dollhouse is drawn from the alignment: without one, back to life size, carried or not.
   if (!alignment) lifeSize();
   const pinches = paused ? [] : sample.inputs
-    .filter(input => input.holding && input.source !== holder)
+    .filter(input => input.holding && input.source !== holder && input.source !== taking?.source)
     .flatMap(input => input.pinchAt ? [input.pinchAt] : []);
   room?.setDollhouse(scaling.update(pinches, alignment !== null && !holder && !ownHold()));
 
@@ -627,6 +655,13 @@ function frame(xrFrame: XRFrame, time: number): void {
     if (answer) gesture(answer === 'yes' ? 'Yes (nod)' : 'No (shake)', time);
   }
 
+  // While the room is small, the catalogue floats above the left hand (#184).
+  const paletteInput = sample.inputs.find(input => input.source.handedness === 'left');
+  const paletteAt = paletteInput?.grip?.position ?? paletteInput?.pinchAt ?? null;
+  const slots = alignment && scaling.view.scale < 1 && !paused && !scaling.scaling && head && paletteAt &&
+    catalogueItems.length > 0 ? paletteSlots(paletteAt, yawOf(head.orientation), catalogueItems.length) : null;
+  room?.showPalette(catalogueItems, slots);
+
   // Holding: a press of the grip or a pinch takes hold; letting go puts the object down.
   for (const input of sample.inputs) {
     if (input.confirm && !wasConfirming.get(input.source)) confirmAlignment();
@@ -636,6 +671,23 @@ function frame(xrFrame: XRFrame, time: number): void {
     wasMuting.set(input.source, input.mute);
     const before = wasHolding.get(input.source) ?? false;
     wasHolding.set(input.source, input.holding);
+    // A pinch on the palette takes that piece into the hand at once (#184).
+    if (input.holding && !before && !holder && !taking && slots && input.pinchAt &&
+      input.source !== paletteInput?.source) {
+      const index = slotAt(slots, input.pinchAt);
+      if (index !== null) {
+        taking = { item: catalogueItems[index], source: input.source, last: null };
+        pressedAt.delete(input.source);
+        continue;
+      }
+    }
+    // Let go, the piece taken is placed at the room point under the fingertip (#184).
+    if (taking?.source === input.source && !input.holding) {
+      // Paused, the piece is put away rather than placed.
+      if (paused) taking = null;
+      else placeTaken();
+      continue;
+    }
     // A press while something is held, while scaling or while paused takes hold of nothing.
     if (input.holding && !before && !holder) pressedAt.set(input.source, time);
     if (!input.holding || holder || scaling.scaling || paused) pressedAt.delete(input.source);
@@ -656,9 +708,9 @@ function frame(xrFrame: XRFrame, time: number): void {
       carry.end();
       carrier = null;
     }
-    // Opening the hand throws at life size. In the dollhouse a hand's drift is many times larger
-    // in the room, so letting go there only puts the object down.
-    if (!input.holding && before && holder === input.source) release(scaling.view.scale === 1);
+    // Opening the hand throws what it held: in the dollhouse as far as the toss looks, and a
+    // slow drift only puts it down (#184).
+    if (!input.holding && before && holder === input.source) release(true);
   }
   // The carried dollhouse follows its hand; two pinches scaling it, or the hand gone, end that.
   const carrierInput = sample.inputs.find(input => input.source === carrier);
@@ -670,17 +722,32 @@ function frame(xrFrame: XRFrame, time: number): void {
     scaling.view = carry.update(carryGrip);
     room?.setDollhouse(scaling.view);
   }
+  const takingInput = taking ? sample.inputs.find(input => input.source === taking?.source) : undefined;
+  if (taking && (!takingInput || paused || scaling.view.scale >= 1)) {
+    taking = null;
+  } else if (taking && takingInput?.pinchAt && takingInput.grip) {
+    taking.last = { position: takingInput.pinchAt, orientation: takingInput.grip.orientation };
+  }
+  room?.showHeld(
+    taking?.item ?? null,
+    taking?.last ? { position: taking.last.position, yaw: yawOf(taking.last.orientation) } : null,
+    scaling.view.scale,
+  );
   const mine = ownHold();
   const holding = sample.inputs.find(input => input.source === holder);
   if (holder && !holding) release();
   const grip = holding && gripOf(holding);
   if (mine && grip && grabOffset && alignment) {
-    // In room metres, so a swing in the dollhouse throws as far as it looks (#180).
-    const position = inRoom(alignment, grip.position);
+    // Steadied in a small room, then in room metres (#180, #184).
+    const steady = smoother.smooth(grip.position, time, scaling.view.scale);
+    const position = inRoom(alignment, steady);
     const orientation = turnInRoom(alignment, grip.orientation);
     const carried = grabbedPosition(position, orientation, grabOffset);
     room?.predict(mine.entity, carried);
-    swing.add(carried, performance.now());
+    // A throw is the held point's own motion in room metres, wrist flick included, measured
+    // without the smoothing's lag; its regression over 100 ms steadies it instead.
+    const unsteadied = inRoom(alignment, grip.position);
+    swing.add(grabbedPosition(unsteadied, orientation, grabOffset), performance.now());
     lastGripPose = { position, orientation };
     if (time - lastGrip >= GRIP_MS && client.sendGrip(mine.id, lastGripPose)) lastGrip = time;
   }
@@ -741,6 +808,7 @@ function showHud(time: number, blocked: boolean): void {
   const text = pauseNotice
     ?? (scaling.scaling ? `Room at ${scaleLabel(scaling.view.scale)} · let go to keep this size` : null)
     ?? (carrier ? 'Carrying the room · let go to leave it here' : null)
+    ?? (taking ? `${taking.item.name} · let go over the dollhouse to place it` : null)
     ?? (blocked ? BLOCKED : null)
     ?? (held?.owner === 'mobile_master' ? `Phone is holding ${label(held.entity)}` : null)
     ?? (held?.owner === 'vr_solver' ? `Holding ${label(held.entity)} · let go to put it down` : null)

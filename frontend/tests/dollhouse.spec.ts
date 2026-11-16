@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { pinchPoint } from '../src/quest/gestures';
 import {
-  DollhouseCarry, DollhouseScaling, LIFE_SIZE, fromDollhouse, residentFigure, scaleLabel, orientationFromDollhouse, orientationToDollhouse, toDollhouse,
+  DollhouseCarry, DollhouseScaling, GripSmoother, LIFE_SIZE, dollhousePlacement, fromDollhouse, paletteSlots, residentFigure, scaleLabel, slotAt, throwInRoom, orientationFromDollhouse, orientationToDollhouse, toDollhouse,
   velocityFromDollhouse, velocityToDollhouse, type DollhouseView,
 } from '../src/quest/dollhouse';
 
@@ -251,4 +251,95 @@ test('a hand pointing straight up still turns the dollhouse only by its turn abo
   carry.begin(pitched(0), TABLE);
   expect(carry.update(pitched(0.01)).yaw).toBeCloseTo(TABLE.yaw + 0.01, 6);
   expect(carry.update(pitched(0.5)).yaw).toBeCloseTo(TABLE.yaw + 0.5, 6);
+});
+
+// #184: furniture in the dollhouse.
+
+test('a piece let go at a fingertip in the dollhouse is placed at the room point under it', () => {
+  // Aligned facing room -z from the origin: room and `local` space agree, the eyes 1.6 m up.
+  const alignment = { yaw: 0, origin: { x: 0, y: 1.6, z: 0 } };
+  // A tenth-size room on a table 1 m ahead at 0.8 m, unturned.
+  const view = { scale: 0.1, yaw: 0, offset: { x: 0, y: 0.8, z: -1 } };
+  // The fingertip 20 cm right of and 5 cm behind the table point, 2 cm above the tabletop.
+  const placement = dollhousePlacement(view, alignment, { x: 0.2, y: 0.82, z: -0.95 }, { x: 0, y: 0, z: 0, w: 1 });
+
+  // Ten times as far in the room: 2 m right, 0.5 m back, and 0.2 m above the `local` origin,
+  // which this alignment puts 1.6 m above the room's floor: 1.8 m up.
+  close(placement.position, { x: 2, y: 1.8, z: 0.5 });
+  expect(placement.yaw).toBeCloseTo(0, 9);
+});
+
+test('a piece turned in the hand, in a turned dollhouse, keeps its turn relative to the room', () => {
+  const alignment = { yaw: 0, origin: { x: 0, y: 1.6, z: 0 } };
+  const view = { scale: 0.1, yaw: Math.PI / 2, offset: { x: 0, y: 0.8, z: -1 } };
+  const handTurned = { x: 0, y: Math.sin(Math.PI / 4), z: 0, w: Math.cos(Math.PI / 4) };
+  // The hand turned a quarter left in a dollhouse turned a quarter left: square with the room.
+  expect(dollhousePlacement(view, alignment, { x: 0, y: 0.8, z: -1 }, handTurned).yaw).toBeCloseTo(0, 9);
+});
+
+test('a toss in a tenth-size dollhouse flies ten times as fast in the room', () => {
+  const view = { scale: 0.1, yaw: 0, offset: { x: 0, y: 0.8, z: -1 } };
+  // The held piece's point, measured in room metres, already moves ten times the hand's speed:
+  // a 0.5 m/s toss is 5 m/s in the room, and it is thrown at that.
+  close(throwInRoom(view, { x: 5, y: 2, z: 0 })!, { x: 5, y: 2, z: 0 });
+  // The hand's own swing, turned into the room's: ten times as fast, as the room is drawn.
+  close(velocityFromDollhouse(view, { x: 0.5, y: 0.2, z: 0 }), { x: 5, y: 2, z: 0 });
+});
+
+test('a hand drifting as it lets go in a small dollhouse puts the piece down rather than throwing it', () => {
+  const view = { scale: 1 / 40, yaw: 0, offset: { x: 0, y: 0.8, z: -1 } };
+  // 2 m/s in the room is the hand drifting 5 cm a second.
+  expect(throwInRoom(view, { x: 2, y: 0, z: 0 })).toBeNull();
+  // 16 m/s in the room is a real 40 cm/s toss.
+  close(throwInRoom(view, { x: 16, y: 0, z: 0 })!, { x: 16, y: 0, z: 0 });
+  // At life size any swing throws, as before.
+  close(throwInRoom(LIFE_SIZE, { x: 0.05, y: 0, z: 0 })!, { x: 0.05, y: 0, z: 0 });
+});
+
+test('in a 1:40 dollhouse a hand trembling 3 mm either way moves the piece under 1 mm', () => {
+  const smoother = new GripSmoother();
+  const small = 1 / 40;
+  let low = Infinity;
+  let high = -Infinity;
+  // 90 frames a second for a second; only the last half counts, once it has settled.
+  for (let frame = 0; frame < 90; frame += 1) {
+    const x = frame % 2 === 0 ? 0.003 : -0.003;
+    const smoothed = smoother.smooth({ x, y: 1, z: -0.5 }, frame * 11, small);
+    if (frame >= 45) {
+      low = Math.min(low, smoothed.x);
+      high = Math.max(high, smoothed.x);
+    }
+  }
+  expect(high - low).toBeLessThan(0.001);
+});
+
+test('a smoothed hand still arrives: 300 ms after moving 10 cm it is within a millimetre', () => {
+  const smoother = new GripSmoother();
+  smoother.smooth({ x: 0, y: 1, z: -0.5 }, 0, 1 / 40);
+  let now = { x: 0, y: 0, z: 0 };
+  for (let time = 11; time <= 300; time += 11) now = smoother.smooth({ x: 0.1, y: 1, z: -0.5 }, time, 1 / 40);
+  expect(Math.abs(now.x - 0.1)).toBeLessThan(0.001);
+});
+
+test('at life size the hand is not smoothed at all', () => {
+  const smoother = new GripSmoother();
+  smoother.smooth({ x: 0, y: 1, z: -0.5 }, 0, 1);
+  close(smoother.smooth({ x: 0.003, y: 1, z: -0.5 }, 11, 1), { x: 0.003, y: 1, z: -0.5 });
+});
+
+test('the palette is a row 6 cm apart, 12 cm above the hand, running to the right of the face', () => {
+  const ahead = paletteSlots({ x: 0, y: 1, z: -0.4 }, 0, 3);
+  close(ahead[0], { x: -0.06, y: 1.12, z: -0.4 });
+  close(ahead[2], { x: 0.06, y: 1.12, z: -0.4 });
+  // Facing left (-x), the person's right is -z.
+  const left = paletteSlots({ x: 0, y: 1, z: -0.4 }, Math.PI / 2, 3);
+  close(left[0], { x: 0, y: 1.12, z: -0.34 });
+  close(left[2], { x: 0, y: 1.12, z: -0.46 });
+});
+
+test('a pinch within 3.5 cm of a slot takes that piece; anywhere else takes none', () => {
+  const slots = paletteSlots({ x: 0, y: 1, z: -0.4 }, 0, 3);
+  expect(slotAt(slots, { x: 0.07, y: 1.13, z: -0.41 })).toBe(2);
+  expect(slotAt(slots, { x: 0.01, y: 1.12, z: -0.4 })).toBe(1);
+  expect(slotAt(slots, { x: 0.03, y: 1.2, z: -0.4 })).toBeNull();
 });
