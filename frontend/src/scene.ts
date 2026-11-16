@@ -7,7 +7,7 @@ import type { SplatDrawn } from './tracking-stats';
 import type {
   AlignmentState, Position, PresenceState, Role, RoomEntity, SessionState,
 } from './protocol';
-import { applyPlacement, placeEntities } from './room';
+import { LateEntities, applyPlacement, placeEntities, roomOwn } from './room';
 
 const emptyRoom = (): SessionState['room'] => ({
   available: false, room_version: null, units: null, frame: null, quaternion_order: null, error: null,
@@ -26,6 +26,7 @@ export class DiagnosticScene {
   private localRole: Role | null = null;
   private readonly grid: THREE.GridHelper;
   private readonly loader = new GLTFLoader();
+  private readonly late = new LateEntities(this.loader);
   private readonly container: HTMLElement;
   private readonly roomAnchor = new THREE.Group();
   private roomGroup: THREE.Group | null = null;
@@ -390,8 +391,10 @@ export class DiagnosticScene {
       const token = ++this.loadToken;
       const version = room.room_version;
       this.loadingVersion = version;
-      // Load every asset before showing any, so a failure never leaves a partial room.
-      const urls = [...new Set(room.entities.map(entity => entity.asset_url))];
+      // Load every asset before showing any, so a failure never leaves a partial room. Placed
+      // furniture is drawn by `late` once the room shows: several pieces can share one model.
+      const own = roomOwn(room.entities);
+      const urls = [...new Set(own.map(entity => entity.asset_url))];
       // A phone draws the lighter copy when the room has one.
       const splatUrl = this.localRole === 'mobile_master' && room.splat_phone_url ? room.splat_phone_url : room.splat_url;
       let roots: Map<string, THREE.Object3D>;
@@ -410,7 +413,7 @@ export class DiagnosticScene {
           splat?.dispose();
           return null;
         }
-        roots = placeEntities(new Map(scenes), room.entities);
+        roots = placeEntities(new Map(scenes), own);
       } catch (error) {
         if (token !== this.loadToken) return null;
         this.clearRoom();
@@ -422,7 +425,8 @@ export class DiagnosticScene {
         splat.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
         splat.scale.setScalar(scale);
       }
-      this.attach(roots, splat, room.entities);
+      this.attach(roots, splat, own);
+      this.drawLate(room.entities);
       this.splatDrawn = splat && splatUrl ? { file: splatUrl.split('/').pop() ?? splatUrl, splats: splat.packedSplats?.numSplats ?? 0 } : null;
       this.changedAt = performance.now();
       this.loadedVersion = version;
@@ -430,6 +434,7 @@ export class DiagnosticScene {
       return { version, acknowledge: true };
     }
     const gliding = this.smoothed ? this.entityRoots.get(this.smoothed.id)?.position.clone() : undefined;
+    this.drawLate(room.entities);
     applyPlacement(this.entityRoots, room.entities);
     // Applied with every state message: only a moved object counts as a change.
     const placed = JSON.stringify(room.entities.map(entity => [entity.position, entity.rotation]));
@@ -455,6 +460,15 @@ export class DiagnosticScene {
     if (this.predicted) this.entityRoots.get(this.predicted.id)?.position.copy(this.predicted.position);
     this.outlineSelection();
     return { version: room.room_version, acknowledge: false };
+  }
+
+  /** Draws furniture placed since the room loaded (#181), and takes away what is gone. */
+  private drawLate(entities: readonly RoomEntity[]): void {
+    if (!this.roomGroup) return;
+    this.late.sync(entities, this.entityRoots, this.roomGroup, furniture => {
+      this.changedAt = performance.now();
+      this.container.dataset.furniture = String(furniture);
+    });
   }
 
   clearRoom(): void {

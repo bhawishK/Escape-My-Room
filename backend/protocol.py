@@ -101,6 +101,17 @@ class AcquireMessage(WireModel):
     orientation: Orientation | None = None
 
 
+class AddFurnitureMessage(WireModel):
+    """Place a catalogue piece (#181) at a room-frame position, turned `yaw` radians to the left.
+    It starts no lower than the floor and falls there if it is higher."""
+
+    type: Literal["add_furniture"]
+    room_version: int = Field(ge=1)
+    item: str = Field(max_length=64)
+    position: Position
+    yaw: float = Field(ge=-3.141592653589793, le=3.141592653589793)
+
+
 class Velocity(WireModel):
     """A velocity in room metres per second. Any finite speed is accepted, and physics caps it;
     the bound only keeps the numbers sane."""

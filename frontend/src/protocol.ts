@@ -26,6 +26,17 @@ export interface RoomEntity {
   position: Position;
   rotation: Rotation;
   size: { width: number; height: number; depth: number };
+  /** The catalogue piece it was placed from (#181); absent or null for the room's own objects. */
+  furniture?: string | null;
+}
+
+/** A piece the designer can place (#181), from GET /api/furniture. */
+export interface CatalogueItem {
+  id: string;
+  name: string;
+  node: string;
+  size: { width: number; height: number; depth: number };
+  model_url: string;
 }
 
 export interface RoomState {

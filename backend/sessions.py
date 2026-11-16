@@ -10,6 +10,7 @@ from fastapi import WebSocket
 
 from backend.alignment import Alignment
 from backend.delivery import Outbox
+from backend.furniture import CatalogueItem, furniture_entity, on_floor
 from backend.grab import grab_offset, grabbed_point, normalize
 from backend.physics import PhysicsWorker
 from backend.prepared_room import (
@@ -36,6 +37,9 @@ from backend.protocol import (
 
 # A tracked participant who stops sending is marked stale after this long. The last place stays.
 PRESENCE_STALE_AFTER = 1.5
+
+# A room holds at most this many placed pieces (#181), so a stuck client can't fill it without end.
+MAX_FURNITURE = 24
 
 # A carried object sits where the screen's centre meets the floor, no nearer or further than this.
 CARRY_NEAREST = 0.3
@@ -89,6 +93,8 @@ class PrototypeRoom:
     # The one hold in progress, shared with both devices; its id counts up across holds.
     manipulation: Manipulation | None = None
     manipulation_count: int = 0
+    # Placed furniture is numbered furniture_1, furniture_2, ... and a number is never reused.
+    furniture_count: int = 0
     alignment: dict[Role, Alignment] = field(
         default_factory=lambda: {
             "mobile_master": Alignment(),
@@ -194,6 +200,30 @@ class PrototypeRoom:
                 self.revision += 1
                 return "ok"
         return "unknown"
+
+    def add_furniture(
+        self, room_version: int, item: CatalogueItem | None, position: Position, yaw: float
+    ) -> str:
+        """Place a catalogue piece (#181). It starts no lower than the floor, and physics drops
+        it there from higher up."""
+        if self.load_error is not None or self.room_version is None:
+            return "unavailable"
+        if room_version != self.room_version:
+            return "mismatch"
+        if item is None:
+            return "unknown_item"
+        if sum(1 for entity in self.entities if entity.furniture) >= MAX_FURNITURE:
+            return "too_many"
+        start = on_floor(self.entities, position, item.size, yaw)
+        if start is None:
+            return "outside"
+        self.furniture_count += 1
+        entity = furniture_entity(f"furniture_{self.furniture_count}", item, start, yaw)
+        self.entities.append(entity)
+        if self.physics is not None:
+            self.physics.add(entity)
+        self.revision += 1
+        return "ok"
 
     def accept_alignment(self, role: Role, yaw: float, origin: Position) -> str:
         if self.load_error is not None or self.room_version is None:

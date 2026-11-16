@@ -2,9 +2,9 @@ import type { SplatMesh } from '@sparkjsdev/spark';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { STANDING_EYE_HEIGHT } from '../alignment';
-import type { AlignmentState, Position, PresenceState, SessionState } from '../protocol';
+import type { AlignmentState, Position, PresenceState, RoomEntity, SessionState } from '../protocol';
 import { RAY_REACH_METERS } from '../grab';
-import { applyPlacement, placeEntities } from '../room';
+import { LateEntities, applyPlacement, placeEntities, roomOwn } from '../room';
 import { scaleLabel, type DollhouseView } from './dollhouse';
 
 /** A ray drawn from a controller, a hand or a fingertip, in the `local` reference space. */
@@ -32,6 +32,7 @@ export class QuestRoom {
   /** Draws the aligned room smaller, turned and moved as the dollhouse (#180); life size by default. */
   private readonly dollhouse = new THREE.Group();
   private readonly loader = new GLTFLoader();
+  private readonly late = new LateEntities(this.loader);
   private readonly phone: THREE.Group;
   private readonly highlight = new THREE.BoxHelper(new THREE.Object3D(), 0xffcc00);
   private readonly control = new THREE.BoxHelper(new THREE.Object3D(), 0xff9500);
@@ -210,6 +211,7 @@ export class QuestRoom {
     }
     if (this.loadedVersion === room.room_version) {
       const glidingFrom = this.gliding ? this.entityRoots.get(this.gliding.id)?.position.clone() : undefined;
+      this.drawLate(room.entities);
       applyPlacement(this.entityRoots, room.entities);
       const root = this.gliding ? this.entityRoots.get(this.gliding.id) : undefined;
       if (this.gliding && root && glidingFrom) {
@@ -224,8 +226,10 @@ export class QuestRoom {
     const version = room.room_version;
     this.loadingVersion = version;
     try {
-      // Every asset loads before any shows, so a failure never leaves half a room.
-      const urls = [...new Set(room.entities.map(entity => entity.asset_url))];
+      // Every asset loads before any shows, so a failure never leaves half a room. Placed
+      // furniture is drawn by `late` once the room shows: several pieces can share one model.
+      const own = roomOwn(room.entities);
+      const urls = [...new Set(own.map(entity => entity.asset_url))];
       const [scenes, splat] = await Promise.all([
         Promise.all(urls.map(url => this.loader.loadAsync(url).then(
           gltf => [url, gltf.scene] as const,
@@ -237,7 +241,7 @@ export class QuestRoom {
         splat?.dispose();
         return null;
       }
-      const roots = placeEntities(new Map(scenes), room.entities);
+      const roots = placeEntities(new Map(scenes), own);
       if (splat && room.splat_placement) {
         const { position, rotation, scale } = room.splat_placement;
         splat.position.set(position.x, position.y, position.z);
@@ -245,6 +249,7 @@ export class QuestRoom {
         splat.scale.setScalar(scale);
       }
       this.attach(roots, splat, room);
+      this.drawLate(room.entities);
       this.loadedVersion = version;
       return { version, loaded: true };
     } catch (error) {
@@ -253,6 +258,14 @@ export class QuestRoom {
     } finally {
       if (token === this.loadToken) this.loadingVersion = null;
     }
+  }
+
+  /** Draws furniture placed since the room loaded (#181), and takes away what is gone. */
+  private drawLate(entities: readonly RoomEntity[]): void {
+    if (!this.roomGroup) return;
+    this.late.sync(entities, this.entityRoots, this.roomGroup, furniture => {
+      this.container.dataset.furniture = String(furniture);
+    });
   }
 
   private attach(roots: Map<string, THREE.Object3D>, splat: SplatMesh | null, room: SessionState['room']): void {

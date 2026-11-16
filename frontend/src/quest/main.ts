@@ -10,7 +10,9 @@ import type * as THREE from 'three';
 import { alignmentFromPose, roomDirection, roomOrientation, roomPoint, type CalibrationInput } from '../alignment';
 import { element } from '../dom';
 import { RAY_REACH_METERS, grabbedPosition, offsetOf, rayForward, targetAlongRay } from '../grab';
-import type { AlignmentState, Position, PresenceInput, RoomEntity, Rotation, SessionState } from '../protocol';
+import type {
+  AlignmentState, CatalogueItem, Position, PresenceInput, RoomEntity, Rotation, SessionState,
+} from '../protocol';
 import { RoomMap, type Spot } from '../room-map';
 import { SessionClient } from '../session';
 import { VoiceCall, voiceLine, voiceNote } from '../voice';
@@ -271,7 +273,63 @@ function standOnMap(spot: Spot, heading: number | null): void {
     origin: { x: cosine * x + sine * z + spot.x, y, z: -sine * x + cosine * z + spot.z },
   });
 }
-const map = new RoomMap(element('quest-map'), 'quest-map', { pick: standOnMap });
+
+/** The catalogue piece the next press on the map places (#181), or null to stand there instead. */
+let chosenPiece: CatalogueItem | null = null;
+const furnitureList = element('furniture-list');
+const furnitureStatus = element('furniture-status');
+const FURNITURE_HINT = furnitureStatus.textContent ?? '';
+
+function choosePiece(item: CatalogueItem | null): void {
+  chosenPiece = chosenPiece?.id === item?.id ? null : item;
+  for (const button of furnitureList.querySelectorAll<HTMLButtonElement>('button')) {
+    button.setAttribute('aria-pressed', String(button.dataset.item === chosenPiece?.id));
+  }
+  furnitureStatus.textContent = chosenPiece
+    ? `Press on the room map where the ${chosenPiece.name.toLowerCase()} goes, and drag the way it faces.`
+    : FURNITURE_HINT;
+}
+
+/** The catalogue's pieces as buttons, each with its true size. */
+async function showCatalogue(): Promise<void> {
+  try {
+    const response = await fetch('/api/furniture');
+    if (!response.ok) throw new Error();
+    const { items } = await response.json() as { items: CatalogueItem[] };
+    furnitureList.replaceChildren(...items.map(item => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.item = item.id;
+      button.setAttribute('aria-pressed', 'false');
+      const { width, depth, height } = item.size;
+      button.textContent = `${item.name} · ${width} × ${depth} × ${height} m`;
+      button.addEventListener('click', () => choosePiece(item));
+      return button;
+    }));
+  } catch {
+    furnitureStatus.textContent = 'The furniture catalogue could not be loaded. Reload to try again.';
+  }
+}
+
+/** A press on the map places the chosen piece there, facing the way dragged; else the person stands there. */
+function pickOnMap(spot: Spot, heading: number | null): void {
+  const piece = chosenPiece;
+  const version = state?.room.room_version;
+  if (!piece) {
+    standOnMap(spot, heading);
+    return;
+  }
+  if (!connected || version === null || version === undefined) {
+    // The piece stays chosen, for when the room is back.
+    furnitureStatus.textContent = `The ${piece.name.toLowerCase()} can be placed once the headset is connected and the room has loaded.`;
+    return;
+  }
+  // Python lifts it to the floor's top; it faces -z unless dragged another way.
+  client.sendAddFurniture(version, piece.id, { x: spot.x, y: 0, z: spot.z }, heading ?? 0);
+  choosePiece(null);
+}
+const map = new RoomMap(element('quest-map'), 'quest-map', { pick: pickOnMap });
+void showCatalogue();
 
 /** Back to life size: the dollhouse is drawn from an alignment that is about to change or is gone. */
 function lifeSize(): void {
