@@ -9,11 +9,14 @@ import { ReferenceSpaceType, VERSION, World } from '@iwsdk/core';
 import type * as THREE from 'three';
 import { alignmentFromPose, roomDirection, roomOrientation, roomPoint, type CalibrationInput } from '../alignment';
 import { element } from '../dom';
-import { grabbedPosition, offsetOf, rayForward, targetAlongRay } from '../grab';
+import { RAY_REACH_METERS, grabbedPosition, offsetOf, rayForward, targetAlongRay } from '../grab';
 import type { AlignmentState, Position, PresenceInput, RoomEntity, Rotation, SessionState } from '../protocol';
 import { RoomMap, type Spot } from '../room-map';
 import { SessionClient } from '../session';
 import { VoiceCall, voiceLine, voiceNote } from '../voice';
+import {
+  DollhouseScaling, fromDollhouse, orientationFromDollhouse, scaleLabel, velocityFromDollhouse,
+} from './dollhouse';
 import { Dwell, GestureGate, HeadNods } from './gestures';
 import { readFrame, type FrameSample, type InputSample, type Pose, type Ray } from './hands';
 import { Hud } from './hud';
@@ -24,12 +27,16 @@ import { ThrowVelocity } from './throw';
 const PRESENCE_MS = 50;
 const GRIP_MS = 100;
 const REPORT_MS = 500;
+/** A press waits this long for a second one, which together scale the room instead (#180). */
+const PAIR_MS = 150;
 /** Resting the gaze this long on an object starts a topic about it. */
 const DWELL_MS = 1500;
 /** A pointing finger draws its ray once it has pointed this long, so a hand passing through does not. */
 const POINT_MS = 200;
 /** A gesture line in the headset stays this long. */
 const SAID_MS = 2000;
+/** How far the gaze reaches for an object at life size, in room metres. */
+const GAZE_METRES = 6;
 /** Static objects this thin are the floor, which the gaze is not starting a topic about. */
 const FLOOR_METRES = 0.05;
 /** Before a tracked head pose, lining up takes the `local` origin as the floor centre. */
@@ -65,6 +72,8 @@ let lastGripPose: { position: Position; orientation: Rotation } | null = null;
 const wasHolding = new WeakMap<XRInputSource, boolean>();
 const wasConfirming = new WeakMap<XRInputSource, boolean>();
 const wasMuting = new WeakMap<XRInputSource, boolean>();
+/** When each input's press began, while it waits to see whether a second pinch scales the room. */
+const pressedAt = new WeakMap<XRInputSource, number>();
 /** What the voice call last said in the headset, and until when (#173). */
 let voiceSaid: { text: string; until: number } | null = null;
 /** How to unmute from inside VR, as the headset's line says it. */
@@ -78,6 +87,8 @@ let gestureLine: { text: string; until: number } | null = null;
 /** The open palm's pause: the room fades, and nothing is held or aimed until it ends. */
 let paused = false;
 const palmGate = new GestureGate<'open-palm'>({ holdMs: 800, cooldownMs: 1500 });
+/** Two pinches shrink the room into a dollhouse and grow it back (#180). Only this headset's view. */
+const scaling = new DollhouseScaling();
 const nods = new HeadNods();
 const dwell = new Dwell(DWELL_MS);
 let lastPresence = -Infinity;
@@ -137,6 +148,7 @@ function report(): void {
     xr_frame_rate_hz: Number((frameTimes.length / 5).toFixed(1)),
     room_version: state?.room.room_version ?? null,
     splat: sceneElement.dataset.splat === 'shown',
+    room_scale: scaleLabel(scaling.view.scale),
     gestures: gestureLog.slice(-20),
     voice: voice.report(),
     user_agent: navigator.userAgent,
@@ -246,6 +258,7 @@ function applyState(next: SessionState): void {
 /** The person stands on the page's map: the alignment is turned and moved so they are there. */
 function standOnMap(spot: Spot, heading: number | null): void {
   if (!connected) return;
+  lifeSize();
   const now = calibrationNow ?? NO_CALIBRATION;
   const current = aligned();
   // A tap without a drag keeps the way the person faces now.
@@ -260,9 +273,16 @@ function standOnMap(spot: Spot, heading: number | null): void {
 }
 const map = new RoomMap(element('quest-map'), 'quest-map', { pick: standOnMap });
 
+/** Back to life size: the dollhouse is drawn from an alignment that is about to change or is gone. */
+function lifeSize(): void {
+  scaling.reset();
+  room?.setDollhouse(scaling.view);
+}
+
 function confirmAlignment(): void {
   if (!connected) return;
   pauseNotice = null;
+  lifeSize();
   client.sendCalibration(calibrationNow ?? NO_CALIBRATION);
 }
 
@@ -294,17 +314,32 @@ function pause(reason: 'lost' | 'ended' | 'reset'): void {
   release();
   grabOffset = null;
   if (reason === 'lost' && !wasHolding) return;
-  if (reason !== 'lost') client.sendClearAlignment();
+  if (reason !== 'lost') {
+    client.sendClearAlignment();
+    lifeSize();
+  }
   pauseNotice = reason === 'lost'
     ? 'Tracking lost. The object stays where it was. Take hold again when the line is orange.'
     : 'Line the room up again: press A, or pinch. The object stays where it was.';
 }
 
+/**
+ * A point, a direction or a turn in the `local` space, in room metres: through the dollhouse
+ * first, so a hand in a small room reaches what is drawn under it.
+ */
+const inRoom = (alignment: AlignmentState, point: Position) => roomPoint(alignment, fromDollhouse(scaling.view, point));
+const directionInRoom = (alignment: AlignmentState, direction: Position) =>
+  roomDirection(alignment, velocityFromDollhouse(scaling.view, direction));
+const turnInRoom = (alignment: AlignmentState, orientation: Rotation) =>
+  roomOrientation(alignment, orientationFromDollhouse(scaling.view, orientation));
+
 /** The movable object a ray is on, and whether the phone holds it. */
 function aimedAt(ray: Ray | null): { hit: string | null; blocked: boolean } {
   const alignment = aligned();
   if (!ray || !alignment) return { hit: null, blocked: false };
-  const hit = targetAlongRay(roomPoint(alignment, ray.origin), roomDirection(alignment, ray.direction), entities());
+  // A ray reaches as far in a small room as it does at life size.
+  const hit = targetAlongRay(
+    inRoom(alignment, ray.origin), directionInRoom(alignment, ray.direction), entities(), RAY_REACH_METERS / scaling.view.scale);
   const blocked = phoneHolds(hit);
   return { hit: blocked ? null : hit, blocked };
 }
@@ -318,7 +353,8 @@ function lookedAt(): string | null {
     // Every object counts here, not only the ones that can be picked up.
     .map(entity => ({ ...entity, kind: 'movable' as const, selectable: true }));
   return targetAlongRay(
-    roomPoint(alignment, head.position), roomDirection(alignment, rayForward(head.orientation)), topics, 6);
+    inRoom(alignment, head.position), directionInRoom(alignment, rayForward(head.orientation)), topics,
+    GAZE_METRES / scaling.view.scale);
 }
 
 /** Where a held object is carried from: the grip, else the ray's start turned as the head is. */
@@ -346,8 +382,8 @@ function takeHold(input: InputSample, gazeTarget: string | null): void {
   const entity = entities().find(candidate => candidate.id === target);
   const grip = gripOf(input);
   if (!entity || !grip || version === null || version === undefined) return;
-  const position = roomPoint(alignment, grip.position);
-  const orientation = roomOrientation(alignment, grip.orientation);
+  const position = inRoom(alignment, grip.position);
+  const orientation = turnInRoom(alignment, grip.orientation);
   holder = input.source;
   grabOffset = offsetOf(position, orientation, entity.position);
   client.sendAcquire(version, entity.id, { position, orientation });
@@ -382,6 +418,22 @@ function frame(xrFrame: XRFrame, time: number): void {
   if (head) calibrationNow = alignmentFromPose(head.position, head.orientation);
   const alignment = aligned();
 
+  const palm = palmGate.update(sample.inputs.some(input => input.pose === 'open-palm') ? 'open-palm' : 'none', time);
+  if (palm) {
+    paused = !paused;
+    if (paused) release();
+    room?.setCalm(paused);
+    gesture(paused ? 'Paused · calm view (open palm again to come back)' : 'Back in the room', time);
+  }
+
+  // Two pinches holding nothing scale the room, and take hold of nothing while they do (#180).
+  // First, so the gaze and every hand below reach into the room as it is drawn this frame.
+  if (!alignment) scaling.reset();
+  const pinches = paused ? [] : sample.inputs
+    .filter(input => input.holding && input.source !== holder)
+    .flatMap(input => input.pinchAt ? [input.pinchAt] : []);
+  room?.setDollhouse(scaling.update(pinches, alignment !== null && !holder && !ownHold()));
+
   // Gestures from the head and hands.
   const looking = lookedAt();
   const rest = dwell.update(looking, time);
@@ -389,13 +441,6 @@ function frame(xrFrame: XRFrame, time: number): void {
   if (head) {
     const answer = nods.update(head.orientation, time);
     if (answer) gesture(answer === 'yes' ? 'Yes (nod)' : 'No (shake)', time);
-  }
-  const palm = palmGate.update(sample.inputs.some(input => input.pose === 'open-palm') ? 'open-palm' : 'none', time);
-  if (palm) {
-    paused = !paused;
-    if (paused) release();
-    room?.setCalm(paused);
-    gesture(paused ? 'Paused · calm view (open palm again to come back)' : 'Back in the room', time);
   }
 
   // Holding: a press of the grip or a pinch takes hold; letting go puts the object down.
@@ -407,17 +452,29 @@ function frame(xrFrame: XRFrame, time: number): void {
     wasMuting.set(input.source, input.mute);
     const before = wasHolding.get(input.source) ?? false;
     wasHolding.set(input.source, input.holding);
+    // A press while something is held, while scaling or while paused takes hold of nothing.
+    if (input.holding && !before && !holder) pressedAt.set(input.source, time);
+    if (!input.holding || holder || scaling.scaling || paused) pressedAt.delete(input.source);
     if (paused) continue;
-    if (input.holding && !before && !holder) takeHold(input, looking);
-    if (!input.holding && before && holder === input.source) release(true);
+    // Lined up, a press waits a moment for the other hand, so two pinches can scale the room
+    // instead of the first one taking hold. Before that, a pinch lines the room up at once.
+    const since = pressedAt.get(input.source);
+    if (since !== undefined && (!alignment || time - since >= PAIR_MS)) {
+      pressedAt.delete(input.source);
+      takeHold(input, looking);
+    }
+    // Opening the hand throws at life size. In the dollhouse a hand's drift is many times larger
+    // in the room, so letting go there only puts the object down.
+    if (!input.holding && before && holder === input.source) release(scaling.view.scale === 1);
   }
   const mine = ownHold();
   const holding = sample.inputs.find(input => input.source === holder);
   if (holder && !holding) release();
   const grip = holding && gripOf(holding);
   if (mine && grip && grabOffset && alignment) {
-    const position = roomPoint(alignment, grip.position);
-    const orientation = roomOrientation(alignment, grip.orientation);
+    // In room metres, so a swing in the dollhouse throws as far as it looks (#180).
+    const position = inRoom(alignment, grip.position);
+    const orientation = turnInRoom(alignment, grip.orientation);
     const carried = grabbedPosition(position, orientation, grabOffset);
     room?.predict(mine.entity, carried);
     swing.add(carried, performance.now());
@@ -472,6 +529,7 @@ function showHud(time: number, blocked: boolean): void {
   const held = state?.manipulation ?? null;
   if (gestureLine && time > gestureLine.until) gestureLine = null;
   const text = pauseNotice
+    ?? (scaling.scaling ? `Room at ${scaleLabel(scaling.view.scale)} · let go to keep this size` : null)
     ?? (blocked ? BLOCKED : null)
     ?? (held?.owner === 'mobile_master' ? `Phone is holding ${label(held.entity)}` : null)
     ?? (held?.owner === 'vr_solver' ? `Holding ${label(held.entity)} · let go to put it down` : null)
