@@ -37,6 +37,9 @@ let connected = false;
 let busy = false;
 let xrActive = false;
 let state: SessionState | null = null;
+/** A designer's hand not heard of for this long has gone, as a stale presence is (#185). */
+const HAND_STALE_MS = 1500;
+let handStale: number | undefined;
 let view: DiagnosticScene | null = null;
 let xr: XRDiagnostic | null = null;
 let roomViewOpen = false;
@@ -664,6 +667,13 @@ for (const button of voiceButtons) {
 const client = new SessionClient({
   state: applyState,
   voice: signal => { void voice.signal(signal); },
+  // The designer's hand in the dollhouse: drawn until it goes, or until it stops coming (#185).
+  designerHand: (position, length) => {
+    clearTimeout(handStale);
+    if (!view) return;
+    view.showDesignerHand(position, length);
+    if (position) handStale = window.setTimeout(() => view?.showDesignerHand(null, null), HAND_STALE_MS);
+  },
   connection: value => {
     connected = value;
     element('connection').textContent = value

@@ -27,6 +27,8 @@ export class DiagnosticScene {
   private readonly grid: THREE.GridHelper;
   private readonly loader = new GLTFLoader();
   private readonly late = new LateEntities(new ModelCopies(this.loader));
+  /** The designer's giant hand reaching into the room from above (#185). */
+  private readonly giantHand = giantHand();
   private readonly container: HTMLElement;
   private readonly roomAnchor = new THREE.Group();
   private roomGroup: THREE.Group | null = null;
@@ -114,6 +116,7 @@ export class DiagnosticScene {
     this.marker.name = 'phone-marker';
     this.marker.visible = false;
     this.roomAnchor.add(this.marker);
+    this.roomAnchor.add(this.giantHand);
     this.people.set('mobile_master', this.person(0x30b0c7, 'presence-phone'));
     this.people.set('vr_solver', this.person(0xff9500, 'presence-headset'));
     this.statusCanvas.width = 512;
@@ -471,7 +474,23 @@ export class DiagnosticScene {
     });
   }
 
+  /**
+   * Draws the designer's giant hand with its fingertips at `position`, in room metres, its arm
+   * reaching down from above; null hides it (#185).
+   */
+  showDesignerHand(position: Position | null, length: number | null = null): void {
+    this.giantHand.visible = position !== null;
+    this.container.dataset.designerHand = position ? 'shown' : '';
+    if (!position) return;
+    this.giantHand.position.set(position.x, position.y, position.z);
+    // As long as the designer's hand is in the room, kept between 0.3 m and 2 m to be seen.
+    const drawn = Math.min(2, Math.max(0.3, length ?? GIANT_HAND_METRES));
+    this.giantHand.scale.setScalar(drawn / GIANT_HAND_METRES);
+    this.container.dataset.designerHandLength = drawn.toFixed(2);
+  }
+
   clearRoom(): void {
+    this.showDesignerHand(null);
     this.loadToken += 1;
     this.loadedVersion = null;
     this.loadingVersion = null;
@@ -612,4 +631,34 @@ export class DiagnosticScene {
     // A splat room changes where the overview looks from.
     this.applyView(this.alignment);
   }
+}
+
+/**
+ * A giant see-through hand, fingertips at its origin, reaching down from an arm above it (#185).
+ * Amber, as the headset's presence marker is.
+ */
+/** The giant hand's model, wrist to fingertip, before scaling. */
+const GIANT_HAND_METRES = 0.85;
+
+function giantHand(): THREE.Group {
+  const material = new THREE.MeshStandardMaterial({ color: 0xff9f0a, transparent: true, opacity: 0.45, depthWrite: false });
+  const group = new THREE.Group();
+  group.name = 'designer-hand';
+  const palm = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.45, 0.14), material);
+  palm.position.y = 0.6;
+  const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 3, 16), material);
+  arm.position.y = 0.6 + 0.225 + 1.5;
+  group.add(palm, arm);
+  // Four fingers hanging down to the fingertips, and a thumb to the side.
+  for (const x of [-0.18, -0.06, 0.06, 0.18]) {
+    const finger = new THREE.Mesh(new THREE.CapsuleGeometry(0.05, 0.3, 4, 8), material);
+    finger.position.set(x, 0.2, 0);
+    group.add(finger);
+  }
+  const thumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.22, 4, 8), material);
+  thumb.position.set(0.3, 0.45, 0.02);
+  thumb.rotation.z = Math.PI / 4;
+  group.add(thumb);
+  group.visible = false;
+  return group;
 }

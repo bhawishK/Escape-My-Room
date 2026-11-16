@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import math
 import os
 import re
 from collections.abc import AsyncIterator, Callable
@@ -62,6 +63,7 @@ from backend.protocol import (
     AddFurnitureMessage,
     CalibrateMessage,
     ClearAlignmentMessage,
+    DesignerHandMessage,
     EntityTransformMessage,
     GripMessage,
     MarkerState,
@@ -106,6 +108,7 @@ type Incoming = (
     | VoiceSignalMessage
     | AddFurnitureMessage
     | RemoveFurnitureMessage
+    | DesignerHandMessage
 )
 # The message model for each incoming `type`.
 INCOMING: dict[str, type[Incoming]] = {
@@ -124,6 +127,7 @@ INCOMING: dict[str, type[Incoming]] = {
     "voice_signal": VoiceSignalMessage,
     "add_furniture": AddFurnitureMessage,
     "remove_furniture": RemoveFurnitureMessage,
+    "designer_hand": DesignerHandMessage,
 }
 
 # Why a voice call set-up message was not passed on (#13), as the page shows it.
@@ -172,6 +176,10 @@ MANIPULATION_REFUSALS = {
     "no_grip": ("no_grip", "The controller has no grip pose."),
 }
 
+
+# The designer's hand is passed to the phone at most this often, in seconds (#185). The headset
+# sends one every 50 ms; this only stops a flood, never a hand delayed and bunched by the network.
+HAND_SECONDS = 0.025
 
 CARRYING = "Someone is carrying the box. Let go of it before changing the room."
 
@@ -528,6 +536,9 @@ def create_app(
         sequence = 0
         presence_sequence = 0
         grip_sequence = 0
+        hand_sequence = 0
+        # When this headset's hand was last passed to the phone (#185), on the loop's clock.
+        hand_passed_at = -math.inf
         outbox = Outbox(socket, room.delivery_delay)
 
         async def reject(code: str, message: str) -> None:
@@ -553,6 +564,10 @@ def create_app(
                 if room.manipulation is not None and room.manipulation.owner == role:
                     room.drop()
                 if previous is not None:
+                    # A headset replaced by a new tab takes its hand with it (#185).
+                    phone = room.outboxes.get("mobile_master")
+                    if role == "vr_solver" and phone is not None:
+                        phone.reply({"type": "designer_hand", "position": None, "length": None})
                     try:
                         await asyncio.wait_for(
                             previous.close(code=1000, reason="Device connected in another tab"),
@@ -604,6 +619,32 @@ def create_app(
                         sequence = incoming.sequence
                         room.accept_pose(incoming)
                         await room.broadcast()
+                    elif isinstance(incoming, DesignerHandMessage):
+                        if role != "vr_solver":
+                            await reject("role_forbidden", "Only the headset sends its hand.")
+                            continue
+                        if incoming.sequence <= hand_sequence:
+                            await reject(
+                                "stale_sequence", "Hand sequences must increase on this socket."
+                            )
+                            continue
+                        hand_sequence = incoming.sequence
+                        now = asyncio.get_running_loop().time()
+                        # At most one place every HAND_SECONDS; the hand going always passes.
+                        if incoming.position is not None and now - hand_passed_at < HAND_SECONDS:
+                            continue
+                        phone = room.outboxes.get("mobile_master")
+                        if phone is not None:
+                            position = incoming.position
+                            phone.reply(
+                                {
+                                    "type": "designer_hand",
+                                    "position": None if position is None else position.model_dump(),
+                                    "length": None if position is None else incoming.length,
+                                }
+                            )
+                            if position is not None:
+                                hand_passed_at = now
                     elif isinstance(incoming, PresenceMessage):
                         if incoming.sequence <= presence_sequence:
                             await reject(
@@ -794,6 +835,10 @@ def create_app(
                     del room.outboxes[role]
                 if room.sockets.get(role) is socket:
                     room.disconnect(role)
+                    # The headset gone, so is its hand in the phone's room (#185).
+                    phone = room.outboxes.get("mobile_master")
+                    if role == "vr_solver" and phone is not None:
+                        phone.reply({"type": "designer_hand", "position": None, "length": None})
                     await room.broadcast()
             await outbox.close()
 

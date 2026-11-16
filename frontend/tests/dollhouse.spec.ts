@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { pinchPoint } from '../src/quest/gestures';
 import {
-  DollhouseCarry, DollhouseScaling, GripSmoother, LIFE_SIZE, dollhousePlacement, fromDollhouse, paletteSlots, residentFigure, scaleLabel, slotAt, throwInRoom, orientationFromDollhouse, orientationToDollhouse, toDollhouse,
+  DollhouseCarry, DollhouseScaling, GripSmoother, LIFE_SIZE, dollhousePlacement, handInDollhouse, fromDollhouse, paletteSlots, residentFigure, scaleLabel, slotAt, throwInRoom, orientationFromDollhouse, orientationToDollhouse, toDollhouse,
   velocityFromDollhouse, velocityToDollhouse, type DollhouseView,
 } from '../src/quest/dollhouse';
 
@@ -342,4 +342,45 @@ test('a pinch within 3.5 cm of a slot takes that piece; anywhere else takes none
   expect(slotAt(slots, { x: 0.07, y: 1.13, z: -0.41 })).toBe(2);
   expect(slotAt(slots, { x: 0.01, y: 1.12, z: -0.4 })).toBe(1);
   expect(slotAt(slots, { x: 0.03, y: 1.2, z: -0.4 })).toBeNull();
+});
+
+// #185: the designer's hand in the dollhouse.
+
+/** The floor of the prepared room: 4 m square around the origin, its top at 0. */
+const FLOOR = [{
+  id: 'floor', label: 'Floor', asset_url: '', node: 'floor', kind: 'static' as const, selectable: false,
+  position: { x: 0, y: -0.02, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 }, size: { width: 4, height: 0.02, depth: 4 },
+}];
+const ALIGNED = { yaw: 0, origin: { x: 0, y: 1.6, z: 0 } };
+const TENTH = { scale: 0.1, yaw: 0, offset: { x: 0, y: 0.8, z: -1 } };
+
+test('a hand inside the small room is where it is in the room', () => {
+  // 10 cm right, 15 cm down and 10 cm back of the table point: 1 m, 0.1 m up, 1 m in the room.
+  close(handInDollhouse(TENTH, ALIGNED, [{ x: 0.1, y: 0.65, z: -0.9 }], FLOOR)!, { x: 1, y: 0.1, z: 1 });
+});
+
+test('a hand beside the dollhouse, above its walls, or in a room at life size is not in it', () => {
+  // 50 cm to the side is 5 m out, past the 2 m walls.
+  expect(handInDollhouse(TENTH, ALIGNED, [{ x: 0.5, y: 0.82, z: -1 }], FLOOR)).toBeNull();
+  // 35 cm above the tabletop is 5.1 m up, over the 3 m ceiling.
+  expect(handInDollhouse(TENTH, ALIGNED, [{ x: 0, y: 1.15, z: -1 }], FLOOR)).toBeNull();
+  expect(handInDollhouse(LIFE_SIZE, ALIGNED, [{ x: 0, y: -0.5, z: 0 }], FLOOR)).toBeNull();
+});
+
+test('of two hands, the one inside the dollhouse counts', () => {
+  const outside = { x: 0.5, y: 0.82, z: -1 };
+  const inside = { x: 0.1, y: 0.65, z: -0.9 };
+  close(handInDollhouse(TENTH, ALIGNED, [outside, inside], FLOOR)!, { x: 1, y: 0.1, z: 1 });
+});
+
+test('a hand over the gap of an L-shaped floor is not in the room', () => {
+  // Two floor pieces: x -2..0 for z -2..2, and x 0..2 for z -2..0. The gap is x 0..2, z 0..2.
+  const piece = (id: string, x: number, z: number, width: number, depth: number) => ({
+    ...FLOOR[0], id, position: { x, y: -0.02, z }, size: { width, height: 0.02, depth },
+  });
+  const ell = [piece('floor', -1, 0, 2, 4), piece('floor_2', 1, -1, 2, 2)];
+  // Over the gap: room (1, 0.1, 1).
+  expect(handInDollhouse(TENTH, ALIGNED, [{ x: 0.1, y: 0.65, z: -0.9 }], ell)).toBeNull();
+  // Over the second piece: room (1, 0.1, -1).
+  close(handInDollhouse(TENTH, ALIGNED, [{ x: 0.1, y: 0.65, z: -1.1 }], ell)!, { x: 1, y: 0.1, z: -1 });
 });

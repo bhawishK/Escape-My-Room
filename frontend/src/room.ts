@@ -35,6 +35,14 @@ export function placeEntities(
   return roots;
 }
 
+/** Floor pieces are static and no thicker than this, as Python's `floor_pieces`. */
+export const FLOOR_THICKNESS = 0.05;
+
+/** The entities that make up the floor. */
+export function floorPieces(entities: readonly RoomEntity[]): RoomEntity[] {
+  return entities.filter(entity => entity.kind === 'static' && entity.size.height <= FLOOR_THICKNESS);
+}
+
 /** The room's own objects: everything but placed furniture, which `LateEntities` draws (#181). */
 export function roomOwn(entities: readonly RoomEntity[]): RoomEntity[] {
   return entities.filter(entity => !entity.furniture);

@@ -14,11 +14,13 @@ import { RAY_REACH_METERS, grabbedPosition, offsetOf, rayForward, targetAlongRay
 import type {
   AlignmentState, CatalogueItem, Position, PresenceInput, RoomEntity, Rotation, SessionState,
 } from '../protocol';
+import { floorPieces } from '../room';
 import { RoomMap, type Spot } from '../room-map';
 import { SessionClient } from '../session';
 import { VoiceCall, voiceLine, voiceNote } from '../voice';
 import {
-  DollhouseCarry, DollhouseScaling, GripSmoother, dollhousePlacement, fromDollhouse, paletteSlots,
+  DollhouseCarry, DollhouseScaling, GripSmoother, HAND_METRES, dollhousePlacement, fromDollhouse, handInDollhouse,
+  paletteSlots,
   slotAt, throwInRoom, yawOf, orientationFromDollhouse, scaleLabel, velocityFromDollhouse,
 } from './dollhouse';
 import { Dwell, GestureGate, HeadNods } from './gestures';
@@ -212,6 +214,8 @@ const client = new SessionClient({
   connection: value => {
     connected = value;
     element('connection').textContent = value ? 'Connected · VR headset' : 'Not connected';
+    // A new connection has shown the phone no hand yet (#185).
+    handShown = false;
     if (!value) {
       voice.connectionLost();
       state = null;
@@ -777,9 +781,41 @@ function frame(xrFrame: XRFrame, time: number): void {
   const carrying = sample.inputs.find(input => input.source.handedness === 'left') ?? sample.inputs[0];
   room?.placeCard(carrying?.pinchAt ?? carrying?.grip?.position ?? null, head?.position ?? null);
 
+  // A hand inside the small room shows on the phone as a giant hand coming down (#185).
+  const reaching = alignment && !paused && scaling.view.scale < 1
+    ? handInDollhouse(scaling.view, alignment, handPoints(sample.inputs), floor()) : null;
+  publishHand(reaching, time);
   publishPresence(time);
   showHud(time, drawn.some(ray => ray.look === 'blocked'));
   if (performance.now() - lastReport >= REPORT_MS) report();
+}
+
+/** Where each hand or controller pinches or grips, in the `local` space. */
+const handPoints = (inputs: readonly InputSample[]): Position[] =>
+  inputs.flatMap(input => input.pinchAt ? [input.pinchAt] : input.grip ? [input.grip.position] : []);
+
+/** The room's floor pieces, worked out once per room version. */
+let floorCache: { version: number | null; pieces: RoomEntity[] } = { version: null, pieces: [] };
+function floor(): RoomEntity[] {
+  const version = state?.room.room_version ?? null;
+  if (floorCache.version !== version) floorCache = { version, pieces: floorPieces(entities()) };
+  return floorCache.pieces;
+}
+
+/** Sends the hand in the dollhouse at most as often as presence, and says once when it leaves. */
+let lastHand = -Infinity;
+let handShown = false;
+function publishHand(reaching: Position | null, time: number): void {
+  if (!connected) return;
+  if (reaching) {
+    // As long as a real hand times how many times smaller the room is drawn.
+    const length = HAND_METRES / scaling.view.scale;
+    if (time - lastHand < PRESENCE_MS || !client.sendDesignerHand(reaching, length)) return;
+    lastHand = time;
+    handShown = true;
+  } else if (handShown && client.sendDesignerHand(null, null)) {
+    handShown = false;
+  }
 }
 
 function publishPresence(time: number): void {
@@ -868,6 +904,8 @@ async function start(): Promise<void> {
   });
   renderer.xr.addEventListener('sessionend', () => {
     xrActive = false;
+    // Out of VR the hand is no longer in the dollhouse (#185).
+    if (handShown && client.sendDesignerHand(null, null)) handShown = false;
     pinching.clear();
     pause('ended');
     room?.setPresenting(false);
