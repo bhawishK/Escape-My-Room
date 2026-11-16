@@ -23,6 +23,7 @@ import {
   paletteSlots,
   slotAt, throwInRoom, yawOf, orientationFromDollhouse, scaleLabel, velocityFromDollhouse,
 } from './dollhouse';
+import { Dictation } from './dictation';
 import { Dwell, GestureGate, HeadNods } from './gestures';
 import { readFrame, type FrameSample, type InputSample, type Pose, type Ray } from './hands';
 import { Hud } from './hud';
@@ -181,11 +182,24 @@ let room: QuestRoom | null = null;
 const hud = new Hud();
 
 /** The voice call with the phone user (#13). Started on the page, before Enter VR. */
+/** Muted for dictation (#188): the call is unmuted when dictation ends. */
+let mutedForDictation = false;
+/** Whether dictation is listening; a flag, as the call's callback can run before it exists. */
+let dictationListening = false;
+/** While dictating, the call stays muted, whenever it connects or is unmuted. */
+function keepDictationMuted(): void {
+  if (!dictationListening || !voice.on || voice.status.muted || voice.status.phase === 'asking') return;
+  mutedForDictation = true;
+  voice.setMuted(true);
+}
+
 const voice = new VoiceCall({
   sendReady: ready => client.sendVoiceReady(ready),
   sendSignal: signal => client.sendVoiceSignal(signal),
   sendMuted: muted => client.sendVoiceMuted(muted),
   changed: status => {
+    // A call that connects, or is unmuted, while dictating is muted again (#188).
+    keepDictationMuted();
     muteButton.hidden = status.phase === 'off' || status.phase === 'asking';
     muteButton.textContent = status.muted ? 'Unmute' : 'Mute';
     const line = element('voice-status');
@@ -418,6 +432,78 @@ makeForm.addEventListener('submit', event => {
     void followJob(job.id);
   })();
 });
+/**
+ * Holding the talk button says the description instead of typing it (#188). The call is kept
+ * muted while it listens, so the phone user doesn't hear the dictation, and unmuted after if it
+ * was on. A click, as from the keyboard, starts or stops listening instead of a hold.
+ */
+const dictateButton = element<HTMLButtonElement>('furniture-dictate');
+/** Whether the button is held, and whether this hold has failed, for what the status says. */
+let dictationHeld = false;
+let dictationFailed = false;
+const listeningLine = (): string => mutedForDictation
+  ? 'Listening, with the call muted… let go when you have said it.'
+  : 'Listening… let go when you have said it.';
+const dictation = new Dictation({
+  heard: text => {
+    makeInput.value = text;
+    // Late words after letting go don't say "listening" again.
+    if (dictationHeld) furnitureStatus.textContent = listeningLine();
+  },
+  failed: message => {
+    dictationFailed = true;
+    furnitureStatus.textContent = message;
+  },
+  ended: () => {
+    dictationHeld = false;
+    dictationListening = false;
+    dictateButton.setAttribute('aria-pressed', 'false');
+    if (mutedForDictation) {
+      mutedForDictation = false;
+      voice.setMuted(false);
+    }
+    if (!dictationFailed && makeInput.value.trim()) furnitureStatus.textContent = 'Check the description, then press Make it.';
+  },
+});
+function startDictation(): void {
+  if (dictation.listening) return;
+  dictationFailed = false;
+  if (!dictation.start()) return;
+  // Cleared only once listening has started, so a browser that can't listen keeps what was typed.
+  makeInput.value = '';
+  dictationHeld = true;
+  dictationListening = true;
+  dictateButton.setAttribute('aria-pressed', 'true');
+  keepDictationMuted();
+  furnitureStatus.textContent = listeningLine();
+}
+dictateButton.addEventListener('pointerdown', event => {
+  // Held to the button, so a wobbling ray or finger doesn't end the hold early. A pointer the
+  // browser doesn't know as active can't be captured, which never stops dictation.
+  try {
+    dictateButton.setPointerCapture(event.pointerId);
+  } catch {
+    // Listening goes on without the capture.
+  }
+  startDictation();
+});
+for (const name of ['pointerup', 'pointercancel'] as const) {
+  dictateButton.addEventListener(name, () => {
+    dictationHeld = false;
+    dictation.stop();
+  });
+}
+dictateButton.addEventListener('click', event => {
+  // A pointer's hold has its own events; a keyboard's click starts or stops listening.
+  if (event.detail !== 0) return;
+  if (dictation.listening) {
+    dictationHeld = false;
+    dictation.stop();
+  } else {
+    startDictation();
+  }
+});
+
 cancelButton.addEventListener('click', () => {
   const id = making;
   if (!id) return;
@@ -670,7 +756,10 @@ function frame(xrFrame: XRFrame, time: number): void {
     if (input.confirm && !wasConfirming.get(input.source)) confirmAlignment();
     wasConfirming.set(input.source, input.confirm);
     // B or Y mutes and unmutes: the page's Mute button cannot be reached from inside VR.
-    if (input.mute && !wasMuting.get(input.source) && voice.on) voice.setMuted(!voice.status.muted);
+    // Not while dictating: the call stays muted until the description is said (#188).
+    if (input.mute && !wasMuting.get(input.source) && voice.on && !dictation.listening) {
+      voice.setMuted(!voice.status.muted);
+    }
     wasMuting.set(input.source, input.mute);
     const before = wasHolding.get(input.source) ?? false;
     wasHolding.set(input.source, input.holding);
