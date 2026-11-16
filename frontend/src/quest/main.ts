@@ -229,6 +229,7 @@ function applyState(next: SessionState): void {
   map.showPlayers(next.participants, 'vr_solver');
   room?.align(next.alignment.vr_solver);
   room?.showPhone(next.participants.mobile_master);
+  showPlaced(next);
   const held = next.manipulation;
   room?.showControl(held?.entity ?? null);
   room?.glide(held?.owner === 'mobile_master' ? held.entity : null);
@@ -259,6 +260,35 @@ function applyState(next: SessionState): void {
     status.textContent = message;
     showError(message);
   });
+}
+
+/** The placed pieces, each with a button to take it away unless the phone holds it (#183). */
+const placedList = element('placed-list');
+let placedShown = '';
+function showPlaced(next: SessionState): void {
+  const pieces = next.room.entities.filter(entity => entity.furniture);
+  const phoneHolds = next.manipulation?.owner === 'mobile_master' ? next.manipulation.entity : null;
+  // Rebuilt only when the list or what the phone holds changes, not with every move.
+  const shown = JSON.stringify([pieces.map(piece => piece.id), phoneHolds]);
+  if (shown === placedShown) return;
+  placedShown = shown;
+  placedList.replaceChildren(...pieces.map(piece => {
+    const row = document.createElement('li');
+    const name = document.createElement('span');
+    name.textContent = piece.label;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary';
+    button.textContent = 'Take away';
+    button.setAttribute('aria-label', `Take away ${piece.label}`);
+    button.disabled = piece.id === phoneHolds;
+    button.addEventListener('click', () => {
+      const version = state?.room.room_version;
+      if (version !== null && version !== undefined) client.sendRemoveFurniture(version, piece.id);
+    });
+    row.append(name, button);
+    return row;
+  }));
 }
 
 /** The person stands on the page's map: the alignment is turned and moved so they are there. */

@@ -18,6 +18,7 @@
 //   {"type": "place", "id", "epoch", "position", "rotation"}: put here, at rest.
 //   {"type": "add", "room_version", "body": {a body as in "load"}}: a new body in the live room,
 //     such as placed furniture (#181); a dynamic one falls from where it is.
+//   {"type": "remove", "room_version", "id"}: that body leaves the live room (#183).
 // Worker → Python:
 //   {"type": "ready", "engine": "havok", "version": "1.3.14"} once Havok has loaded;
 //   {"type": "loaded", "room_version": 1, "bodies": {"static": 1, "dynamic": 1}};
@@ -225,6 +226,15 @@ class Room {
     }
   }
 
+  remove({ id }) {
+    const body = this.bodies.get(id);
+    // Never given it, or given a room since: nothing to take out.
+    if (!body) return;
+    this.moving.delete(body);
+    this.bodies.delete(id);
+    body.dispose();
+  }
+
   place(message) {
     const body = this.body(message);
     body.held = false;
@@ -291,8 +301,9 @@ function handle(message) {
     return;
   }
   if (room === null) throw new Error('No room is loaded.');
-  if (message.type === 'add') {
-    room.add(message);
+  if (message.type === 'add' || message.type === 'remove') {
+    if (message.type === 'add') room.add(message);
+    else room.remove(message);
     send({ type: 'counted', room_version: message.room_version, bodies: room.counts() });
   } else if (message.type === 'hold') room.hold(message);
   else if (message.type === 'release') room.letGo(message);

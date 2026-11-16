@@ -10,7 +10,13 @@ from fastapi import WebSocket
 
 from backend.alignment import Alignment
 from backend.delivery import Outbox
-from backend.furniture import CatalogueItem, furniture_entity, on_floor
+from backend.furniture import (
+    CatalogueItem,
+    free_spot,
+    furniture_entity,
+    on_floor,
+    overlapping,
+)
 from backend.grab import grab_offset, grabbed_point, normalize
 from backend.physics import PhysicsWorker
 from backend.prepared_room import (
@@ -217,11 +223,41 @@ class PrototypeRoom:
         start = on_floor(self.entities, position, item.size, yaw)
         if start is None:
             return "outside"
+        entity = furniture_entity(f"furniture_{self.furniture_count + 1}", item, start, yaw)
+        # Placed on another piece, it goes beside it instead of being shoved out by physics.
+        spot = free_spot(entity, start, self.entities)
+        if spot is None:
+            return "no_room"
         self.furniture_count += 1
-        entity = furniture_entity(f"furniture_{self.furniture_count}", item, start, yaw)
+        entity.position = spot
         self.entities.append(entity)
         if self.physics is not None:
             self.physics.add(entity)
+        self.revision += 1
+        return "ok"
+
+    def remove_furniture(self, role: Role, room_version: int, entity_id: str) -> str:
+        """Take a placed piece away (#183): from the room, the phone's selection and physics. A
+        piece the other person holds stays; one this person holds is let go of and taken."""
+        if self.load_error is not None or self.room_version is None:
+            return "unavailable"
+        if room_version != self.room_version:
+            return "mismatch"
+        entity = next((entity for entity in self.entities if entity.id == entity_id), None)
+        if entity is None:
+            return "unknown"
+        if not entity.furniture:
+            return "not_furniture"
+        held = self.manipulation
+        if held is not None and held.entity == entity_id:
+            if held.owner != role:
+                return "controlled_by_other"
+            self.manipulation = None
+        if self.selection == entity_id:
+            self.selection = None
+        self.entities.remove(entity)
+        if self.physics is not None:
+            self.physics.remove(entity_id)
         self.revision += 1
         return "ok"
 
@@ -586,6 +622,12 @@ class PrototypeRoom:
         entity = self.entity(held.entity)
         if held.owner == "mobile_master":
             entity.position = Position(x=entity.position.x, y=held.rest_y, z=entity.position.z)
+        # Let go inside another piece, it is put beside it rather than shoved out by physics (#183).
+        if overlapping(entity, entity.position, self.entities):
+            spot = free_spot(entity, entity.position, self.entities)
+            if spot is not None:
+                entity.position = spot
+        if held.owner == "mobile_master":
             if self.physics is not None:
                 self.physics.place(entity)
         elif self.physics is not None:

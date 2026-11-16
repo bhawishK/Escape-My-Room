@@ -69,6 +69,7 @@ from backend.protocol import (
     PresenceMessage,
     PresenceState,
     ReleaseMessage,
+    RemoveFurnitureMessage,
     Role,
     RoomLoadedMessage,
     SelectMessage,
@@ -104,6 +105,7 @@ type Incoming = (
     | VoiceMuteMessage
     | VoiceSignalMessage
     | AddFurnitureMessage
+    | RemoveFurnitureMessage
 )
 # The message model for each incoming `type`.
 INCOMING: dict[str, type[Incoming]] = {
@@ -121,6 +123,7 @@ INCOMING: dict[str, type[Incoming]] = {
     "voice_mute": VoiceMuteMessage,
     "voice_signal": VoiceSignalMessage,
     "add_furniture": AddFurnitureMessage,
+    "remove_furniture": RemoveFurnitureMessage,
 }
 
 # Why a voice call set-up message was not passed on (#13), as the page shows it.
@@ -148,7 +151,11 @@ FURNITURE_REFUSALS = {
     "mismatch": ROOM_VERSION_MISMATCH,
     "unknown_item": ("unknown_furniture", "That piece is not in the furniture catalogue."),
     "outside": ("outside_room", "Place furniture with all of it on the room's floor."),
+    "no_room": ("no_room", "There is no free floor near there for that piece."),
     "too_many": ("too_much_furniture", "The room is full. Take a piece away before adding more."),
+    "unknown": ("unknown_entity", "That room object does not exist."),
+    "not_furniture": ("not_furniture", "Only placed furniture can be taken away."),
+    "controlled_by_other": ("controlled_by_other", "The other person is holding that piece."),
 }
 
 
@@ -721,6 +728,18 @@ def create_app(
                             incoming.position,
                             incoming.yaw,
                         )
+                        if result == "unavailable":
+                            await reject(
+                                "room_unavailable",
+                                room.load_error or "Prepared room is unavailable.",
+                            )
+                            continue
+                        if result != "ok":
+                            await reject(*FURNITURE_REFUSALS[result])
+                            continue
+                        await room.broadcast()
+                    elif isinstance(incoming, RemoveFurnitureMessage):
+                        result = room.remove_furniture(role, incoming.room_version, incoming.id)
                         if result == "unavailable":
                             await reject(
                                 "room_unavailable",

@@ -394,6 +394,12 @@ document.addEventListener('visibilitychange', () => {
   resumeTrackingAfterGaze();
 });
 
+element('hud-remove').addEventListener('click', () => {
+  const version = state?.room.room_version;
+  if (!selected || version === null || version === undefined) return;
+  client.sendRemoveFurniture(version, selected);
+});
+
 function entityLabel(id: string): string {
   return state?.room.entities.find(entity => entity.id === id)?.label ?? id;
 }
@@ -417,6 +423,10 @@ function controls(): void {
   const engine = tracking === measured ? measured : null;
   const measuring = engine !== null;
   element('recentre').hidden = !engine?.active || engine.paused;
+  // A selected piece of placed furniture can be taken away while nobody holds it (#183).
+  const piece = state?.room.entities.find(entity => entity.id === selected);
+  element('hud-remove').hidden = role !== 'mobile_master' || !roomViewOpen || !piece?.furniture ||
+    state?.manipulation?.entity === piece.id;
   if (!engine?.active || engine.paused || !roomViewOpen) showTilt(null);
   // The headset chooses where it stands on the page's map; the phone places itself on its own.
   element('page-map').classList.toggle('picking', role === 'vr_solver');
@@ -512,6 +522,12 @@ function applyState(next: SessionState): void {
   const otherHeld = state?.manipulation?.owner === otherRole;
   const before = ownHold();
   state = next;
+  // A selected piece someone took away (#183): Python cleared the selection, so the page does too.
+  if (selected !== null && !next.room.entities.some(entity => entity.id === selected)) {
+    selected = null;
+    view?.select(null);
+    if (roomViewOpen) element('view-status').textContent = viewInstruction();
+  }
   voice.applyState(next);
   if (next.room.room_version !== positioningRoom) {
     positioningRoom = next.room.room_version;
