@@ -7,7 +7,7 @@
  * "Dollhouse space" is where it is drawn: shrunk by `scale`, turned by `yaw` about the vertical
  * and moved by `offset`, as a three.js group with that position, rotation.y and scale.
  */
-import type { Position, Rotation } from '../protocol';
+import type { Position, PresenceState, Rotation } from '../protocol';
 
 export interface DollhouseView {
   /** How big the room is drawn: 1 at life size, 0.05 at a twentieth. */
@@ -107,6 +107,88 @@ export class DollhouseScaling {
     this.view = LIFE_SIZE;
   }
 }
+
+/**
+ * How far a grip or head is turned about the vertical, in radians, as three.js turns rotation.y:
+ * the twist of its quaternion about y. Unlike reading where its forward axis points, this stays
+ * steady however the hand or head is tilted, straight up included.
+ */
+export function yawOf(orientation: Rotation): number {
+  return 2 * Math.atan2(orientation.y, orientation.w);
+}
+
+/**
+ * One hand carries the dollhouse (#182): it moves with the hand and turns as the hand turns about
+ * the vertical, so the point of the room the hand took hold of stays in the hand. Only a room
+ * smaller than life size can be carried; at life size it is the real room around the person.
+ */
+export class DollhouseCarry {
+  /** Since the hand took hold: the view, the hand's turn, and the room point it holds. */
+  private start: { view: DollhouseView; yaw: number; held: Position } | null = null;
+
+  get carrying(): boolean {
+    return this.start !== null;
+  }
+
+  /** Takes hold with `hand` in the `local` space; false, and nothing held, at life size. */
+  begin(hand: { position: Position; orientation: Rotation }, view: DollhouseView): boolean {
+    if (view.scale >= 1) return false;
+    this.start = { view, yaw: yawOf(hand.orientation), held: fromDollhouse(view, hand.position) };
+    return true;
+  }
+
+  /** Where the dollhouse is with the hand here now. */
+  update(hand: { position: Position; orientation: Rotation }): DollhouseView {
+    if (!this.start) throw new Error('Nothing is being carried.');
+    const { view, yaw, held } = this.start;
+    const turned = view.yaw + yawOf(hand.orientation) - yaw;
+    const drawn = toDollhouse({ ...view, yaw: turned, offset: { x: 0, y: 0, z: 0 } }, held);
+    const { position } = hand;
+    return {
+      scale: view.scale,
+      yaw: turned,
+      offset: { x: position.x - drawn.x, y: position.y - drawn.y, z: position.z - drawn.z },
+    };
+  }
+
+  /** Let go: the dollhouse stays where it was last carried. */
+  end(): void {
+    this.start = null;
+  }
+}
+
+/** How tall the resident's figure is at life size, and the least it is drawn in a dollhouse. */
+export const FIGURE_METRES = 1.55;
+const SMALLEST_FIGURE_METRES = 0.08;
+
+/** Where the room's anchor puts room metres in the `local` space before any dollhouse. */
+export interface RoomAnchor { yaw: number; offset: Position }
+
+/**
+ * The resident's figure in the dollhouse (#182): where their feet are and which way they face in
+ * the `local` space, how tall it is drawn and how solid. A figure to scale would be lost at 1:40,
+ * so it is never drawn smaller than 8 cm. Null when they have no place to show: inactive, lost,
+ * or not yet placed.
+ */
+export function residentFigure(
+  presence: PresenceState | undefined,
+  view: DollhouseView,
+  anchor: RoomAnchor,
+): { position: Position; heading: number; height: number; opacity: number } | null {
+  const shown = presence?.tracking_status === 'tracked' || presence?.tracking_status === 'stale';
+  if (!shown || !presence.position || presence.heading === null) return null;
+  const turnedFeet = turned(presence.position, anchor.yaw);
+  const inRoomSpace = {
+    x: anchor.offset.x + turnedFeet.x, y: anchor.offset.y + turnedFeet.y, z: anchor.offset.z + turnedFeet.z,
+  };
+  return {
+    position: toDollhouse(view, inRoomSpace),
+    heading: presence.heading + anchor.yaw + view.yaw,
+    height: Math.max(FIGURE_METRES * view.scale, SMALLEST_FIGURE_METRES),
+    opacity: presence.tracking_status === 'stale' ? 0.35 : 1,
+  };
+}
+
 
 /** The scale as a model maker writes it: "1:20" for a room drawn at a twentieth. */
 export function scaleLabel(scale: number): string {

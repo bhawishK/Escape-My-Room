@@ -18,7 +18,7 @@ import { RoomMap, type Spot } from '../room-map';
 import { SessionClient } from '../session';
 import { VoiceCall, voiceLine, voiceNote } from '../voice';
 import {
-  DollhouseScaling, fromDollhouse, orientationFromDollhouse, scaleLabel, velocityFromDollhouse,
+  DollhouseCarry, DollhouseScaling, fromDollhouse, yawOf, orientationFromDollhouse, scaleLabel, velocityFromDollhouse,
 } from './dollhouse';
 import { Dwell, GestureGate, HeadNods } from './gestures';
 import { readFrame, type FrameSample, type InputSample, type Pose, type Ray } from './hands';
@@ -92,6 +92,9 @@ let paused = false;
 const palmGate = new GestureGate<'open-palm'>({ holdMs: 800, cooldownMs: 1500 });
 /** Two pinches shrink the room into a dollhouse and grow it back (#180). Only this headset's view. */
 const scaling = new DollhouseScaling();
+/** One hand holding nothing carries a small room, to move and turn it (#182). */
+const carry = new DollhouseCarry();
+let carrier: XRInputSource | null = null;
 const nods = new HeadNods();
 const dwell = new Dwell(DWELL_MS);
 let lastPresence = -Infinity;
@@ -422,6 +425,8 @@ void showCatalogue();
 
 /** Back to life size: the dollhouse is drawn from an alignment that is about to change or is gone. */
 function lifeSize(): void {
+  carry.end();
+  carrier = null;
   scaling.reset();
   room?.setDollhouse(scaling.view);
 }
@@ -511,29 +516,30 @@ function gripOf(input: InputSample): Pose | null {
 }
 
 /** Starts holding with `input`: before alignment it lines up; after, it takes what it aims at. */
-function takeHold(input: InputSample, gazeTarget: string | null): void {
+function takeHold(input: InputSample, gazeTarget: string | null): 'held' | 'refused' | 'nothing' {
   const alignment = aligned();
   if (!alignment) {
     confirmAlignment();
-    return;
+    return 'refused';
   }
   pauseNotice = null;
   const { hit, blocked } = aimedAt(input.ray);
   if (blocked) {
     gestureLine = { text: BLOCKED, until: performance.now() + SAID_MS };
-    return;
+    return 'refused';
   }
   // Look and pinch: a hand aimed at nothing takes what the head is looking at.
   const target = hit ?? (input.kind === 'hand' ? movable(gazeTarget) : null);
   const version = state?.room.room_version;
   const entity = entities().find(candidate => candidate.id === target);
   const grip = gripOf(input);
-  if (!entity || !grip || version === null || version === undefined) return;
+  if (!entity || !grip || version === null || version === undefined) return 'nothing';
   const position = inRoom(alignment, grip.position);
   const orientation = turnInRoom(alignment, grip.orientation);
   holder = input.source;
   grabOffset = offsetOf(position, orientation, entity.position);
   client.sendAcquire(version, entity.id, { position, orientation });
+  return 'held';
 }
 
 /** The gaze target when it can be picked up, else null. */
@@ -575,7 +581,8 @@ function frame(xrFrame: XRFrame, time: number): void {
 
   // Two pinches holding nothing scale the room, and take hold of nothing while they do (#180).
   // First, so the gaze and every hand below reach into the room as it is drawn this frame.
-  if (!alignment) scaling.reset();
+  // The dollhouse is drawn from the alignment: without one, back to life size, carried or not.
+  if (!alignment) lifeSize();
   const pinches = paused ? [] : sample.inputs
     .filter(input => input.holding && input.source !== holder)
     .flatMap(input => input.pinchAt ? [input.pinchAt] : []);
@@ -608,11 +615,30 @@ function frame(xrFrame: XRFrame, time: number): void {
     const since = pressedAt.get(input.source);
     if (since !== undefined && (!alignment || time - since >= PAIR_MS)) {
       pressedAt.delete(input.source);
-      takeHold(input, looking);
+      // A press on nothing in a small room takes hold of the dollhouse itself (#182).
+      // Only a real grip turns the dollhouse: without one, the head's turn would.
+      const grip = input.grip;
+      if (takeHold(input, looking) === 'nothing' && grip && carry.begin(grip, scaling.view)) {
+        carrier = input.source;
+      }
+    }
+    if (carrier === input.source && !input.holding) {
+      carry.end();
+      carrier = null;
     }
     // Opening the hand throws at life size. In the dollhouse a hand's drift is many times larger
     // in the room, so letting go there only puts the object down.
     if (!input.holding && before && holder === input.source) release(scaling.view.scale === 1);
+  }
+  // The carried dollhouse follows its hand; two pinches scaling it, or the hand gone, end that.
+  const carrierInput = sample.inputs.find(input => input.source === carrier);
+  const carryGrip = carrierInput?.grip ?? null;
+  if (carrier && (!carryGrip || scaling.scaling || paused)) {
+    carry.end();
+    carrier = null;
+  } else if (carryGrip) {
+    scaling.view = carry.update(carryGrip);
+    room?.setDollhouse(scaling.view);
   }
   const mine = ownHold();
   const holding = sample.inputs.find(input => input.source === holder);
@@ -664,8 +690,11 @@ function publishPresence(time: number): void {
   const alignment = aligned();
   let presence: PresenceInput | null = null;
   if (xrActive && head && alignment) {
-    const forward = roomDirection(alignment, rayForward(head.orientation));
-    presence = { tracking_status: 'tracked', position: roomPoint(alignment, head.position), heading: Math.atan2(-forward.x, -forward.z) };
+    presence = {
+      tracking_status: 'tracked',
+      position: roomPoint(alignment, head.position),
+      heading: yawOf(roomOrientation(alignment, head.orientation)),
+    };
   }
   if (!presence) {
     if (presenceSent) presenceSent = !client.sendPresence({ tracking_status: 'inactive', position: null, heading: null });
@@ -681,6 +710,7 @@ function showHud(time: number, blocked: boolean): void {
   if (gestureLine && time > gestureLine.until) gestureLine = null;
   const text = pauseNotice
     ?? (scaling.scaling ? `Room at ${scaleLabel(scaling.view.scale)} · let go to keep this size` : null)
+    ?? (carrier ? 'Carrying the room · let go to leave it here' : null)
     ?? (blocked ? BLOCKED : null)
     ?? (held?.owner === 'mobile_master' ? `Phone is holding ${label(held.entity)}` : null)
     ?? (held?.owner === 'vr_solver' ? `Holding ${label(held.entity)} · let go to put it down` : null)
