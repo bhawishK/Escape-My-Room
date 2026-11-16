@@ -112,6 +112,14 @@ class AddFurnitureMessage(WireModel):
     yaw: float = Field(ge=-3.141592653589793, le=3.141592653589793)
 
 
+class RemoveFurnitureMessage(WireModel):
+    """Take a placed piece away (#183). Either person may, unless the other is holding it."""
+
+    type: Literal["remove_furniture"]
+    room_version: int = Field(ge=1)
+    id: str = Field(max_length=64)
+
+
 class Velocity(WireModel):
     """A velocity in room metres per second. Any finite speed is accepted, and physics caps it;
     the bound only keeps the numbers sane."""

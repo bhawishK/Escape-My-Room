@@ -62,3 +62,31 @@ test('a described piece shows its picture while it is made, then is chosen to pl
   await page.mouse.click(box.x + 0.6 * box.width, box.y + 0.6 * box.height);
   await expect(scene).toHaveAttribute('data-furniture', String(before + 1));
 });
+
+test('a piece taken away on the headset page goes from both pages', async ({ browser }) => {
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const headset = await browser.newPage();
+  await phone.goto(`${ORIGIN}/`);
+  await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await headset.goto(`${ORIGIN}/quest/`);
+  await headset.getByRole('button', { name: 'Connect headset', exact: true }).click();
+  await expect(headset.getByTestId('connection')).toHaveText('Connected · VR headset');
+  const scene = headset.getByTestId('quest-scene');
+
+  await headset.getByRole('button', { name: /^Floor lamp · / }).click();
+  const plan = headset.getByTestId('quest-map-plan');
+  await plan.scrollIntoViewIfNeeded();
+  const box = (await plan.boundingBox())!;
+  await headset.mouse.click(box.x + 0.7 * box.width, box.y + 0.4 * box.height);
+  const lamps = headset.getByRole('button', { name: 'Take away Floor lamp' });
+  await expect(lamps).toHaveCount(1);
+  const before = Number(await scene.getAttribute('data-furniture'));
+  await expect(phone.locator('#scene')).toHaveAttribute('data-furniture', String(before));
+
+  await lamps.click();
+  await expect(lamps).toHaveCount(0);
+  await expect(scene).toHaveAttribute('data-furniture', String(before - 1));
+  await expect(phone.locator('#scene')).toHaveAttribute('data-furniture', String(before - 1));
+  await phone.close();
+  await headset.close();
+});

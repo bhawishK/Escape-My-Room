@@ -156,6 +156,12 @@ export class SessionClient {
     this.socket.send(JSON.stringify({ type: 'add_furniture', room_version: roomVersion, item, position, yaw }));
   }
 
+  /** Take a placed piece away (#183), unless the other person is holding it. */
+  sendRemoveFurniture(roomVersion: number, id: string): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: 'remove_furniture', room_version: roomVersion, id }));
+  }
+
   /**
    * Asks Python to start a hold. The phone names its selection. The headset also sends the grip
    * pose in room meters, and Python keeps the object where it already is relative to that grip.

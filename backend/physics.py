@@ -246,6 +246,17 @@ class PhysicsWorker:
         if body is not None and self.state == "running":
             self.outgoing.put({"type": "add", "room_version": self.wanted_version, "body": body})
 
+    def remove(self, entity_id: str) -> None:
+        """A body leaves the live room (#183), already gone from the session's entities. Only a
+        body physics was given is taken out of it."""
+        had = self.epochs.pop(entity_id, None) is not None
+        self.held.discard(entity_id)
+        if entity_id in self.moving:
+            self.moving.remove(entity_id)
+        if had and self.state == "running":
+            removal = {"type": "remove", "room_version": self.wanted_version, "id": entity_id}
+            self.outgoing.put(removal)
+
     def place(self, entity: SceneEntity) -> None:
         """Put it where it is, at rest, as the phone's let-go and a direct move do."""
         self._command("place", entity.id, pose_of(entity))
@@ -348,7 +359,12 @@ class PhysicsWorker:
                 if self.epochs.get(body["id"]) == body["epoch"] and body["id"] not in self.held
             ]
             reported: list[str] = message.get("moving") or []
-            moving = [entity_id for entity_id in reported if entity_id not in self.held]
+            # A body removed since the worker sent this (#183) is no longer moving here.
+            moving = [
+                entity_id
+                for entity_id in reported
+                if entity_id not in self.held and entity_id in self.epochs
+            ]
             # A hold or place already took its body out of the moving list here; the worker's
             # answer to it changes nothing, and the devices aren't sent a state for it.
             if not current and moving == self.moving:
