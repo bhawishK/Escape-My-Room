@@ -3,6 +3,7 @@
 import asyncio
 import math
 import time
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -101,6 +102,8 @@ class PrototypeRoom:
     manipulation_count: int = 0
     # Placed furniture is numbered furniture_1, furniture_2, ... and a number is never reused.
     furniture_count: int = 0
+    # Counts pieces added to the catalogue, so pages reload it when one is made (#187).
+    catalogue_version: int = 0
     alignment: dict[Role, Alignment] = field(
         default_factory=lambda: {
             "mobile_master": Alignment(),
@@ -131,7 +134,8 @@ class PrototypeRoom:
     voice_sessions: dict[Role, int] = field(
         default_factory=lambda: {"mobile_master": 0, "vr_solver": 0}
     )
-    physics_tasks: set[asyncio.Task[None]] = field(
+    # Work started from callbacks, held until it has run: physics news, catalogue news.
+    background_tasks: set[asyncio.Task[None]] = field(
         default_factory=lambda: set[asyncio.Task[None]]()
     )
 
@@ -140,6 +144,7 @@ class PrototypeRoom:
         return {
             "revision": self.revision,
             "mobile_connected": "mobile_master" in self.sockets,
+            "catalogue_version": self.catalogue_version,
             "vr_connected": "vr_solver" in self.sockets,
             # Recorded with motion measurements, so each is read against its network conditions.
             "delivery": {"simulated_delay_ms": round(self.delivery_delay * 1000)},
@@ -500,18 +505,20 @@ class PrototypeRoom:
         seen = self.presence_seen[role]
         self.presence_timers[role] = loop.call_later(delay, self._presence_due, role, seen)
 
+    def track(self, work: Coroutine[Any, Any, None]) -> None:
+        """Run `work` on the event loop, held until it has run: the loop keeps only a weak
+        reference to a task."""
+        task = asyncio.get_running_loop().create_task(work)
+        self.background_tasks.add(task)
+        task.add_done_callback(self.background_tasks.discard)
+
     def physics_changed(self) -> None:
         """The physics status changed: tell both devices, after anything in progress."""
-        task = asyncio.get_running_loop().create_task(self._publish_physics())
-        # The loop keeps only a weak reference to a task; hold it until it has run.
-        self.physics_tasks.add(task)
-        task.add_done_callback(self.physics_tasks.discard)
+        self.track(self._publish_physics())
 
     def physics_moved(self, poses: list[dict[str, Any]]) -> None:
         """Physics moved some objects, or they came to rest: place them and tell both devices."""
-        task = asyncio.get_running_loop().create_task(self._apply_physics(poses))
-        self.physics_tasks.add(task)
-        task.add_done_callback(self.physics_tasks.discard)
+        self.track(self._apply_physics(poses))
 
     async def _apply_physics(self, poses: list[dict[str, Any]]) -> None:
         async with self.lock:

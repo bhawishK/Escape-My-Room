@@ -90,3 +90,28 @@ test('a piece taken away on the headset page goes from both pages', async ({ bro
   await phone.close();
   await headset.close();
 });
+
+test('a photo sent from the phone becomes a piece in the headset\'s catalogue', async ({ browser }) => {
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const headset = await browser.newPage();
+  await headset.goto(`${ORIGIN}/quest/`);
+  await headset.getByRole('button', { name: 'Connect headset', exact: true }).click();
+  await expect(headset.getByTestId('connection')).toHaveText('Connected · VR headset');
+  await phone.goto(`${ORIGIN}/`);
+  await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  // Connecting opens the room view over the page; the form is on the page.
+  await phone.getByRole('button', { name: 'Close', exact: true }).click();
+
+  // A plain 1×1 PNG: the fixture generator models it as its box.
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==', 'base64');
+  await phone.locator('#photo-piece-file').setInputFiles({ name: 'chair.png', mimeType: 'image/png', buffer: png });
+  await phone.getByLabel('What the piece is').fill('a reading chair');
+  await phone.getByRole('button', { name: 'Make it' }).click();
+  await expect(phone.getByTestId('photo-piece-status')).toContainText('Making it into a 3D piece');
+
+  // A chair is 0.9 m tall: the fixture's 2 m tall box at 0.45 of its size.
+  await expect(headset.getByRole('button', { name: 'A reading chair · 1.8 × 0.45 × 0.9 m' })).toBeVisible({ timeout: 10_000 });
+  await expect(phone.getByTestId('photo-piece-status')).toContainText('A reading chair is ready');
+  await phone.close();
+  await headset.close();
+});

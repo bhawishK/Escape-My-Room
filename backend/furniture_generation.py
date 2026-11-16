@@ -352,10 +352,28 @@ class FurnitureJob(BaseModel):
     image_url: str | None = None
     # The catalogue piece, once ready.
     item: CatalogueItem | None = None
+    # Made from the resident's photo (#187): the photo is the picture, so it starts from 3D.
+    photo: bool = False
 
 
 class GenerationRequest(BaseModel):
     description: str = Field(min_length=3, max_length=200)
+
+
+# A photo is made no larger than this on its longer side before the 3D step: the pictures
+# Z-Image draws for descriptions are 768 px, and image-to-3D needs no more.
+PHOTO_SIDE = 1024
+
+
+def fitted(picture: bytes) -> bytes:
+    """A PNG picture no larger than PHOTO_SIDE on its longer side."""
+    with Image.open(io.BytesIO(picture)) as image:
+        if max(image.size) <= PHOTO_SIDE:
+            return picture
+        image.thumbnail((PHOTO_SIDE, PHOTO_SIDE))
+        out = io.BytesIO()
+        image.save(out, format="PNG")
+        return out.getvalue()
 
 
 def piece_name(description: str) -> str:
@@ -374,7 +392,10 @@ class FurnitureGeneration:
         catalogue: Catalogue,
         generator: Generator | None,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        on_added: Callable[[CatalogueItem], None] = lambda item: None,
     ) -> None:
+        # Called from the job thread when a piece joins the catalogue (#187).
+        self.on_added = on_added
         self.root = root
         self.catalogue = catalogue
         self.generator = generator
@@ -403,6 +424,25 @@ class FurnitureGeneration:
 
     def start(self, description: str) -> FurnitureJob:
         job = FurnitureJob(id=uuid.uuid4().hex[:12], description=description.strip())
+        with self.lock:
+            self.jobs[job.id] = job
+            self.pending.append(job.id)
+            self.wake.notify()
+        return job.model_copy()
+
+    def start_photo(self, picture: bytes, description: str) -> FurnitureJob:
+        """Make a piece from a photo (#187), already checked and upright as a PNG. The photo is
+        the job's picture from the start; `description`, which may be empty, names and sizes it."""
+        job = FurnitureJob(
+            id=uuid.uuid4().hex[:12],
+            description=description.strip(),
+            state="image_ready",
+            photo=True,
+        )
+        folder = self.root / "jobs" / job.id
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "picture.png").write_bytes(fitted(picture))
+        job.image_url = f"/api/furniture/jobs/{job.id}/image"
         with self.lock:
             self.jobs[job.id] = job
             self.pending.append(job.id)
@@ -479,19 +519,24 @@ class FurnitureGeneration:
     def _make(self, job_id: str) -> None:
         generator = self.generator
         job = self.get(job_id)
-        if generator is None or job is None or job.state != "queued":
+        if generator is None or job is None:
+            return
+        if job.state != ("image_ready" if job.photo else "queued"):
             return
         folder = self.root / "jobs" / job_id
         try:
-            picture = self._step(lambda: generator.image(job.description), "image")
-            folder.mkdir(parents=True, exist_ok=True)
-            (folder / "picture.png").write_bytes(picture)
-            with self.lock:
-                current = self.jobs[job_id]
-                if current.state != "queued":
-                    return
-                current.state = "image_ready"
-                current.image_url = f"/api/furniture/jobs/{job_id}/image"
+            if job.photo:
+                picture = (folder / "picture.png").read_bytes()
+            else:
+                picture = self._step(lambda: generator.image(job.description), "image")
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / "picture.png").write_bytes(picture)
+                with self.lock:
+                    current = self.jobs[job_id]
+                    if current.state != "queued":
+                        return
+                    current.state = "image_ready"
+                    current.image_url = f"/api/furniture/jobs/{job_id}/image"
             model = self._step(lambda: generator.model(picture), "model")
             if not self._still(job_id, "image_ready"):
                 return
@@ -502,7 +547,7 @@ class FurnitureGeneration:
             (piece / "model.glb").write_bytes(sized)
             item = CatalogueItem(
                 id=item_id,
-                name=piece_name(job.description),
+                name=piece_name(job.description) if job.description else "Piece from a photo",
                 node=PIECE_NODE,
                 size=size,
                 model_url=f"/api/furniture/generated/{item_id}/model.glb",
@@ -516,6 +561,7 @@ class FurnitureGeneration:
                 self.catalogue.add(item)
                 current.state = "ready"
                 current.item = item
+            self.on_added(item)
         except GenerationError as exc:
             with self.lock:
                 current = self.jobs[job_id]

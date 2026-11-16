@@ -12,7 +12,7 @@ import { errorMessage } from '../api';
 import { element } from '../dom';
 import { RAY_REACH_METERS, grabbedPosition, offsetOf, rayForward, targetAlongRay } from '../grab';
 import type {
-  AlignmentState, CatalogueItem, Position, PresenceInput, RoomEntity, Rotation, SessionState,
+  AlignmentState, CatalogueItem, FurnitureJob, Position, PresenceInput, RoomEntity, Rotation, SessionState,
 } from '../protocol';
 import { floorPieces } from '../room';
 import { RoomMap, type Spot } from '../room-map';
@@ -246,6 +246,9 @@ function applyState(next: SessionState): void {
   room?.align(next.alignment.vr_solver);
   room?.showPhone(next.participants.mobile_master);
   showPlaced(next);
+  // A piece made from a description or a photo joined the catalogue (#187).
+  if (catalogueShown !== null && next.catalogue_version !== catalogueShown) void showCatalogue();
+  catalogueShown = next.catalogue_version;
   const held = next.manipulation;
   room?.showControl(held?.entity ?? null);
   room?.glide(held?.owner === 'mobile_master' ? held.entity : null);
@@ -351,13 +354,8 @@ const preview = element<HTMLImageElement>('furniture-preview');
 const JOB_POLL_MS = 1000;
 let making: string | null = null;
 
-interface FurnitureJob {
-  id: string;
-  state: 'queued' | 'image_ready' | 'ready' | 'failed' | 'cancelled';
-  error: string | null;
-  image_url: string | null;
-  item: CatalogueItem | null;
-}
+/** The catalogue version last seen, to reload the catalogue when a piece is added (#187). */
+let catalogueShown: number | null = null;
 
 /** Shows a job's progress on the page and its picture in the hand in VR; ends it when it's done. */
 function showJob(job: FurnitureJob): void {
@@ -439,7 +437,8 @@ async function showCatalogue(): Promise<void> {
       const button = document.createElement('button');
       button.type = 'button';
       button.dataset.item = item.id;
-      button.setAttribute('aria-pressed', 'false');
+      // A reload, when a piece joins, keeps the piece chosen before it.
+      button.setAttribute('aria-pressed', String(item.id === chosenPiece?.id));
       const { width, depth, height } = item.size;
       button.textContent = `${item.name} · ${width} × ${depth} × ${height} m`;
       button.addEventListener('click', () => choosePiece(item));
