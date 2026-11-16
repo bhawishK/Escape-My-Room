@@ -7,6 +7,7 @@
  * "Dollhouse space" is where it is drawn: shrunk by `scale`, turned by `yaw` about the vertical
  * and moved by `offset`, as a three.js group with that position, rotation.y and scale.
  */
+import { roomOrientation, roomPoint, type CalibrationInput } from '../alignment';
 import type { Position, PresenceState, Rotation } from '../protocol';
 
 export interface DollhouseView {
@@ -213,4 +214,102 @@ export function orientationToDollhouse(view: DollhouseView, orientation: Rotatio
 
 export function orientationFromDollhouse(view: DollhouseView, orientation: Rotation): Rotation {
   return yawed(-view.yaw, orientation);
+}
+
+/** In a dollhouse, a hand slower than this as it lets go puts the piece down instead (#184). */
+const THROW_HAND_SPEED = 0.3;
+
+/**
+ * Where a piece let go at `point` with the hand turned `orientation` (both in the `local` space)
+ * lands in the room (#184): the room point under the fingertip, and its turn about the vertical.
+ */
+export function dollhousePlacement(
+  view: DollhouseView,
+  alignment: CalibrationInput,
+  point: Position,
+  orientation: Rotation,
+): { position: Position; yaw: number } {
+  return {
+    position: roomPoint(alignment, fromDollhouse(view, point)),
+    yaw: yawOf(roomOrientation(alignment, orientationFromDollhouse(view, orientation))),
+  };
+}
+
+/**
+ * What a held piece is thrown at as it is let go (#184): its own velocity in room metres, which
+ * in a dollhouse is already as much faster than the hand as the room is smaller, so a toss flies
+ * as far as it looks. A slow hand only drifts as it opens, and in a dollhouse that drift would be
+ * a hard throw: a hand slower than 30 cm a second puts the piece down instead (null).
+ */
+export function throwInRoom(view: DollhouseView, velocity: Position): Position | null {
+  const hand = Math.hypot(velocity.x, velocity.y, velocity.z) * view.scale;
+  return view.scale < 1 && hand < THROW_HAND_SPEED ? null : velocity;
+}
+
+/** How long the hand is smoothed over in the smallest dollhouse, in milliseconds (#184). */
+const SMOOTHING_MS = 50;
+
+/**
+ * Steadies a hand that holds something in a dollhouse (#184). A hand trembles a few millimetres,
+ * and at 1:40 that is a dozen centimetres in the room, so the hand is followed smoothly: not at
+ * all at life size, over 50 ms in the smallest dollhouse. A steady move still arrives.
+ */
+export class GripSmoother {
+  private last: { position: Position; time: number } | null = null;
+
+  /** Where the hand counts as being, at `time` milliseconds, in a room drawn at `scale`. */
+  smooth(position: Position, time: number, scale: number): Position {
+    const smallness = Math.min(1, Math.max(0, (1 / scale - 1) / (1 / SMALLEST - 1)));
+    const last = this.last;
+    if (!last || smallness === 0 || time <= last.time) {
+      this.last = { position: { ...position }, time };
+      return { ...position };
+    }
+    const follow = 1 - Math.exp(-(time - last.time) / (SMOOTHING_MS * smallness));
+    const now = {
+      x: last.position.x + (position.x - last.position.x) * follow,
+      y: last.position.y + (position.y - last.position.y) * follow,
+      z: last.position.z + (position.z - last.position.z) * follow,
+    };
+    this.last = { position: now, time };
+    return { ...now };
+  }
+
+  /** Forget the hand, so the next hold starts where the hand is. */
+  reset(): void {
+    this.last = null;
+  }
+}
+
+/** The wrist palette (#184): its pieces' spacing, height above the hand, and pinch reach. */
+const SLOT_METRES = 0.06;
+const PALETTE_ABOVE_HAND = 0.12;
+const SLOT_REACH = 0.035;
+
+/**
+ * Where each of `count` catalogue pieces floats while the room is small (#184): a row above the
+ * hand holding the palette, running to the right of the face, so it reads left to right.
+ */
+export function paletteSlots(hand: Position, headYaw: number, count: number): Position[] {
+  // The person's right, as three.js turns +x by the head's yaw.
+  const right = { x: Math.cos(headYaw), z: -Math.sin(headYaw) };
+  return Array.from({ length: count }, (_, index) => {
+    const along = (index - (count - 1) / 2) * SLOT_METRES;
+    return { x: hand.x + right.x * along, y: hand.y + PALETTE_ABOVE_HAND, z: hand.z + right.z * along };
+  });
+}
+
+/** The slot a pinch at `point` is on: the nearest within 3.5 cm, or null for none. */
+export function slotAt(slots: readonly Position[], point: Position): number | null {
+  let best: number | null = null;
+  let bestDistance = SLOT_REACH;
+  for (let index = 0; index < slots.length; index += 1) {
+    const slot = slots[index];
+    const distance = Math.hypot(slot.x - point.x, slot.y - point.y, slot.z - point.z);
+    if (distance <= bestDistance) {
+      best = index;
+      bestDistance = distance;
+    }
+  }
+  return best;
 }
