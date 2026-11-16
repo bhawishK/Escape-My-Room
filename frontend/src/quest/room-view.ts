@@ -17,6 +17,9 @@ export interface DrawnRay {
 
 const RAY_COLOURS = { miss: 0x30b0c7, target: 0xff9500, blocked: 0xff3b30 } as const;
 const REACH_METRES = RAY_REACH_METERS;
+/** The card of a piece being made: its size, and how far above the hand it is held. */
+const CARD_METRES = 0.14;
+const CARD_ABOVE_HAND = 0.1;
 /** The calm view (#156): the room fades to this while an open palm pauses the visit. */
 const CALM_COLOUR = new THREE.Color('#203040');
 const ROOM_BACKGROUND = new THREE.Color('#f5f5f7');
@@ -37,6 +40,12 @@ export class QuestRoom {
   private readonly highlight = new THREE.BoxHelper(new THREE.Object3D(), 0xffcc00);
   private readonly control = new THREE.BoxHelper(new THREE.Object3D(), 0xff9500);
   private readonly rays: THREE.Mesh[] = [];
+  /** The picture of a piece being made (#186), held in the hand. */
+  private readonly card = new THREE.Mesh(
+    new THREE.PlaneGeometry(CARD_METRES, CARD_METRES),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }),
+  );
+  private cardUrl: string | null = null;
   private roomGroup: THREE.Group | null = null;
   private splat: SplatMesh | null = null;
   private sparkReady: Promise<typeof import('@sparkjsdev/spark')> | null = null;
@@ -71,6 +80,9 @@ export class QuestRoom {
     this.highlight.visible = false;
     this.control.visible = false;
     scene.add(this.highlight, this.control);
+    this.card.name = 'piece-card';
+    this.card.visible = false;
+    scene.add(this.card);
     this.align(this.alignment);
   }
 
@@ -114,6 +126,39 @@ export class QuestRoom {
       this.anchor.position.set(0, this.presenting ? -STANDING_EYE_HEIGHT : 0, 0);
     }
     this.container.dataset.view = alignment.status === 'aligned' ? 'calibrated' : 'overview';
+  }
+
+  /**
+   * The picture a new piece is being made from (#186), as a card in the hand while its 3D piece
+   * is made; null takes it away.
+   */
+  showCard(url: string | null): void {
+    if (url === this.cardUrl) return;
+    this.cardUrl = url;
+    const material = this.card.material as THREE.MeshBasicMaterial;
+    material.map?.dispose();
+    material.map = null;
+    material.needsUpdate = true;
+    this.card.visible = false;
+    this.container.dataset.card = url ? 'shown' : '';
+    if (!url) return;
+    new THREE.TextureLoader().load(url, texture => {
+      if (this.cardUrl !== url) {
+        texture.dispose();
+        return;
+      }
+      texture.colorSpace = THREE.SRGBColorSpace;
+      material.map = texture;
+      material.needsUpdate = true;
+    });
+  }
+
+  /** Holds the card just above `hand`, facing `head`, in the `local` space; hidden without either. */
+  placeCard(hand: Position | null, head: Position | null): void {
+    this.card.visible = this.cardUrl !== null && hand !== null && head !== null;
+    if (!this.card.visible || !hand || !head) return;
+    this.card.position.set(hand.x, hand.y + CARD_ABOVE_HAND, hand.z);
+    this.card.lookAt(head.x, head.y, head.z);
   }
 
   /** Draws the aligned room as the dollhouse `view` says: life size, or smaller in front of the person. */

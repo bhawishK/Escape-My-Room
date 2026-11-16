@@ -7,6 +7,7 @@ selection, holding, carrying and physics treat it as they treat the box.
 
 import json
 import math
+import threading
 from pathlib import Path
 
 from pydantic import Field
@@ -28,6 +29,8 @@ class CatalogueItem(WireModel):
     node: str
     size: EntitySize
     model_url: str
+    # Made from a description (#186), rather than built in.
+    generated: bool = False
 
 
 class Catalogue:
@@ -38,6 +41,8 @@ class Catalogue:
         self.directory = directory
         self.items: dict[str, CatalogueItem] = {}
         self.error: str | None = None
+        # Generated pieces (#186) are added from a worker thread while requests list them.
+        self.lock = threading.Lock()
         try:
             data = json.loads((directory / "catalogue.json").read_text(encoding="utf-8"))
             model_url = f"{MODELS_URL}/{data['asset']}"
@@ -47,6 +52,18 @@ class Catalogue:
             }
         except (OSError, ValueError, KeyError, TypeError) as exc:
             self.error = f"The furniture catalogue could not be read: {exc}"
+
+    def add(self, item: CatalogueItem) -> None:
+        with self.lock:
+            self.items[item.id] = item
+
+    def get(self, item_id: str) -> CatalogueItem | None:
+        with self.lock:
+            return self.items.get(item_id)
+
+    def listed(self) -> list[CatalogueItem]:
+        with self.lock:
+            return list(self.items.values())
 
     def file(self, name: str) -> Path | None:
         """A model file to serve, or None for anything else."""

@@ -241,7 +241,7 @@ def read_asset(path: Path) -> GltfDocument:
         raise AssetError(f"Prepared room asset {name} could not be read.") from exc
     binary: bytes | None = None
     if path.suffix == ".glb":
-        document, binary = _split_glb(name, data)
+        document, binary = split_glb(name, data)
     else:
         try:
             document = json.loads(data.decode("utf-8"))
@@ -269,7 +269,8 @@ def read_asset(path: Path) -> GltfDocument:
     return asset
 
 
-def _split_glb(name: str, data: bytes) -> tuple[object, bytes | None]:
+def split_glb(name: str, data: bytes) -> tuple[object, bytes | None]:
+    """A .glb's JSON document and its binary chunk, if it has one."""
     unreadable = AssetError(f"Prepared room asset {name} could not be read.")
     if len(data) < 20:
         raise unreadable
@@ -295,3 +296,14 @@ def _split_glb(name: str, data: bytes) -> tuple[object, bytes | None]:
         raise unreadable from exc
     binary = chunks[1][1] if len(chunks) > 1 and chunks[1][0] == GLB_BIN_CHUNK else None
     return document, binary
+
+
+def write_glb(document: object, binary: bytes | None) -> bytes:
+    """A .glb of this JSON document and binary chunk, each padded to four bytes as glTF asks."""
+    text = json.dumps(document, separators=(",", ":")).encode("utf-8")
+    text += b" " * (-len(text) % 4)
+    chunks = struct.pack("<II", len(text), GLB_JSON_CHUNK) + text
+    if binary is not None:
+        padded = binary + b"\x00" * (-len(binary) % 4)
+        chunks += struct.pack("<II", len(padded), GLB_BIN_CHUNK) + padded
+    return struct.pack("<4sII", GLB_MAGIC, 2, 12 + len(chunks)) + chunks

@@ -8,6 +8,7 @@ import './quest.css';
 import { ReferenceSpaceType, VERSION, World } from '@iwsdk/core';
 import type * as THREE from 'three';
 import { alignmentFromPose, roomDirection, roomOrientation, roomPoint, type CalibrationInput } from '../alignment';
+import { errorMessage } from '../api';
 import { element } from '../dom';
 import { RAY_REACH_METERS, grabbedPosition, offsetOf, rayForward, targetAlongRay } from '../grab';
 import type {
@@ -285,10 +286,98 @@ function choosePiece(item: CatalogueItem | null): void {
   for (const button of furnitureList.querySelectorAll<HTMLButtonElement>('button')) {
     button.setAttribute('aria-pressed', String(button.dataset.item === chosenPiece?.id));
   }
+  const where = chosenPiece?.generated ? 'your new piece' : `the ${chosenPiece?.name.toLowerCase()}`;
   furnitureStatus.textContent = chosenPiece
-    ? `Press on the room map where the ${chosenPiece.name.toLowerCase()} goes, and drag the way it faces.`
+    ? `Press on the room map where ${where} goes, and drag the way it faces.`
     : FURNITURE_HINT;
 }
+
+/** Making a piece from a description (#186): the job, polled until it ends. */
+const makeForm = element<HTMLFormElement>('furniture-make');
+const makeInput = element<HTMLInputElement>('furniture-description');
+const makeButton = element<HTMLButtonElement>('furniture-make-button');
+const cancelButton = element<HTMLButtonElement>('furniture-cancel');
+const preview = element<HTMLImageElement>('furniture-preview');
+/** How often a job is asked about, in milliseconds. */
+const JOB_POLL_MS = 1000;
+let making: string | null = null;
+
+interface FurnitureJob {
+  id: string;
+  state: 'queued' | 'image_ready' | 'ready' | 'failed' | 'cancelled';
+  error: string | null;
+  image_url: string | null;
+  item: CatalogueItem | null;
+}
+
+/** Shows a job's progress on the page and its picture in the hand in VR; ends it when it's done. */
+function showJob(job: FurnitureJob): void {
+  making = job.state === 'queued' || job.state === 'image_ready' ? job.id : null;
+  makeButton.disabled = making !== null;
+  cancelButton.hidden = making === null;
+  preview.hidden = job.image_url === null || making === null;
+  if (job.image_url && !preview.hidden && preview.getAttribute('src') !== job.image_url) preview.src = job.image_url;
+  room?.showCard(making && job.image_url ? job.image_url : null);
+  if (job.state === 'queued') furnitureStatus.textContent = 'Making a picture of it…';
+  else if (job.state === 'image_ready') furnitureStatus.textContent = 'Here is the picture. Making it into a 3D piece, which can take a few minutes…';
+  else if (job.state === 'failed') furnitureStatus.textContent = job.error ?? 'The piece could not be made.';
+  else if (job.state === 'cancelled') furnitureStatus.textContent = 'Stopped. Nothing was added.';
+  else if (job.item) {
+    const item = job.item;
+    void showCatalogue().then(() => {
+      chosenPiece = null;
+      choosePiece(item);
+    });
+  }
+}
+
+async function followJob(id: string): Promise<void> {
+  while (making === id) {
+    await new Promise(resolve => setTimeout(resolve, JOB_POLL_MS));
+    if (making !== id) return;
+    try {
+      const response = await fetch(`/api/furniture/jobs/${id}`);
+      if (response.ok) showJob(await response.json() as FurnitureJob);
+      // Jobs live in the server's memory: after a restart this one is gone, so stop asking.
+      else if (response.status === 404 && making === id) {
+        showJob({ id, state: 'failed', error: 'The server lost this piece, perhaps because it restarted. Make it again.', image_url: null, item: null });
+      }
+    } catch {
+      // A dropped request is asked again next time.
+    }
+  }
+}
+
+makeForm.addEventListener('submit', event => {
+  event.preventDefault();
+  const description = makeInput.value.trim();
+  if (description.length < 3 || making) return;
+  makeButton.disabled = true;
+  void (async () => {
+    const response = await fetch('/api/furniture/jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description }),
+    }).catch(() => null);
+    if (!response?.ok) {
+      makeButton.disabled = false;
+      furnitureStatus.textContent = response
+        ? await errorMessage(response, 'The piece could not be started.')
+        : 'The server could not be reached. Try again.';
+      return;
+    }
+    const job = await response.json() as FurnitureJob;
+    showJob(job);
+    void followJob(job.id);
+  })();
+});
+cancelButton.addEventListener('click', () => {
+  const id = making;
+  if (!id) return;
+  void fetch(`/api/furniture/jobs/${id}/cancel`, { method: 'POST' })
+    .then(response => response.ok ? response.json() as Promise<FurnitureJob> : null)
+    .then(job => { if (job) showJob(job); });
+});
 
 /** The catalogue's pieces as buttons, each with its true size. */
 async function showCatalogue(): Promise<void> {
@@ -560,6 +649,10 @@ function frame(xrFrame: XRFrame, time: number): void {
   // What a ray is on, else the object the gaze has rested on long enough to start a topic.
   const topic = rest.progress >= 1 ? rest.target : null;
   room?.showHighlight(mine || paused ? null : aimed ?? topic);
+
+  // The picture of a piece being made rides above the left hand, else the first one (#186).
+  const carrying = sample.inputs.find(input => input.source.handedness === 'left') ?? sample.inputs[0];
+  room?.placeCard(carrying?.pinchAt ?? carrying?.grip?.position ?? null, head?.position ?? null);
 
   publishPresence(time);
   showHud(time, drawn.some(ray => ray.look === 'blocked'));

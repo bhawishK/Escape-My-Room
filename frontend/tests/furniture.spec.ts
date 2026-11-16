@@ -35,3 +35,30 @@ test('a piece chosen on the headset page and pressed onto the map is drawn on bo
   await phone.close();
   await headset.close();
 });
+
+test('a described piece shows its picture while it is made, then is chosen to place at true size', async ({ page }) => {
+  await page.goto(`${ORIGIN}/quest/`);
+  await page.getByRole('button', { name: 'Connect headset', exact: true }).click();
+  await expect(page.getByTestId('connection')).toHaveText('Connected · VR headset');
+  const scene = page.getByTestId('quest-scene');
+  const before = Number(await scene.getAttribute('data-furniture') ?? 0);
+
+  await page.getByLabel('Make a new piece').fill('a green sofa, 2 m long');
+  await page.getByRole('button', { name: 'Make it' }).click();
+
+  // The fixture generator draws first, then models: the picture shows on the page and as the card.
+  await expect(page.getByTestId('furniture-preview')).toBeVisible();
+  await expect(scene).toHaveAttribute('data-card', 'shown');
+  await expect(page.getByTestId('furniture-status')).toContainText('Here is the picture');
+
+  // The fixture's 4 m box, 2 m long as asked.
+  const made = page.getByRole('button', { name: 'A green sofa, 2 m long · 2 × 0.5 × 1 m' });
+  await expect(made).toHaveAttribute('aria-pressed', 'true', { timeout: 10_000 });
+  await expect(page.getByTestId('furniture-preview')).toBeHidden();
+  await expect(scene).toHaveAttribute('data-card', '');
+
+  const plan = page.getByTestId('quest-map-plan');
+  const box = (await plan.boundingBox())!;
+  await page.mouse.click(box.x + 0.6 * box.width, box.y + 0.6 * box.height);
+  await expect(scene).toHaveAttribute('data-furniture', String(before + 1));
+});

@@ -18,7 +18,7 @@ const servers: TestServer[] = [
   // Its own server, because making a room live (#138) changes the room for every test using it.
   { port: 8775, room: 'prepared-room', settings: {} },
   // Its own server, because placed furniture (#181) stays in the room for every test using it.
-  { port: 8776, room: 'prepared-room', settings: {} },
+  { port: 8776, room: 'prepared-room', settings: { ESCAPE_ROOM_FURNITURE_GENERATOR: 'fixture', ESCAPE_ROOM_FIXTURE_GENERATOR_SECONDS: '1' } },
 ];
 
 // One fresh capture store per run. Workers inherit the variable, so they agree with the servers.
