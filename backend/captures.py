@@ -181,6 +181,15 @@ class CaptureStore:
         relative, media_type = image.file(kind)
         return self.root / capture.id / relative, media_type
 
+    def photo_png(self, upload: Upload) -> bytes:
+        """One photo checked with the capture rules (type, size, pixels) and turned upright, as
+        a PNG; for furniture made from a photo (#187). Raises CaptureError when refused."""
+        checked = self._check(upload)
+        if checked.upright_png is not None:
+            return checked.upright_png
+        with Image.open(io.BytesIO(checked.original)) as image:
+            return _png(image, checked.record.original_filename)
+
     def _check(self, upload: Upload) -> _CheckedPhoto:
         """Decode one upload fully, enforce the limits, and make its upright copy if needed."""
         name = PurePath(upload.filename.replace("\\", "/")).name[:255] or "photo"

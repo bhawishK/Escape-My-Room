@@ -1,4 +1,5 @@
 import './style.css';
+import { setUpPhotoPiece } from './photo-piece';
 import { roomDirection, roomHeading, roomOrientation, roomPoint } from './alignment';
 import { element } from './dom';
 import { FloorDepth } from './floor-depth';
@@ -37,6 +38,7 @@ let connected = false;
 let busy = false;
 let xrActive = false;
 let state: SessionState | null = null;
+setUpPhotoPiece();
 /** A designer's hand not heard of for this long has gone, as a stale presence is (#185). */
 const HAND_STALE_MS = 1500;
 let handStale: number | undefined;
@@ -707,7 +709,7 @@ const client = new SessionClient({
         view.applyView({ status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } });
         view.clearRoom();
         view.apply({
-          revision: 0, mobile_connected: false, vr_connected: false,
+          revision: 0, catalogue_version: 0, mobile_connected: false, vr_connected: false,
           marker: { position: null, tracking_status: 'inactive', reference_space: null, heading: null, pitch: null },
           participants: { mobile_master: NO_PRESENCE, vr_solver: NO_PRESENCE },
           alignment: {

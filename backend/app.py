@@ -224,8 +224,27 @@ def create_app(
         raise ValueError("ESCAPE_ROOM_SIMULATED_DELAY_MS must be from 0 to 5000.")
     catalogue = Catalogue()
     # Furniture made from a description (#186), kept with the data so it survives a restart.
+    # The server's event loop, once it runs, for news from worker threads.
+    running: dict[str, asyncio.AbstractEventLoop] = {}
+
+    def piece_added(_item: object) -> None:
+        """A piece joined the catalogue (#187): tell both devices, from the job's thread."""
+        loop = running.get("loop")
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(lambda: room.track(announce_catalogue()))
+
+    async def announce_catalogue() -> None:
+        async with room.lock:
+            room.catalogue_version += 1
+            room.revision += 1
+            await room.broadcast()
+
     generation = FurnitureGeneration(
-        data / "furniture", catalogue, generator_from_environment(), timeout_from_environment()
+        data / "furniture",
+        catalogue,
+        generator_from_environment(),
+        timeout_from_environment(),
+        on_added=piece_added,
     )
     room = PrototypeRoom(load_error=load_error, delivery_delay=delay_ms / 1000)
     # The server's one physics simulation (#159), started and stopped with the server.
@@ -270,6 +289,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        running["loop"] = asyncio.get_running_loop()
         physics.start()
         try:
             yield
@@ -474,6 +494,21 @@ def create_app(
                 503, "Making furniture from a description isn't set up on this server."
             )
         return generation.start(request.description).model_dump()
+
+    @app.post("/api/furniture/jobs/photo", status_code=202)
+    def start_photo_generation(image: UploadFile, description: str = Form("")) -> dict[str, Any]:
+        """Make a piece from the resident's photo (#187), checked with the photo rules."""
+        if not generation.available:
+            raise HTTPException(503, "Making furniture from a photo isn't set up on this server.")
+        if len(description) > 200:
+            raise HTTPException(422, "Describe the piece in at most 200 characters.")
+        # No more than the photo limit and one byte is read: anything larger is refused.
+        data = image.file.read(captures.limits.max_image_bytes + 1)
+        picture = captures.photo_png(Upload(image.filename or "photo", data))
+        try:
+            return generation.start_photo(picture, description).model_dump()
+        except OSError as exc:
+            raise HTTPException(500, "The photo couldn't be saved on the server.") from exc
 
     @app.get("/api/furniture/jobs/{job_id}")
     async def generation_job(job_id: str) -> dict[str, Any]:

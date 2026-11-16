@@ -30,6 +30,15 @@ export interface RoomEntity {
   furniture?: string | null;
 }
 
+/** A job making a piece of furniture from a description or a photo (#186, #187). */
+export interface FurnitureJob {
+  id: string;
+  state: 'queued' | 'image_ready' | 'ready' | 'failed' | 'cancelled';
+  error: string | null;
+  image_url: string | null;
+  item: CatalogueItem | null;
+}
+
 /** A piece the designer can place (#181), from GET /api/furniture. */
 export interface CatalogueItem {
   id: string;
@@ -83,6 +92,8 @@ export const NO_PRESENCE: PresenceState = {
 
 export interface SessionState {
   revision: number;
+  /** Counts pieces added to the catalogue, so pages reload it when one is made (#187). */
+  catalogue_version: number;
   mobile_connected: boolean;
   vr_connected: boolean;
   marker: {
