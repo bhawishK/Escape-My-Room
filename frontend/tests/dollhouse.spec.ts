@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { pinchPoint } from '../src/quest/gestures';
 import {
-  DollhouseScaling, LIFE_SIZE, fromDollhouse, scaleLabel, orientationFromDollhouse, orientationToDollhouse, toDollhouse,
+  DollhouseCarry, DollhouseScaling, LIFE_SIZE, fromDollhouse, residentFigure, scaleLabel, orientationFromDollhouse, orientationToDollhouse, toDollhouse,
   velocityFromDollhouse, velocityToDollhouse, type DollhouseView,
 } from '../src/quest/dollhouse';
 
@@ -157,4 +157,98 @@ test('a hand pinches at the point between its thumb tip and index tip', () => {
   expect(point.y).toBeCloseTo(1.2, 9);
   expect(point.z).toBeCloseTo(-0.305, 9);
   expect(pinchPoint({ wrist: { x: 0, y: 1, z: 0 }, 'thumb-tip': { x: 0, y: 1, z: 0 } })).toBeNull();
+});
+
+/** A hand's grip turned `yaw` radians to the left about the vertical, at `position`. */
+const grip = (position: { x: number; y: number; z: number }, yaw = 0) => ({
+  position, orientation: { x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) },
+});
+
+test('a hand carrying the dollhouse moves it with the hand, keeping its size and turn', () => {
+  const carry = new DollhouseCarry();
+  expect(carry.begin(grip({ x: 0.1, y: 1, z: -0.5 }), TABLE)).toBe(true);
+  const view = carry.update(grip({ x: 0.4, y: 1.1, z: -0.5 }));
+
+  expect(view.scale).toBe(TABLE.scale);
+  expect(view.yaw).toBeCloseTo(TABLE.yaw, 9);
+  close(view.offset, { x: 0.3, y: 0.9, z: -1 });
+});
+
+test('turning the carrying hand a quarter left turns the dollhouse a quarter left about the hand', () => {
+  const carry = new DollhouseCarry();
+  const hand = { x: 0.1, y: 1, z: -0.5 };
+  // The room point in the hand: TABLE's quarter turn takes room -z to the left, 20 times smaller.
+  const held = fromDollhouse(TABLE, hand);
+  carry.begin(grip(hand), TABLE);
+  const view = carry.update(grip(hand, Math.PI / 2));
+
+  expect(view.yaw).toBeCloseTo(Math.PI, 9);
+  close(toDollhouse(view, held), hand);
+  // A point 2 m further along room -z than the held one now lies 10 cm toward +z of the hand.
+  close(toDollhouse(view, { ...held, z: held.z - 2 }), { x: 0.1, y: 1, z: -0.4 });
+});
+
+test('the real room at life size cannot be carried', () => {
+  const carry = new DollhouseCarry();
+  expect(carry.begin(grip({ x: 0, y: 1, z: -0.5 }), LIFE_SIZE)).toBe(false);
+  expect(carry.carrying).toBe(false);
+});
+
+test('carried and turned anywhere, grown back near life size it lines up with the real room again', () => {
+  const carry = new DollhouseCarry();
+  carry.begin(grip({ x: 0, y: 1, z: -0.5 }), TABLE);
+  const moved = carry.update(grip({ x: 0.7, y: 0.6, z: -0.2 }, 1.2));
+  carry.end();
+
+  const scaling = new DollhouseScaling();
+  scaling.view = moved;
+  scaling.update(hands(0.05), true);
+  expect(scaling.update(hands(0.95), true).scale).toBeCloseTo(0.95, 9);
+  expect(scaling.update([], true)).toEqual(LIFE_SIZE);
+});
+
+/** The room's anchor in the `local` space before alignment: the floor 1.6 m below the eyes. */
+const ANCHOR = { yaw: 0, offset: { x: 0, y: -1.6, z: 0 } };
+
+test('the resident stands in the dollhouse where they stand in the room, facing the same way', () => {
+  const figure = residentFigure(
+    { tracking_status: 'tracked', position: { x: 2, y: 0, z: -1 }, heading: 0.3 }, TABLE, ANCHOR)!;
+
+  // Their feet at (2, -1.6, -1) in the `local` space; the quarter turn takes room +x to -z and
+  // room -z to -x, a twentieth of the size, around the table point (0, 0.8, -1).
+  close(figure.position, { x: -0.05, y: 0.72, z: -1.1 });
+  expect(figure.heading).toBeCloseTo(0.3 + Math.PI / 2, 9);
+  expect(figure.opacity).toBe(1);
+});
+
+test('the resident is drawn at least 8 cm tall in a small dollhouse, and to scale in a large one', () => {
+  const presence = { tracking_status: 'tracked' as const, position: { x: 0, y: 0, z: 0 }, heading: 0 };
+  expect(residentFigure(presence, { ...TABLE, scale: 1 / 40 }, ANCHOR)!.height).toBeCloseTo(0.08, 9);
+  // Life size, a figure is as tall as a standing person.
+  expect(residentFigure(presence, LIFE_SIZE, ANCHOR)!.height).toBeCloseTo(1.55, 9);
+});
+
+test('a stale resident is faint, and one inactive, lost or without a place is not drawn', () => {
+  const at = { position: { x: 0, y: 0, z: 0 }, heading: 0 };
+  expect(residentFigure({ tracking_status: 'stale', ...at }, TABLE, ANCHOR)!.opacity).toBe(0.35);
+  expect(residentFigure({ tracking_status: 'inactive', ...at }, TABLE, ANCHOR)).toBeNull();
+  expect(residentFigure({ tracking_status: 'lost', ...at }, TABLE, ANCHOR)).toBeNull();
+  expect(residentFigure({ tracking_status: 'tracked', position: null, heading: null }, TABLE, ANCHOR)).toBeNull();
+  expect(residentFigure(undefined, TABLE, ANCHOR)).toBeNull();
+});
+
+test('a hand pointing straight up still turns the dollhouse only by its turn about the vertical', () => {
+  // A quarter turn about x (the hand pointing up), then `yaw` about the vertical.
+  const pitched = (yaw: number) => {
+    const b = Math.PI / 4;
+    const a = yaw / 2;
+    return {
+      position: { x: 0.1, y: 1, z: -0.5 },
+      orientation: { x: Math.cos(a) * Math.sin(b), y: Math.sin(a) * Math.cos(b), z: -Math.sin(a) * Math.sin(b), w: Math.cos(a) * Math.cos(b) },
+    };
+  };
+  const carry = new DollhouseCarry();
+  carry.begin(pitched(0), TABLE);
+  expect(carry.update(pitched(0.01)).yaw).toBeCloseTo(TABLE.yaw + 0.01, 6);
+  expect(carry.update(pitched(0.5)).yaw).toBeCloseTo(TABLE.yaw + 0.5, 6);
 });

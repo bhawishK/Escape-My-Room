@@ -5,7 +5,7 @@ import { STANDING_EYE_HEIGHT } from '../alignment';
 import type { AlignmentState, Position, PresenceState, RoomEntity, SessionState } from '../protocol';
 import { RAY_REACH_METERS } from '../grab';
 import { LateEntities, applyPlacement, placeEntities, roomOwn } from '../room';
-import { scaleLabel, type DollhouseView } from './dollhouse';
+import { FIGURE_METRES, LIFE_SIZE, residentFigure, scaleLabel, type DollhouseView } from './dollhouse';
 
 /** A ray drawn from a controller, a hand or a fingertip, in the `local` reference space. */
 export interface DrawnRay {
@@ -46,6 +46,9 @@ export class QuestRoom {
     new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }),
   );
   private cardUrl: string | null = null;
+  /** The phone user's latest presence, and the dollhouse view the figure is drawn in (#182). */
+  private presence: PresenceState | undefined = undefined;
+  private view: DollhouseView = LIFE_SIZE;
   private roomGroup: THREE.Group | null = null;
   private splat: SplatMesh | null = null;
   private sparkReady: Promise<typeof import('@sparkjsdev/spark')> | null = null;
@@ -76,31 +79,40 @@ export class QuestRoom {
     light.position.set(2, 4, 1);
     scene.add(light);
     this.phone = person(0x30b0c7);
-    this.anchor.add(this.phone);
+    // In the scene, not the anchor: `residentFigure` places it, also in a dollhouse (#182).
+    scene.add(this.phone);
     this.highlight.visible = false;
     this.control.visible = false;
     scene.add(this.highlight, this.control);
     this.card.name = 'piece-card';
     this.card.visible = false;
     scene.add(this.card);
+    this.container.dataset.scale = scaleLabel(this.view.scale);
     this.align(this.alignment);
   }
 
   /** Draws the phone user where Python last placed them; faded while their tracking is stale. */
   showPhone(presence: PresenceState | undefined): void {
-    const shown = (presence?.tracking_status === 'tracked' || presence?.tracking_status === 'stale') &&
-      presence.position !== null && presence.heading !== null;
-    this.phone.visible = shown;
-    this.container.dataset.phoneShown = String(shown);
-    if (!shown || !presence?.position || presence.heading === null) return;
-    this.phone.position.set(presence.position.x, presence.position.y, presence.position.z);
-    this.phone.rotation.y = presence.heading;
-    const stale = presence.tracking_status === 'stale';
+    this.presence = presence;
+    this.drawPhone();
+  }
+
+  /** Puts the phone user's figure where they stand, in the room or the dollhouse (#182). */
+  private drawPhone(): void {
+    const anchor = { yaw: this.anchor.rotation.y, offset: this.anchor.position };
+    const figure = residentFigure(this.presence, this.view, anchor);
+    this.phone.visible = figure !== null;
+    this.container.dataset.phoneShown = String(figure !== null);
+    if (!figure) return;
+    this.phone.position.set(figure.position.x, figure.position.y, figure.position.z);
+    this.phone.rotation.y = figure.heading;
+    this.phone.scale.setScalar(figure.height / FIGURE_METRES);
+    this.container.dataset.phoneHeight = figure.height.toFixed(3);
     this.phone.traverse(child => {
       const material = (child as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
       if (!material) return;
       material.transparent = true;
-      material.opacity = stale ? 0.35 : 1;
+      material.opacity = figure.opacity;
     });
   }
 
@@ -126,6 +138,7 @@ export class QuestRoom {
       this.anchor.position.set(0, this.presenting ? -STANDING_EYE_HEIGHT : 0, 0);
     }
     this.container.dataset.view = alignment.status === 'aligned' ? 'calibrated' : 'overview';
+    this.drawPhone();
   }
 
   /**
@@ -163,12 +176,18 @@ export class QuestRoom {
 
   /** Draws the aligned room as the dollhouse `view` says: life size, or smaller in front of the person. */
   setDollhouse(view: DollhouseView): void {
+    // Called every frame: nothing to do for the view already drawn.
+    const now = this.view;
+    if (view.scale === now.scale && view.yaw === now.yaw &&
+      view.offset.x === now.offset.x && view.offset.y === now.offset.y && view.offset.z === now.offset.z) return;
     this.dollhouse.position.set(view.offset.x, view.offset.y, view.offset.z);
     this.dollhouse.rotation.y = view.yaw;
     this.dollhouse.scale.setScalar(view.scale);
     // Outlines are measured from world matrices now, not at the next render.
     this.dollhouse.updateMatrixWorld(true);
     this.container.dataset.scale = scaleLabel(view.scale);
+    this.view = view;
+    this.drawPhone();
   }
 
   /** The calm view: the room fades away until it is called again with false. */
