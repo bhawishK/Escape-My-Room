@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { Dwell, GestureGate, HeadNods, handPose, type HandJoints } from '../src/quest/gestures';
+import { Dwell, GestureGate, HeadNods, RAISED_BELOW_HEAD_METRES, handPose, raised, type HandJoints } from '../src/quest/gestures';
 
 // Hand and head gestures on the headset page (#156), from WebXR joint positions in metres.
 
@@ -30,11 +30,54 @@ test('a flat hand with the thumb away is an open palm', () => {
   expect(handPose(hand(FINGERS))).toBe('open-palm');
 });
 
-test('only the index finger straight is pointing; a fist is no pose', () => {
+test('only the index finger straight is pointing', () => {
   expect(handPose(hand(['index']))).toBe('point');
-  expect(handPose(hand([]))).toBe('none');
   // Index and middle together is neither pointing nor an open palm.
   expect(handPose(hand(['index', 'middle']))).toBe('none');
+});
+
+test('all four fingers curled is a fist (#176)', () => {
+  expect(handPose(hand([]))).toBe('fist');
+});
+
+test('a half-closed hand is not a fist', () => {
+  // Any finger still straight, whichever it is.
+  for (const finger of FINGERS) expect(handPose(hand([finger]))).not.toBe('fist');
+  expect(handPose(hand(['middle', 'ring']))).toBe('none');
+  expect(handPose(hand(['ring', 'pinky']))).toBe('none');
+  expect(handPose(hand(FINGERS))).toBe('open-palm');
+});
+
+test('a pinch wins over a fist', () => {
+  // The thumb tip 1 cm from the curled index tip.
+  expect(handPose(hand([], { x: -0.025, y: -0.02, z: -0.05 }))).toBe('pinch');
+});
+
+test('a curled hand with a finger the frame did not see is not a fist', () => {
+  for (const joint of ['pinky-finger-tip', 'index-finger-phalanx-proximal', 'wrist'] as const) {
+    const joints = hand([]);
+    delete joints[joint];
+    expect(handPose(joints)).toBe('none');
+  }
+});
+
+test('a hand is held up when its wrist is at chest height or above, not at the side', () => {
+  const head = { x: 0, y: 1.6, z: 0 };
+  const wristAt = (y: number) => ({ x: 0.2, y, z: -0.3 });
+  // In front of the face, at the shoulder, and at the chest.
+  for (const y of [1.7, 1.45, 1.2]) expect(raised(wristAt(y), head)).toBe(true);
+  // Exactly at the limit counts; just under it does not.
+  expect(raised(wristAt(1.6 - RAISED_BELOW_HEAD_METRES), head)).toBe(true);
+  expect(raised(wristAt(1.6 - RAISED_BELOW_HEAD_METRES - 0.01), head)).toBe(false);
+  // Hanging at the side, about 0.8 m below the head.
+  expect(raised(wristAt(0.8), head)).toBe(false);
+  // It follows the head: sitting down lowers the limit with it.
+  expect(raised(wristAt(0.8), { x: 0, y: 1.1, z: 0 })).toBe(true);
+});
+
+test('a hand is not held up when its wrist or the head was not seen', () => {
+  expect(raised(undefined, { x: 0, y: 1.6, z: 0 })).toBe(false);
+  expect(raised({ x: 0, y: 1.6, z: 0 }, null)).toBe(false);
 });
 
 test('the thumb tip on the index tip is a pinch, whatever the other fingers do', () => {

@@ -9,7 +9,7 @@ import type { Position, Rotation } from '../protocol';
 /** WebXR hand joints by name, where the frame gave a pose for them. */
 export type HandJoints = Partial<Record<XRHandJoint, Position>>;
 
-export type HandPose = 'pinch' | 'point' | 'open-palm' | 'none';
+export type HandPose = 'pinch' | 'point' | 'open-palm' | 'fist' | 'none';
 
 const FINGERS = ['index-finger', 'middle-finger', 'ring-finger', 'pinky-finger'] as const;
 /**
@@ -41,7 +41,23 @@ export function handPose(joints: HandJoints): HandPose {
   if (straight.every(finger => finger === true)) return 'open-palm';
   const [index, ...others] = straight;
   if (index === true && others.every(finger => finger === false)) return 'point';
+  // All four curled. A finger the frame did not see is not counted as curled.
+  if (straight.every(finger => finger === false)) return 'fist';
   return 'none';
+}
+
+/**
+ * A hand counts as held up when its wrist is no more than this far below the head, in metres:
+ * about chest height. A relaxed hand at the side is curled like a fist, and is well below it.
+ */
+export const RAISED_BELOW_HEAD_METRES = 0.45;
+
+/**
+ * Whether the hand is held up, from its wrist and the head in the same space, with +y up. Not
+ * known, and so not raised, when either was not seen this frame.
+ */
+export function raised(wrist: Position | undefined, head: Position | null): boolean {
+  return Boolean(wrist && head && wrist.y >= head.y - RAISED_BELOW_HEAD_METRES);
 }
 
 /**
