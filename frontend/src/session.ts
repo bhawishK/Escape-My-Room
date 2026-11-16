@@ -8,6 +8,8 @@ interface SessionEvents {
   error: (message: string) => void;
   /** A voice call set-up message from the other person (#13). */
   voice?: (signal: VoiceSignal) => void;
+  /** The phone: the designer's hand in the dollhouse, or null when it has gone (#185). */
+  designerHand?: (position: Position | null, length: number | null) => void;
   poseSent?: (sequence: number) => void;
   poseReplaced?: () => void;
 }
@@ -20,6 +22,7 @@ export class SessionClient {
   private socket: WebSocket | null = null;
   private sequence = 0;
   private presenceSequence = 0;
+  private handSequence = 0;
   private gripSequence = 0;
   /** The newest pose not yet sent because the connection was congested. */
   private waitingPose: PoseInput | null = null;
@@ -36,6 +39,7 @@ export class SessionClient {
     this.socket = socket;
     this.sequence = 0;
     this.presenceSequence = 0;
+    this.handSequence = 0;
     this.gripSequence = 0;
     this.stopWaitingPose();
     try {
@@ -59,6 +63,8 @@ export class SessionClient {
               this.events.state(message.state);
             } else if (message.type === 'selection') {
               this.events.selection({ id: message.id, rejected: message.rejected });
+            } else if (message.type === 'designer_hand') {
+              this.events.designerHand?.(message.position, message.length);
             } else if (message.type === 'voice_signal') {
               this.events.voice?.(message);
             } else if (message.type === 'error') {
@@ -126,6 +132,7 @@ export class SessionClient {
   }
 
   /** At most one presence update in flight beyond the 16 KiB socket buffer. Returns whether it sent. */
+
   sendPresence(presence: PresenceInput): boolean {
     if (this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > 16384) return false;
     const sequence = ++this.presenceSequence;
@@ -220,6 +227,17 @@ export class SessionClient {
       usernameFragment: from.usernameFragment ?? null,
     } : null;
     this.socket.send(JSON.stringify({ type: 'voice_signal', kind: 'candidate', candidate }));
+  }
+
+  /**
+   * The headset's hand inside the dollhouse in room metres, and how long it is drawn in the room,
+   * or nulls as it leaves (#185).
+   */
+  sendDesignerHand(position: Position | null, length: number | null): boolean {
+    if (this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > 16384) return false;
+    const sequence = ++this.handSequence;
+    this.socket.send(JSON.stringify({ type: 'designer_hand', sequence, position, length }));
+    return true;
   }
 
   sendRoomLoaded(roomVersion: number): void {

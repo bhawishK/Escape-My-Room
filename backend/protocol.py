@@ -120,6 +120,17 @@ class RemoveFurnitureMessage(WireModel):
     id: str = Field(max_length=64)
 
 
+class DesignerHandMessage(WireModel):
+    """The headset's hand inside the dollhouse, in room metres, for the phone to draw as a giant
+    hand (#185); null when no hand is in it. Passed to the phone only, never kept as room state."""
+
+    type: Literal["designer_hand"]
+    sequence: int = Field(ge=1)
+    position: Position | None
+    # How long the hand is drawn in the room, in metres: a real hand over the dollhouse's size.
+    length: float | None = Field(default=None, gt=0, le=100)
+
+
 class Velocity(WireModel):
     """A velocity in room metres per second. Any finite speed is accepted, and physics caps it;
     the bound only keeps the numbers sane."""

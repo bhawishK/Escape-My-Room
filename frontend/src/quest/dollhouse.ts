@@ -8,7 +8,7 @@
  * and moved by `offset`, as a three.js group with that position, rotation.y and scale.
  */
 import { roomOrientation, roomPoint, type CalibrationInput } from '../alignment';
-import type { Position, PresenceState, Rotation } from '../protocol';
+import type { Position, PresenceState, RoomEntity, Rotation } from '../protocol';
 
 export interface DollhouseView {
   /** How big the room is drawn: 1 at life size, 0.05 at a twentieth. */
@@ -312,4 +312,34 @@ export function slotAt(slots: readonly Position[], point: Position): number | nu
     }
   }
   return best;
+}
+
+/** How high the room reaches above its floor, for whether a hand is in the dollhouse (#185). */
+const CEILING_METRES = 3;
+/** A designer's hand, wrist to fingertip, in metres: drawn this long times the dollhouse's size. */
+export const HAND_METRES = 0.19;
+
+/**
+ * The room point of the first hand inside the small room (#185): over one of its floor pieces
+ * and below a 3 m ceiling, in room metres, for the phone to draw a giant hand there. Null when
+ * no hand is in it, or the room is at life size, where the person is simply standing in it.
+ * `floor` is the room's floor pieces, as `floorPieces` gives them.
+ */
+export function handInDollhouse(
+  view: DollhouseView,
+  alignment: CalibrationInput,
+  hands: readonly Position[],
+  floor: readonly RoomEntity[],
+): Position | null {
+  if (view.scale >= 1 || floor.length === 0) return null;
+  for (const hand of hands) {
+    const room = roomPoint(alignment, fromDollhouse(view, hand));
+    const over = floor.find(piece =>
+      Math.abs(room.x - piece.position.x) <= piece.size.width / 2 &&
+      Math.abs(room.z - piece.position.z) <= piece.size.depth / 2);
+    if (!over) continue;
+    const top = over.position.y + over.size.height;
+    if (room.y >= top && room.y <= top + CEILING_METRES) return room;
+  }
+  return null;
 }

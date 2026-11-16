@@ -144,4 +144,6 @@ export type ServerEvent =
   | ({ type: 'selection' } & SelectionResult)
   | { type: 'state'; state: SessionState }
   | ({ type: 'voice_signal' } & VoiceSignal)
+  /** The headset's hand inside the dollhouse, for the phone (#185); null when none is. */
+  | { type: 'designer_hand'; position: Position | null; length: number | null }
   | { type: 'error'; code: string; message: string };

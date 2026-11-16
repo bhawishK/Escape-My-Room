@@ -5,6 +5,7 @@
  * picks a spot on the floor and a way to face: the phone places itself there, the headset stands
  * there. Its top is the room's -z and its right +x.
  */
+import { FLOOR_THICKNESS, floorPieces } from './room';
 import type { PresenceState, Role, SessionState } from './protocol';
 
 type Room = SessionState['room'];
@@ -27,7 +28,6 @@ const PIN = '📍';
 // A drag shorter than this, in pixels, is a tap: the way to face is not changed.
 const DRAG_PIXELS = 12;
 // Static entities this thin are floor, as the phone's step counting takes them.
-const FLOOR_THICKNESS = 0.05;
 
 interface Bounds { minX: number; maxX: number; minZ: number; maxZ: number }
 
@@ -161,7 +161,7 @@ export class RoomMap {
 
 /** The floor's extent, or every entity's, for a room without a map image. */
 function outlineBounds(room: Room): Bounds {
-  const floors = room.entities.filter(entity => entity.kind === 'static' && entity.size.height <= FLOOR_THICKNESS);
+  const floors = floorPieces(room.entities);
   const shapes = floors.length ? floors : room.entities;
   if (!shapes.length) return { minX: -2, maxX: 2, minZ: -2, maxZ: 2 };
   return {
