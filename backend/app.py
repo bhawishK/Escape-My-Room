@@ -34,6 +34,7 @@ from backend.captures import (
 from backend.delivery import Outbox
 from backend.env_file import load_env_file
 from backend.errors import Refusal
+from backend.furniture import Catalogue
 from backend.live_room import LiveRoomError, LiveRooms
 from backend.physics import PhysicsWorker
 from backend.preparation import (
@@ -51,6 +52,7 @@ from backend.prepared_room import (
 )
 from backend.protocol import (
     AcquireMessage,
+    AddFurnitureMessage,
     CalibrateMessage,
     ClearAlignmentMessage,
     EntityTransformMessage,
@@ -94,6 +96,7 @@ type Incoming = (
     | VoiceReadyMessage
     | VoiceMuteMessage
     | VoiceSignalMessage
+    | AddFurnitureMessage
 )
 # The message model for each incoming `type`.
 INCOMING: dict[str, type[Incoming]] = {
@@ -110,6 +113,7 @@ INCOMING: dict[str, type[Incoming]] = {
     "voice_ready": VoiceReadyMessage,
     "voice_mute": VoiceMuteMessage,
     "voice_signal": VoiceSignalMessage,
+    "add_furniture": AddFurnitureMessage,
 }
 
 # Why a voice call set-up message was not passed on (#13), as the page shows it.
@@ -130,6 +134,14 @@ SELECTION_REFUSALS = {
     "unknown": ("unknown_entity", "That room object does not exist."),
     "not_selectable": ("entity_not_selectable", "That object is fixed and cannot be selected."),
     "held": ("selection_held", "Let go of the object before changing the selection."),
+}
+
+# Why a piece of furniture was not placed (#181).
+FURNITURE_REFUSALS = {
+    "mismatch": ROOM_VERSION_MISMATCH,
+    "unknown_item": ("unknown_furniture", "That piece is not in the furniture catalogue."),
+    "outside": ("outside_room", "Place furniture with all of it on the room's floor."),
+    "too_many": ("too_much_furniture", "The room is full. Take a piece away before adding more."),
 }
 
 
@@ -188,6 +200,7 @@ def create_app(
     delay_ms = float(os.environ.get("ESCAPE_ROOM_SIMULATED_DELAY_MS") or 0)
     if not 0 <= delay_ms <= 5000:
         raise ValueError("ESCAPE_ROOM_SIMULATED_DELAY_MS must be from 0 to 5000.")
+    catalogue = Catalogue()
     room = PrototypeRoom(load_error=load_error, delivery_delay=delay_ms / 1000)
     # The server's one physics simulation (#159), started and stopped with the server.
     physics = PhysicsWorker(room.physics_changed, room.physics_moved)
@@ -418,6 +431,20 @@ def create_app(
             await swap_in(loaded, lambda: live_rooms.record(directory, version, previous.job_id))
             return live_rooms.describe(loaded).model_dump()
 
+    @app.get("/api/furniture")
+    async def furniture_catalogue() -> dict[str, Any]:
+        """The pieces the designer can place, with their true sizes and models (#181)."""
+        if catalogue.error is not None:
+            raise HTTPException(503, catalogue.error)
+        return {"items": [item.model_dump() for item in catalogue.items.values()]}
+
+    @app.get("/api/furniture/{name}")
+    async def furniture_model(name: str) -> FileResponse:
+        path = catalogue.file(name)
+        if path is None:
+            raise HTTPException(404, "That furniture file does not exist.")
+        return FileResponse(path)
+
     @app.get("/api/rooms/live")
     async def live_room() -> dict[str, Any]:
         try:
@@ -632,6 +659,26 @@ def create_app(
                             continue
                         if result != "ok":
                             await reject(*MANIPULATION_REFUSALS[result])
+                            continue
+                        await room.broadcast()
+                    elif isinstance(incoming, AddFurnitureMessage):
+                        if role != "vr_solver":
+                            await reject("role_forbidden", "Only the headset places furniture.")
+                            continue
+                        result = room.add_furniture(
+                            incoming.room_version,
+                            catalogue.items.get(incoming.item),
+                            incoming.position,
+                            incoming.yaw,
+                        )
+                        if result == "unavailable":
+                            await reject(
+                                "room_unavailable",
+                                room.load_error or "Prepared room is unavailable.",
+                            )
+                            continue
+                        if result != "ok":
+                            await reject(*FURNITURE_REFUSALS[result])
                             continue
                         await room.broadcast()
                     elif isinstance(incoming, SelectMessage):

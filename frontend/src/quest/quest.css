@@ -20,3 +20,8 @@ body { margin: 0; background: var(--fill); }
 /* The 3D view: what the headset sees, shown small on the page before VR. */
 .quest-scene { height: 320px; border-radius: var(--radius); overflow: hidden; background: #f5f5f7; }
 .quest-scene canvas { display: block; width: 100% !important; height: 100% !important; }
+
+/* The furniture catalogue (#181): one button per piece; the chosen one is filled. */
+.furniture-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.furniture-list button { background: var(--tinted); color: var(--label); }
+.furniture-list button[aria-pressed="true"] { background: var(--blue); color: #ffffff; }
