@@ -22,6 +22,7 @@ from backend.grab import grab_offset, grabbed_point, normalize
 from backend.physics import PhysicsWorker
 from backend.prepared_room import (
     FRAME,
+    EntitySize,
     QUATERNION_ORDER,
     UNITS,
     RoomLandmark,
@@ -47,6 +48,9 @@ PRESENCE_STALE_AFTER = 1.5
 
 # A room holds at most this many placed pieces (#181), so a stuck client can't fill it without end.
 MAX_FURNITURE = 24
+# A placed piece is resized to between these times its catalogue size (#202).
+SMALLEST_SCALE = 0.25
+LARGEST_SCALE = 3.0
 
 # A carried object sits where the screen's centre meets the floor, no nearer or further than this.
 CARRY_NEAREST = 0.3
@@ -238,6 +242,44 @@ class PrototypeRoom:
         self.entities.append(entity)
         if self.physics is not None:
             self.physics.add(entity)
+        self.revision += 1
+        return "ok"
+
+    def resize_furniture(
+        self, role: Role, room_version: int, entity_id: str, scale: float, final: bool
+    ) -> str:
+        """Resize a placed piece evenly to `scale` times its catalogue size (#202), standing where
+        it stands. Physics gets it at its new size. When the resize ends, a piece grown into
+        another is put beside it, as a drop is. A piece the other person holds stays as it is."""
+        if self.load_error is not None or self.room_version is None:
+            return "unavailable"
+        if room_version != self.room_version:
+            return "mismatch"
+        entity = next((entity for entity in self.entities if entity.id == entity_id), None)
+        if entity is None:
+            return "unknown"
+        if not entity.furniture:
+            return "not_furniture"
+        held = self.manipulation
+        if held is not None and held.entity == entity_id and held.owner != role:
+            return "controlled_by_other"
+        scale = max(SMALLEST_SCALE, min(LARGEST_SCALE, scale))
+        change = scale / entity.scale
+        size = entity.size
+        entity.size = EntitySize(
+            width=size.width * change, height=size.height * change, depth=size.depth * change
+        )
+        entity.scale = scale
+        if final and overlapping(entity, entity.position, self.entities):
+            spot = free_spot(entity, entity.position, self.entities)
+            if spot is not None:
+                entity.position = spot
+        if self.physics is not None:
+            # A body's size is fixed, so it is taken out and put back at the new size.
+            self.physics.remove(entity_id)
+            self.physics.add(entity)
+            if held is not None and held.entity == entity_id:
+                self.physics.hold(entity_id)
         self.revision += 1
         return "ok"
 

@@ -72,6 +72,7 @@ from backend.protocol import (
     PresenceState,
     ReleaseMessage,
     RemoveFurnitureMessage,
+    ResizeFurnitureMessage,
     Role,
     RoomLoadedMessage,
     SelectMessage,
@@ -108,6 +109,7 @@ type Incoming = (
     | VoiceSignalMessage
     | AddFurnitureMessage
     | RemoveFurnitureMessage
+    | ResizeFurnitureMessage
     | DesignerHandMessage
 )
 # The message model for each incoming `type`.
@@ -127,6 +129,7 @@ INCOMING: dict[str, type[Incoming]] = {
     "voice_signal": VoiceSignalMessage,
     "add_furniture": AddFurnitureMessage,
     "remove_furniture": RemoveFurnitureMessage,
+    "resize_furniture": ResizeFurnitureMessage,
     "designer_hand": DesignerHandMessage,
 }
 
@@ -158,7 +161,7 @@ FURNITURE_REFUSALS = {
     "no_room": ("no_room", "There is no free floor near there for that piece."),
     "too_many": ("too_much_furniture", "The room is full. Take a piece away before adding more."),
     "unknown": ("unknown_entity", "That room object does not exist."),
-    "not_furniture": ("not_furniture", "Only placed furniture can be taken away."),
+    "not_furniture": ("not_furniture", "Only placed furniture can be taken away or resized."),
     "controlled_by_other": ("controlled_by_other", "The other person is holding that piece."),
 }
 
@@ -803,6 +806,20 @@ def create_app(
                             catalogue.get(incoming.item),
                             incoming.position,
                             incoming.yaw,
+                        )
+                        if result == "unavailable":
+                            await reject(
+                                "room_unavailable",
+                                room.load_error or "Prepared room is unavailable.",
+                            )
+                            continue
+                        if result != "ok":
+                            await reject(*FURNITURE_REFUSALS[result])
+                            continue
+                        await room.broadcast()
+                    elif isinstance(incoming, ResizeFurnitureMessage):
+                        result = room.resize_furniture(
+                            role, incoming.room_version, incoming.id, incoming.scale, incoming.final
                         )
                         if result == "unavailable":
                             await reject(

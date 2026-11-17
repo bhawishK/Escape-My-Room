@@ -149,5 +149,7 @@ export function applyPlacement(
     if (!root) continue;
     root.position.set(entity.position.x, entity.position.y, entity.position.z);
     root.quaternion.set(entity.rotation.x, entity.rotation.y, entity.rotation.z, entity.rotation.w);
+    // A resized piece (#202) grows from its bottom face, where its root is.
+    root.scale.setScalar(entity.scale ?? 1);
   }
 }
