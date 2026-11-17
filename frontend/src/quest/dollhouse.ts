@@ -314,6 +314,25 @@ export function slotAt(slots: readonly Position[], point: Position): number | nu
   return best;
 }
 
+/** The wrist palette (#200): the catalogue's pieces in a row, then the Exit button at its end. */
+export interface WristPalette {
+  pieces: Position[];
+  exit: Position;
+}
+
+/** Where the palette's `pieces` and its Exit button float above the hand, as one row. */
+export function wristPalette(hand: Position, headYaw: number, pieces: number): WristPalette {
+  const slots = paletteSlots(hand, headYaw, pieces + 1);
+  return { pieces: slots.slice(0, pieces), exit: slots[pieces] };
+}
+
+/** What a pinch at `point` chooses: a piece's index, 'exit', or null for nothing. */
+export function paletteChoice(palette: WristPalette, point: Position): number | 'exit' | null {
+  const index = slotAt([...palette.pieces, palette.exit], point);
+  if (index === null) return null;
+  return index === palette.pieces.length ? 'exit' : index;
+}
+
 /** How high the room reaches above its floor, for whether a hand is in the dollhouse (#185). */
 const CEILING_METRES = 3;
 /** A designer's hand, wrist to fingertip, in metres: drawn this long times the dollhouse's size. */
