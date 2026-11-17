@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { PieceResize, isTap, menuChoice, pieceMenu, sizeLabel } from '../src/quest/piece-resize';
+import { PieceResize, isTap, sizeLabel } from '../src/quest/piece-resize';
 import * as THREE from 'three';
 import type { Position, RoomEntity } from '../src/protocol';
 import { placeEntities } from '../src/room';
@@ -18,23 +18,6 @@ test('a quick pinch that hardly moves is a tap; a long or travelling one is not'
   expect(isTap(1000, HERE, 1250, { x: 0.01, y: 1, z: -0.4 })).toBe(true);
   expect(isTap(1000, HERE, 1500, HERE)).toBe(false);
   expect(isTap(1000, HERE, 1200, { x: 0.06, y: 1, z: -0.4 })).toBe(false);
-});
-
-test('Move and Resize float 10 cm above the piece, Move on the left as the person faces it', () => {
-  const ahead = pieceMenu({ x: 0, y: 0.8, z: -1 }, 0);
-  close(ahead.move, { x: -0.05, y: 0.9, z: -1 });
-  close(ahead.resize, { x: 0.05, y: 0.9, z: -1 });
-  // Facing left (-x), the person's right is -z.
-  const left = pieceMenu({ x: 0, y: 0.8, z: -1 }, Math.PI / 2);
-  close(left.move, { x: 0, y: 0.9, z: -0.95 });
-  close(left.resize, { x: 0, y: 0.9, z: -1.05 });
-});
-
-test('a pinch on a button chooses it; a pinch anywhere else chooses nothing', () => {
-  const menu = pieceMenu({ x: 0, y: 0.8, z: -1 }, 0);
-  expect(menuChoice(menu, { x: -0.04, y: 0.91, z: -1 })).toBe('move');
-  expect(menuChoice(menu, { x: 0.06, y: 0.89, z: -1.01 })).toBe('resize');
-  expect(menuChoice(menu, { x: 0, y: 1.2, z: -1 })).toBeNull();
 });
 
 test('in resize mode, hands pulled apart grow the piece and pulled together shrink it', () => {

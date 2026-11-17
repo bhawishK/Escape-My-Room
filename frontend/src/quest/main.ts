@@ -20,16 +20,17 @@ import { SessionClient } from '../session';
 import { VoiceCall, voiceLine, voiceNote } from '../voice';
 import {
   DollhouseCarry, DollhouseScaling, GripSmoother, HAND_METRES, dollhousePlacement, fromDollhouse, handInDollhouse,
-  paletteChoice, wristPalette,
+  looksToTake,
   throwInRoom, yawOf, orientationFromDollhouse, scaleLabel, velocityFromDollhouse,
 } from './dollhouse';
 import { Dictation } from './dictation';
 import { Dwell, FIST_COOLDOWN_MS, FIST_HOLD_MS, GestureGate, HeadNods, fistHeldUp, unmuteHint } from './gestures';
 import { readFrame, type FrameSample, type InputSample, type Pose, type Ray } from './hands';
 import { Hud } from './hud';
-import { PieceResize, TAP_MS, isTap, menuChoice, pieceMenu, sizeLabel, type PieceMenu } from './piece-resize';
+import { PieceResize, TAP_MS, isTap, sizeLabel } from './piece-resize';
 import { QuestRoom, type DrawnRay } from './room-view';
 import { ThrowVelocity } from './throw';
+import { PalmToggle, pageAt, wristChoice, wristMenu, type WristMenu, type WristPage } from './wrist-menu';
 
 /** How often presence, a held object's grip and the report are sent or shown, in milliseconds. */
 const PRESENCE_MS = 50;
@@ -37,8 +38,12 @@ const GRIP_MS = 100;
 const REPORT_MS = 500;
 /** A press waits this long for a second one, which together scale the room instead (#180). */
 const PAIR_MS = 150;
-/** Move and Resize stay above a tapped piece this long (#202); a resize is sent this often. */
-const OFFER_MS = 6000;
+/**
+ * A tapped piece stays chosen for Move and Resize on the wrist menu this long (#204); resize mode
+ * waits this long for two pinches (#202); a resize is sent this often.
+ */
+const CHOSEN_MS = 20000;
+const RESIZE_WAIT_MS = 6000;
 const RESIZE_MS = 100;
 /** Resting the gaze this long on an object starts a topic about it. */
 const DWELL_MS = 1500;
@@ -106,9 +111,16 @@ const scaling = new DollhouseScaling();
 /** One hand holding nothing carries a small room, to move and turn it (#182). */
 const carry = new DollhouseCarry();
 let carrier: XRInputSource | null = null;
-/** The placed piece offered Move and Resize after a tap on it (#202), until when. */
+/** The placed piece chosen by a tap on it, for Move and Resize on the wrist menu (#204), until when. */
 let offer: { id: string; until: number } | null = null;
-let offeredMenu: PieceMenu | null = null;
+/**
+ * The wrist menu above the left hand (#204): open on an open palm, its page, and the inputs
+ * sliding it or holding Hold to speak.
+ */
+const palm = new PalmToggle();
+let wristPage: WristPage = 'objects';
+let sliding: XRInputSource | null = null;
+let speaking: XRInputSource | null = null;
 /** A piece in resize mode (#202), and when its scale was last sent. */
 const resize = new PieceResize();
 let lastResize = -Infinity;
@@ -698,8 +710,9 @@ function takeHold(input: InputSample, gazeTarget: string | null, chosen?: string
     gestureLine = { text: BLOCKED, until: performance.now() + SAID_MS };
     return 'refused';
   }
-  // Look and pinch: a hand aimed at nothing takes what the head is looking at.
-  const target = hit ?? (input.kind === 'hand' ? movable(gazeTarget) : null);
+  // Look and pinch: in a small room, a hand aimed at nothing takes what the head is looking at.
+  // At life size it takes only what its ray is on (#204).
+  const target = hit ?? (input.kind === 'hand' && looksToTake(scaling.view.scale) ? movable(gazeTarget) : null);
   const version = state?.room.room_version;
   const entity = entities().find(candidate => candidate.id === target);
   const grip = gripOf(input);
@@ -714,25 +727,72 @@ function takeHold(input: InputSample, gazeTarget: string | null, chosen?: string
   return 'held';
 }
 
-/** What a tap with `input` is on: what its ray is on, else, for a hand, what the head looks at. */
+/** What a tap with `input` is on: what its ray is on, else, for a hand in a small room, what the head looks at. */
 function tapped(input: InputSample, gazeTarget: string | null): string | null {
   const { hit } = aimedAt(input.ray);
-  return hit ?? (input.kind === 'hand' ? movable(gazeTarget) : null);
+  return hit ?? (input.kind === 'hand' && looksToTake(scaling.view.scale) ? movable(gazeTarget) : null);
 }
 
-/** Offers Move and Resize above `id`, if it is a placed piece of furniture (#202). */
+/**
+ * Chooses `id` for Move and Resize, if it is a placed piece of furniture, and turns the wrist
+ * menu to its Edit page (#204). A tap on anything else lets the chosen piece go.
+ */
 function offerPiece(id: string | null, time: number): void {
   const piece = entities().find(entity => entity.id === id);
-  if (!piece?.furniture || phoneHolds(piece.id)) return;
-  offer = { id: piece.id, until: time + OFFER_MS };
+  if (!piece?.furniture || phoneHolds(piece.id)) {
+    offer = null;
+    return;
+  }
+  offer = { id: piece.id, until: time + CHOSEN_MS };
+  wristPage = 'edit';
+  gesture(`${piece.label} chosen · open your left hand to move or resize it`, time);
 }
 
-/** Where Move and Resize float now, above the offered piece, or null once the offer is over. */
-function offeredPiece(time: number): PieceMenu | null {
+/** The chosen piece, with its name above it, or none once it has gone or its time is up. */
+function showChosen(time: number): void {
   if (offer && (time > offer.until || !entities().some(entity => entity.id === offer?.id))) offer = null;
-  const top = offer ? room?.pieceTop(offer.id) ?? null : null;
-  if (!offer || !top || !head) return null;
-  return pieceMenu(top, yawOf(head.orientation));
+  if (!offer || resize.piece) return;
+  const piece = entities().find(entity => entity.id === offer?.id);
+  if (piece) room?.showResize(piece.id, piece.scale ?? 1, `${piece.label} · chosen`);
+}
+
+/** The wrist menu's line of text for its page (#204). */
+function wristLine(): string {
+  if (wristPage === 'objects') {
+    return catalogueItems.length ? 'Pinch a piece, carry it and let go where it goes' : 'No pieces yet: make one on the Make page';
+  }
+  if (wristPage === 'make') {
+    const said = makeInput.value.trim();
+    if (speaking) return said ? `Listening: ${said}` : 'Listening… say what to make, then let go';
+    if (making) return furnitureStatus.textContent ?? '';
+    return said ? `${said} · pinch Make it` : 'Hold to speak, and say the piece to make';
+  }
+  if (wristPage === 'edit') {
+    const piece = entities().find(entity => entity.id === offer?.id);
+    return piece ? `${piece.label} · Move, or Resize with two hands` : 'Tap a placed piece to choose it';
+  }
+  return 'Leave VR';
+}
+
+/** Move or Resize on the wrist menu, for the chosen piece (#204). */
+function editChosen(input: InputSample, button: 'move' | 'resize', time: number): void {
+  const piece = entities().find(entity => entity.id === offer?.id);
+  if (!piece) {
+    gesture('Tap a placed piece first, then choose Move or Resize', time);
+    return;
+  }
+  if (button === 'move') {
+    if (takeHold(input, null, piece.id) === 'held') holdStart = null;
+    offer = null;
+    return;
+  }
+  resize.begin(piece.id, piece.scale ?? 1);
+  resizeUntil = time + RESIZE_WAIT_MS;
+  offer = { id: piece.id, until: time + CHOSEN_MS };
+  // Both hands are the resize's now: a hand carrying the dollhouse lets go of it.
+  carry.end();
+  carrier = null;
+  gesture('Resize: pinch with both hands, then pull apart or together', time);
 }
 
 /**
@@ -801,11 +861,17 @@ function frame(xrFrame: XRFrame, time: number): void {
   if (head) calibrationNow = alignmentFromPose(head.position, head.orientation);
   const alignment = aligned();
 
+  // The wrist menu opens on an open left palm and closes on a fist (#204); with a controller, it
+  // is always there.
+  const leftHand = sample.inputs.find(input => input.source.handedness === 'left');
+  const wristOpen = palm.update(leftHand?.kind === 'hand' ? leftHand.pose : null, time) || leftHand?.kind === 'controller';
+
   // A fist held up mutes and unmutes. Not by a hand that pinches, carries an object or the room,
-  // or takes a piece from the catalogue.
+  // takes a piece from the catalogue, or has just closed the wrist menu.
   const fist = voice.on && fistHeldUp(sample.inputs.map(input => ({
     pose: input.pose, wrist: input.wrist,
-    busy: input.holding || input.source === holder || input.source === carrier || input.source === taking?.source,
+    busy: input.holding || input.source === holder || input.source === carrier || input.source === taking?.source ||
+      (input.source === leftHand?.source && palm.closingFist),
   })), head?.position ?? null);
   if (fistGate.update(fist ? 'fist' : 'none', time)) toggleMute('fist', time);
 
@@ -829,15 +895,14 @@ function frame(xrFrame: XRFrame, time: number): void {
     if (answer) gesture(answer === 'yes' ? 'Yes (nod)' : 'No (shake)', time);
   }
 
-  // While the room is small, the catalogue floats above the left hand (#184), ending in the
-  // Exit button (#200).
-  const paletteInput = sample.inputs.find(input => input.source.handedness === 'left');
-  const paletteAt = paletteInput?.grip?.position ?? paletteInput?.pinchAt ?? null;
-  const palette = alignment && scaling.view.scale < 1 && !scaling.scaling && !resize.piece && head && paletteAt
-    ? wristPalette(paletteAt, yawOf(head.orientation), catalogueItems.length) : null;
-  room?.showPalette(catalogueItems, palette);
-  offeredMenu = offeredPiece(time);
-  room?.showPieceMenu(offeredMenu);
+  // The wrist menu floats above the open left hand (#204), at life size too: a slider of the
+  // catalogue (#184), making a piece, Move and Resize, and Exit (#200). Not while that hand
+  // pinches, or two hands scale the room or resize a piece.
+  const paletteAt = leftHand?.grip?.position ?? leftHand?.pinchAt ?? null;
+  const menu: WristMenu | null = wristOpen && !leftHand?.holding && !scaling.scaling && !resize.piece && head && paletteAt
+    ? wristMenu(paletteAt, yawOf(head.orientation), wristPage, catalogueItems.length) : null;
+  showChosen(time);
+  room?.showWristMenu(catalogueItems, menu, wristLine(), { speaking: speaking !== null, making: making !== null });
 
   // Holding: a press of the grip or a pinch takes hold; letting go puts the object down.
   for (const input of sample.inputs) {
@@ -848,21 +913,53 @@ function frame(xrFrame: XRFrame, time: number): void {
     wasMuting.set(input.source, input.mute);
     const before = wasHolding.get(input.source) ?? false;
     wasHolding.set(input.source, input.holding);
-    // A pinch on the palette takes that piece into the hand at once (#184), or on Exit leaves VR
-    // (#200).
-    if (input.holding && !before && !holder && !taking && palette && input.pinchAt &&
-      input.source !== paletteInput?.source) {
-      const choice = paletteChoice(palette, input.pinchAt);
-      if (choice === 'exit') {
-        pressedAt.delete(input.source);
-        void world?.session?.end();
-        return;
-      }
-      if (choice !== null) {
-        taking = { item: catalogueItems[choice], source: input.source, last: null };
-        pressedAt.delete(input.source);
+    // A pinch on the wrist menu (#204): on its slider, slides between its pages; on a piece, takes
+    // it into the hand at once (#184); on a button, does what it says.
+    if (input.holding && !before && !holder && !taking && menu && input.pinchAt &&
+      input.source !== leftHand?.source) {
+      const choice = wristChoice(menu, input.pinchAt);
+      if (choice) pressedAt.delete(input.source);
+      if (choice?.kind === 'track') {
+        sliding = input.source;
+        wristPage = pageAt(menu, input.pinchAt);
         continue;
       }
+      if (choice?.kind === 'piece') {
+        taking = { item: catalogueItems[choice.index], source: input.source, last: null };
+        continue;
+      }
+      if (choice?.kind === 'button') {
+        if (choice.button === 'exit') {
+          void world?.session?.end();
+          return;
+        }
+        if (choice.button === 'speak') {
+          // Held like the page's talk button: listening until the pinch lets go (#188).
+          speaking = input.source;
+          startDictation();
+        } else if (choice.button === 'make') {
+          if (making) cancelButton.click();
+          else makeForm.requestSubmit();
+        } else {
+          editChosen(input, choice.button, time);
+        }
+        continue;
+      }
+    }
+    // A pinch sliding the menu follows the hand along it; one holding Hold to speak listens until
+    // it lets go.
+    if (sliding === input.source) {
+      if (!input.holding) sliding = null;
+      else if (menu && input.pinchAt) wristPage = pageAt(menu, input.pinchAt);
+      continue;
+    }
+    if (speaking === input.source) {
+      if (!input.holding) {
+        speaking = null;
+        dictationHeld = false;
+        dictation.stop();
+      }
+      continue;
     }
     // Let go, the piece taken is placed at the room point under the fingertip (#184).
     if (taking?.source === input.source && !input.holding) {
@@ -874,31 +971,8 @@ function frame(xrFrame: XRFrame, time: number): void {
       pressedAt.delete(input.source);
       continue;
     }
-    // A pinch on Move takes hold of the offered piece; on Resize, resizes it; anywhere else, the
-    // offer goes and the pinch does what it would have (#202).
-    if (input.holding && !before && !holder && offer) {
-      const choice = offeredMenu && input.pinchAt ? menuChoice(offeredMenu, input.pinchAt) : null;
-      const chosen = offer.id;
-      offer = null;
-      if (choice === 'move') {
-        if (takeHold(input, null, chosen) === 'held') holdStart = null;
-        continue;
-      }
-      if (choice === 'resize') {
-        const piece = entities().find(entity => entity.id === chosen);
-        if (piece) {
-          resize.begin(piece.id, piece.scale ?? 1);
-          resizeUntil = time + OFFER_MS;
-          // Both hands are the resize's now: a hand carrying the dollhouse lets go of it.
-          carry.end();
-          carrier = null;
-          gesture('Resize: pinch with both hands, then pull apart or together', time);
-        }
-        continue;
-      }
-    }
-    // A quick pinch let go before it took hold is a tap: on placed furniture, it offers Move
-    // and Resize (#202).
+    // A quick pinch let go before it took hold is a tap: on placed furniture, it chooses it for
+    // Move and Resize (#202, #204); on nothing, it lets the chosen piece go.
     const pressed = pressedAt.get(input.source);
     if (!input.holding && before && !holder && pressed !== undefined && alignment &&
       time - pressed < TAP_MS) {
@@ -930,7 +1004,7 @@ function frame(xrFrame: XRFrame, time: number): void {
     // slow drift only puts it down (#184).
     if (!input.holding && before && holder === input.source) {
       // A quick pinch on placed furniture that hardly moved it is a tap: it is put down where
-      // it was, and Move and Resize are offered (#202).
+      // it was, and chosen for Move and Resize (#202, #204).
       const start = holdStart;
       const here = gripOf(input)?.position;
       const tap = start !== null && here !== undefined && isTap(start.since, start.at, time, here);
@@ -938,6 +1012,13 @@ function frame(xrFrame: XRFrame, time: number): void {
       release(!tap);
       if (tap) offerPiece(start.id, time);
     }
+  }
+  // A hand lost while it slides the wrist menu or holds Hold to speak lets go of it (#204).
+  if (sliding && !sample.inputs.some(input => input.source === sliding)) sliding = null;
+  if (speaking && !sample.inputs.some(input => input.source === speaking)) {
+    speaking = null;
+    dictationHeld = false;
+    dictation.stop();
   }
   // The carried dollhouse follows its hand; two pinches scaling it, or the hand gone, end that.
   const carrierInput = sample.inputs.find(input => input.source === carrier);
@@ -950,7 +1031,7 @@ function frame(xrFrame: XRFrame, time: number): void {
     room?.setDollhouse(scaling.view);
   }
   const takingInput = taking ? sample.inputs.find(input => input.source === taking?.source) : undefined;
-  if (taking && (!takingInput || scaling.view.scale >= 1)) {
+  if (taking && !takingInput) {
     taking = null;
   } else if (taking && takingInput?.pinchAt && takingInput.grip) {
     taking.last = { position: takingInput.pinchAt, orientation: takingInput.grip.orientation };

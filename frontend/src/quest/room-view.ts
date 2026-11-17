@@ -6,9 +6,9 @@ import type { AlignmentState, CatalogueItem, Position, PresenceState, RoomEntity
 import { RAY_REACH_METERS } from '../grab';
 import { LateEntities, ModelCopies, applyPlacement, placeEntities, roomOwn } from '../room';
 import {
-  FIGURE_METRES, LIFE_SIZE, residentFigure, scaleLabel, type DollhouseView, type WristPalette,
+  FIGURE_METRES, LIFE_SIZE, residentFigure, scaleLabel, type DollhouseView,
 } from './dollhouse';
-import type { PieceMenu } from './piece-resize';
+import { PAGE_NAMES, WRIST_PAGES, type WristButton, type WristMenu } from './wrist-menu';
 
 /** A ray drawn from a controller, a hand or a fingertip, in the `local` reference space. */
 export interface DrawnRay {
@@ -27,9 +27,10 @@ const CARD_ABOVE_HAND = 0.1;
 const PREVIEW_METRES = 0.05;
 const LABEL_WIDTH = 0.18;
 const LABEL_ABOVE = 0.03;
-/** The palette's Exit button (#200) and a piece's Move and Resize (#202): this wide, a third as tall. */
-const EXIT_METRES = 0.06;
-const MENU_BUTTON_METRES = 0.08;
+/** The wrist menu's slider stops and its buttons (#204): this wide, a third as tall; its line of text this wide. */
+const STOP_METRES = 0.06;
+const WRIST_BUTTON_METRES = 0.07;
+const WRIST_LINE_METRES = 0.22;
 /** The label of a piece being resized (#202): this wide, this far above its top. */
 const RESIZE_LABEL_WIDTH = 0.24;
 const RESIZE_LABEL_ABOVE = 0.06;
@@ -59,13 +60,30 @@ export class QuestRoom {
     new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }),
   );
   private cardUrl: string | null = null;
-  /** The catalogue palette above the hand, and the piece taken from it (#184). */
+  /** The wrist menu above the left hand (#204), its catalogue previews, and the piece taken from it (#184). */
   private readonly palette = new THREE.Group();
   private readonly previews = new Map<string, THREE.Object3D>();
-  /** The Exit button at the end of the palette's row (#200). */
-  private readonly exitButton = buttonSprite('Exit VR', '#c62f2f', 'palette:exit', EXIT_METRES);
-  /** Move and Resize above a tapped piece (#202). */
-  private readonly menu = new THREE.Group();
+  /** The slider's stops, each drawn chosen or not. */
+  private readonly stops = WRIST_PAGES.map(page => ({
+    on: buttonSprite(PAGE_NAMES[page], '#2f6fc6', `wrist:stop:${page}`, STOP_METRES),
+    off: buttonSprite(PAGE_NAMES[page], '#5b6472', `wrist:stop:${page}:off`, STOP_METRES),
+  }));
+  /** Each button, and the other face some have: Listening while speaking, Stop while making. */
+  private readonly wristButtons: Record<WristButton, { idle: THREE.Sprite; busy: THREE.Sprite | null }> = {
+    speak: {
+      idle: buttonSprite('Hold to speak', '#2f8f5f', 'wrist:speak', WRIST_BUTTON_METRES),
+      busy: buttonSprite('Listening…', '#c62f2f', 'wrist:speak:busy', WRIST_BUTTON_METRES),
+    },
+    make: {
+      idle: buttonSprite('Make it', '#2f6fc6', 'wrist:make', WRIST_BUTTON_METRES),
+      busy: buttonSprite('Stop', '#c62f2f', 'wrist:make:busy', WRIST_BUTTON_METRES),
+    },
+    move: { idle: buttonSprite('Move', '#2f6fc6', 'wrist:move', WRIST_BUTTON_METRES), busy: null },
+    resize: { idle: buttonSprite('Resize', '#2f8f5f', 'wrist:resize', WRIST_BUTTON_METRES), busy: null },
+    exit: { idle: buttonSprite('Exit VR', '#c62f2f', 'wrist:exit', WRIST_BUTTON_METRES), busy: null },
+  };
+  private readonly wristLine = textSprite('');
+  private wristText = '';
   /** The piece being resized, drawn at its new scale until Python says so, and its size label. */
   private resizing: { id: string; scale: number } | null = null;
   private readonly resizeLabel = textSprite('');
@@ -113,15 +131,12 @@ export class QuestRoom {
     scene.add(this.card);
     this.palette.name = 'palette';
     this.palette.visible = false;
-    this.palette.add(this.exitButton);
+    for (const stop of this.stops) this.palette.add(stop.on, stop.off);
+    for (const { idle, busy } of Object.values(this.wristButtons)) this.palette.add(idle, ...(busy ? [busy] : []));
+    this.wristLine.name = 'wrist:line';
+    this.wristLine.scale.set(WRIST_LINE_METRES, WRIST_LINE_METRES / 6, 1);
+    this.palette.add(this.wristLine);
     scene.add(this.palette);
-    this.menu.name = 'piece-menu';
-    this.menu.visible = false;
-    this.menu.add(
-      buttonSprite('Move', '#2f6fc6', 'piece-menu:move', MENU_BUTTON_METRES),
-      buttonSprite('Resize', '#2f8f5f', 'piece-menu:resize', MENU_BUTTON_METRES),
-    );
-    scene.add(this.menu);
     this.resizeLabel.name = 'resize-label';
     this.resizeLabel.visible = false;
     this.resizeLabel.scale.set(RESIZE_LABEL_WIDTH, RESIZE_LABEL_WIDTH / 6, 1);
@@ -214,15 +229,44 @@ export class QuestRoom {
   }
 
   /**
-   * The catalogue as small pieces above the hand while the room is small (#184), then the Exit
-   * button (#200); null hides it. Each preview fits a 5 cm cube.
+   * The wrist menu (#204), or null to hide it: the slider's stops with its page chosen, the
+   * page's line of text, and its catalogue pieces (#184), each fitting a 5 cm cube, or its buttons.
+   * `busy` turns Hold to speak into Listening and Make it into Stop.
    */
-  showPalette(items: readonly CatalogueItem[], palette: WristPalette | null): void {
-    this.palette.visible = palette !== null;
-    this.container.dataset.palette = palette ? String(items.length) : '';
-    if (!palette) return;
-    const slots = palette.pieces;
-    this.exitButton.position.set(palette.exit.x, palette.exit.y, palette.exit.z);
+  showWristMenu(
+    items: readonly CatalogueItem[],
+    menu: WristMenu | null,
+    line = '',
+    busy: { speaking: boolean; making: boolean } = { speaking: false, making: false },
+  ): void {
+    this.palette.visible = menu !== null;
+    this.container.dataset.palette = menu ? menu.page : '';
+    if (!menu) return;
+    WRIST_PAGES.forEach((page, index) => {
+      const { on, off } = this.stops[index];
+      const at = menu.stops[index];
+      on.position.set(at.x, at.y, at.z);
+      off.position.set(at.x, at.y, at.z);
+      on.visible = page === menu.page;
+      off.visible = page !== menu.page;
+    });
+    if (line !== this.wristText) {
+      this.wristText = line;
+      drawText(this.wristLine, line);
+    }
+    this.wristLine.visible = line !== '';
+    this.wristLine.position.set(menu.line.x, menu.line.y, menu.line.z);
+    for (const [name, { idle, busy: other }] of Object.entries(this.wristButtons) as [WristButton, { idle: THREE.Sprite; busy: THREE.Sprite | null }][]) {
+      const at = menu.buttons[name];
+      const showBusy = other !== null && (name === 'speak' ? busy.speaking : name === 'make' && busy.making);
+      idle.visible = at !== undefined && !showBusy;
+      if (other) other.visible = at !== undefined && showBusy;
+      if (at) {
+        idle.position.set(at.x, at.y, at.z);
+        other?.position.set(at.x, at.y, at.z);
+      }
+    }
+    const slots = menu.pieces;
     // A piece no longer in the catalogue leaves the palette.
     const listed = new Set(items.map(item => item.id));
     for (const [id, preview] of this.previews) {
@@ -296,16 +340,6 @@ export class QuestRoom {
     if (box.isEmpty()) return null;
     const centre = box.getCenter(new THREE.Vector3());
     return { x: centre.x, y: box.max.y, z: centre.z };
-  }
-
-  /** Move and Resize above a tapped piece (#202); null hides them. */
-  showPieceMenu(menu: PieceMenu | null): void {
-    this.menu.visible = menu !== null;
-    this.container.dataset.pieceMenu = menu ? 'shown' : '';
-    if (!menu) return;
-    const [move, resize] = this.menu.children;
-    move.position.set(menu.move.x, menu.move.y, menu.move.z);
-    resize.position.set(menu.resize.x, menu.resize.y, menu.resize.z);
   }
 
   /**
@@ -596,7 +630,13 @@ function buttonSprite(text: string, colour: string, name: string, width: number)
     context.fillStyle = '#ffffff';
     context.textAlign = 'center';
     context.textBaseline = 'middle';
-    context.font = '700 64px sans-serif';
+    // Longer words, as Hold to speak, are drawn smaller to fit the button (#204).
+    let size = 64;
+    context.font = `700 ${size}px sans-serif`;
+    while (size > 32 && context.measureText(text).width > canvas.width - 48) {
+      size -= 2;
+      context.font = `700 ${size}px sans-serif`;
+    }
     context.fillText(text, canvas.width / 2, canvas.height / 2);
   }
   const texture = new THREE.CanvasTexture(canvas);

@@ -314,23 +314,13 @@ export function slotAt(slots: readonly Position[], point: Position): number | nu
   return best;
 }
 
-/** The wrist palette (#200): the catalogue's pieces in a row, then the Exit button at its end. */
-export interface WristPalette {
-  pieces: Position[];
-  exit: Position;
-}
-
-/** Where the palette's `pieces` and its Exit button float above the hand, as one row. */
-export function wristPalette(hand: Position, headYaw: number, pieces: number): WristPalette {
-  const slots = paletteSlots(hand, headYaw, pieces + 1);
-  return { pieces: slots.slice(0, pieces), exit: slots[pieces] };
-}
-
-/** What a pinch at `point` chooses: a piece's index, 'exit', or null for nothing. */
-export function paletteChoice(palette: WristPalette, point: Position): number | 'exit' | null {
-  const index = slotAt([...palette.pieces, palette.exit], point);
-  if (index === null) return null;
-  return index === palette.pieces.length ? 'exit' : index;
+/**
+ * Whether a hand pinching at nothing takes what the head looks at (#204): only in the small
+ * dollhouse, where pieces are hard to aim at. At life size a pinch anywhere would pick up
+ * whatever is in view, so a pinch there takes only what its ray is on.
+ */
+export function looksToTake(scale: number): boolean {
+  return scale < 1;
 }
 
 /** How high the room reaches above its floor, for whether a hand is in the dollhouse (#185). */

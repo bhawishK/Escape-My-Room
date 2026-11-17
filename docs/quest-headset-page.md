@@ -29,11 +29,14 @@ It joins the same session as the phone's page, as the headset (`vr_solver`), wit
 | Action | Controllers | Hands |
 | --- | --- | --- |
 | Line the room up | A or X | Pinch, before the room is lined up (each new VR session, and a reset, ask again) |
-| Move an object | Aim at it, squeeze the grip, let go to put it down | Aim the hand ray and pinch, or **look at it and pinch** |
+| Move an object | Aim at it, squeeze the grip, let go to put it down | Aim the hand ray and pinch; in the dollhouse, also **look at it and pinch** (at life size a pinch at nothing would take whatever is in view, #204) |
 | Throw an object | Let go of the grip while swinging | Open the pinch while swinging: it flies at your hand's speed (capped at 8 m/s) |
 | Show something | — | **Point** with the index finger: its ray outlines what it is on |
-| Move or resize a placed piece | — | **Tap** it (pinch and let go within 0.35 s, the hand moving no more than 3 cm): **Move** and **Resize** float above it for 6 s. Move takes hold of it; after Resize, pinch with both hands and pull apart or together, from 0.25 to 3 times its catalogue size, and let go to finish (#202) |
-| Leave VR | — | Pinch **Exit VR** at the end of the wrist catalogue, while the room is a dollhouse (#200) |
+| Wrist menu | Always above the left controller | **Open the left hand** (held 0.15 s) to show it above the hand, from the start and at life size too; a **fist** (0.15 s) hides it, and that fist doesn't also mute. Pinch the slider along its top and slide, or pinch a stop, to turn between its pages: **Objects**, **Make**, **Edit**, **Exit** (#204) |
+| Place a piece | The same, on the Objects page | Pinch a piece on the **Objects** page, carry it and let go where it goes (#184) |
+| Make a new piece | The same, on the Make page | On **Make**, pinch and hold **Hold to speak**, say the piece, let go, then pinch **Make it** (**Stop** while it is made) (#204) |
+| Move or resize a placed piece | — | **Tap** it (pinch and let go within 0.35 s, the hand moving no more than 3 cm): it is chosen for 20 s, its name above it, and the menu turns to **Edit**. Move takes hold of it; after Resize, pinch with both hands and pull apart or together, from 0.25 to 3 times its catalogue size, and let go to finish (#202, #204). A tap on nothing lets it go |
+| Leave VR | The same, on the Exit page | Pinch **Exit VR** on the **Exit** page (#200, #204) |
 | Start a topic | Look at an object for 1.5 s | The same |
 | Yes / no | Nod twice / shake twice | The same |
 | Mute or unmute the voice call | B or Y | Hold up a **fist** for 0.8 s; again to unmute (#175) |
@@ -42,7 +45,7 @@ It joins the same session as the phone's page, as the headset (`vr_solver`), wit
 
 - **Pinch** is the session's own: the hand's `selectstart` and `selectend`. They settle a wavering pinch better than a distance threshold.
 - **Point** comes from the joints; a point draws its ray once held 0.2 s. A finger is straight when its tip is more than 1.4 times as far from the wrist as its knuckle. Pointing is the index straight with the others curled. A thumb tip within 2 cm of the index tip is a pinch, and wins over it.
-- An **open palm** does nothing. It used to pause in a calm view, but holding the hand open for the wrist catalogue, and before and after every pinch, set it off; it was removed in #200.
+- An **open left palm** opens the wrist menu, and a **fist** closes it (#204); a hand relaxing in between keeps it as it is. The open palm used to pause in a calm view, but it set itself off around every pinch, and was removed in #200.
 - The **fist** (#175) mutes and unmutes the [voice call](voice.md):
   - **A fist** is all four fingers curled. A finger the frame did not see is not counted as curled, and a pinch wins over a fist.
   - **Held up:** the wrist no more than 0.45 m below the head, about chest height. A relaxed hand at the side is curled too, and is well below that. The limit follows the head, so it works sitting down.

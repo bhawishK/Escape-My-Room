@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { pinchPoint } from '../src/quest/gestures';
 import {
-  DollhouseCarry, DollhouseScaling, GripSmoother, LIFE_SIZE, dollhousePlacement, handInDollhouse, fromDollhouse, paletteChoice, paletteSlots, residentFigure, scaleLabel, slotAt, wristPalette, throwInRoom, orientationFromDollhouse, orientationToDollhouse, toDollhouse,
+  DollhouseCarry, DollhouseScaling, GripSmoother, LIFE_SIZE, dollhousePlacement, handInDollhouse, fromDollhouse, paletteSlots, residentFigure, scaleLabel, slotAt, throwInRoom, orientationFromDollhouse, orientationToDollhouse, toDollhouse,
   velocityFromDollhouse, velocityToDollhouse, type DollhouseView,
 } from '../src/quest/dollhouse';
 
@@ -342,30 +342,6 @@ test('a pinch within 3.5 cm of a slot takes that piece; anywhere else takes none
   expect(slotAt(slots, { x: 0.07, y: 1.13, z: -0.41 })).toBe(2);
   expect(slotAt(slots, { x: 0.01, y: 1.12, z: -0.4 })).toBe(1);
   expect(slotAt(slots, { x: 0.03, y: 1.2, z: -0.4 })).toBeNull();
-});
-
-// #200: the Exit button at the end of the palette.
-
-test('the palette ends with an Exit button after its pieces, at the right-hand end of the row', () => {
-  const palette = wristPalette({ x: 0, y: 1, z: -0.4 }, 0, 2);
-  expect(palette.pieces).toHaveLength(2);
-  close(palette.pieces[0], { x: -0.06, y: 1.12, z: -0.4 });
-  close(palette.pieces[1], { x: 0, y: 1.12, z: -0.4 });
-  close(palette.exit, { x: 0.06, y: 1.12, z: -0.4 });
-});
-
-test('a pinch on a piece takes that piece, on Exit leaves VR, elsewhere does nothing', () => {
-  const palette = wristPalette({ x: 0, y: 1, z: -0.4 }, 0, 2);
-  expect(paletteChoice(palette, { x: -0.05, y: 1.12, z: -0.4 })).toBe(0);
-  expect(paletteChoice(palette, { x: 0.065, y: 1.13, z: -0.4 })).toBe('exit');
-  expect(paletteChoice(palette, { x: 0.2, y: 1.12, z: -0.4 })).toBeNull();
-});
-
-test('with no pieces in the catalogue, the palette is just the Exit button above the hand', () => {
-  const palette = wristPalette({ x: 0, y: 1, z: -0.4 }, 0, 0);
-  expect(palette.pieces).toEqual([]);
-  close(palette.exit, { x: 0, y: 1.12, z: -0.4 });
-  expect(paletteChoice(palette, { x: 0, y: 1.12, z: -0.4 })).toBe('exit');
 });
 
 // #185: the designer's hand in the dollhouse.
