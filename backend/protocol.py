@@ -101,6 +101,36 @@ class AcquireMessage(WireModel):
     orientation: Orientation | None = None
 
 
+class AddFurnitureMessage(WireModel):
+    """Place a catalogue piece (#181) at a room-frame position, turned `yaw` radians to the left.
+    It starts no lower than the floor and falls there if it is higher."""
+
+    type: Literal["add_furniture"]
+    room_version: int = Field(ge=1)
+    item: str = Field(max_length=64)
+    position: Position
+    yaw: float = Field(ge=-3.141592653589793, le=3.141592653589793)
+
+
+class RemoveFurnitureMessage(WireModel):
+    """Take a placed piece away (#183). Either person may, unless the other is holding it."""
+
+    type: Literal["remove_furniture"]
+    room_version: int = Field(ge=1)
+    id: str = Field(max_length=64)
+
+
+class DesignerHandMessage(WireModel):
+    """The headset's hand inside the dollhouse, in room metres, for the phone to draw as a giant
+    hand (#185); null when no hand is in it. Passed to the phone only, never kept as room state."""
+
+    type: Literal["designer_hand"]
+    sequence: int = Field(ge=1)
+    position: Position | None
+    # How long the hand is drawn in the room, in metres: a real hand over the dollhouse's size.
+    length: float | None = Field(default=None, gt=0, le=100)
+
+
 class Velocity(WireModel):
     """A velocity in room metres per second. Any finite speed is accepted, and physics caps it;
     the bound only keeps the numbers sane."""

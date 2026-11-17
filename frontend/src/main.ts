@@ -1,4 +1,5 @@
 import './style.css';
+import { setUpPhotoPiece } from './photo-piece';
 import { roomDirection, roomHeading, roomOrientation, roomPoint } from './alignment';
 import { element } from './dom';
 import { FloorDepth } from './floor-depth';
@@ -37,6 +38,10 @@ let connected = false;
 let busy = false;
 let xrActive = false;
 let state: SessionState | null = null;
+setUpPhotoPiece();
+/** A designer's hand not heard of for this long has gone, as a stale presence is (#185). */
+const HAND_STALE_MS = 1500;
+let handStale: number | undefined;
 let view: DiagnosticScene | null = null;
 let xr: XRDiagnostic | null = null;
 let roomViewOpen = false;
@@ -394,6 +399,12 @@ document.addEventListener('visibilitychange', () => {
   resumeTrackingAfterGaze();
 });
 
+element('hud-remove').addEventListener('click', () => {
+  const version = state?.room.room_version;
+  if (!selected || version === null || version === undefined) return;
+  client.sendRemoveFurniture(version, selected);
+});
+
 function entityLabel(id: string): string {
   return state?.room.entities.find(entity => entity.id === id)?.label ?? id;
 }
@@ -417,6 +428,10 @@ function controls(): void {
   const engine = tracking === measured ? measured : null;
   const measuring = engine !== null;
   element('recentre').hidden = !engine?.active || engine.paused;
+  // A selected piece of placed furniture can be taken away while nobody holds it (#183).
+  const piece = state?.room.entities.find(entity => entity.id === selected);
+  element('hud-remove').hidden = role !== 'mobile_master' || !roomViewOpen || !piece?.furniture ||
+    state?.manipulation?.entity === piece.id;
   if (!engine?.active || engine.paused || !roomViewOpen) showTilt(null);
   // The headset chooses where it stands on the page's map; the phone places itself on its own.
   element('page-map').classList.toggle('picking', role === 'vr_solver');
@@ -512,6 +527,12 @@ function applyState(next: SessionState): void {
   const otherHeld = state?.manipulation?.owner === otherRole;
   const before = ownHold();
   state = next;
+  // A selected piece someone took away (#183): Python cleared the selection, so the page does too.
+  if (selected !== null && !next.room.entities.some(entity => entity.id === selected)) {
+    selected = null;
+    view?.select(null);
+    if (roomViewOpen) element('view-status').textContent = viewInstruction();
+  }
   voice.applyState(next);
   if (next.room.room_version !== positioningRoom) {
     positioningRoom = next.room.room_version;
@@ -648,6 +669,13 @@ for (const button of voiceButtons) {
 const client = new SessionClient({
   state: applyState,
   voice: signal => { void voice.signal(signal); },
+  // The designer's hand in the dollhouse: drawn until it goes, or until it stops coming (#185).
+  designerHand: (position, length) => {
+    clearTimeout(handStale);
+    if (!view) return;
+    view.showDesignerHand(position, length);
+    if (position) handStale = window.setTimeout(() => view?.showDesignerHand(null, null), HAND_STALE_MS);
+  },
   connection: value => {
     connected = value;
     element('connection').textContent = value
@@ -681,7 +709,7 @@ const client = new SessionClient({
         view.applyView({ status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } });
         view.clearRoom();
         view.apply({
-          revision: 0, mobile_connected: false, vr_connected: false,
+          revision: 0, catalogue_version: 0, mobile_connected: false, vr_connected: false,
           marker: { position: null, tracking_status: 'inactive', reference_space: null, heading: null, pitch: null },
           participants: { mobile_master: NO_PRESENCE, vr_solver: NO_PRESENCE },
           alignment: {

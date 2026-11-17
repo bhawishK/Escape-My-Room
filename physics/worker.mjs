@@ -16,9 +16,13 @@
 //   {"type": "release", "id", "epoch", "position", "rotation", "velocity"?}: let go here; it
 //     falls from rest, or flies off at that velocity in m/s.
 //   {"type": "place", "id", "epoch", "position", "rotation"}: put here, at rest.
+//   {"type": "add", "room_version", "body": {a body as in "load"}}: a new body in the live room,
+//     such as placed furniture (#181); a dynamic one falls from where it is.
+//   {"type": "remove", "room_version", "id"}: that body leaves the live room (#183).
 // Worker → Python:
 //   {"type": "ready", "engine": "havok", "version": "1.3.14"} once Havok has loaded;
 //   {"type": "loaded", "room_version": 1, "bodies": {"static": 1, "dynamic": 1}};
+//   {"type": "counted", "room_version": 1, "bodies": {...}} after a body is added;
 //   {"type": "poses", "bodies": [{"id", "epoch", "position", "rotation"}], "moving": ["box"]}
 //     about 30 times a second while anything moves, a body knocked by another included; the
 //     last one has "moving": [] and gives where each body came to rest;
@@ -210,6 +214,27 @@ class Room {
     this.run();
   }
 
+  add({ body: description }) {
+    if (this.bodies.has(description.id)) throw new Error(`There is already a body ${description.id}.`);
+    const body = new Body(this.world, description);
+    this.bodies.set(description.id, body);
+    if (body.dynamic) {
+      // Bodies join the world asleep, as a loaded room's should; a new one falls at once.
+      body.setMotion(havok.MotionType.DYNAMIC, true);
+      this.moving.add(body);
+      this.run();
+    }
+  }
+
+  remove({ id }) {
+    const body = this.bodies.get(id);
+    // Never given it, or given a room since: nothing to take out.
+    if (!body) return;
+    this.moving.delete(body);
+    this.bodies.delete(id);
+    body.dispose();
+  }
+
   place(message) {
     const body = this.body(message);
     body.held = false;
@@ -276,7 +301,11 @@ function handle(message) {
     return;
   }
   if (room === null) throw new Error('No room is loaded.');
-  if (message.type === 'hold') room.hold(message);
+  if (message.type === 'add' || message.type === 'remove') {
+    if (message.type === 'add') room.add(message);
+    else room.remove(message);
+    send({ type: 'counted', room_version: message.room_version, bodies: room.counts() });
+  } else if (message.type === 'hold') room.hold(message);
   else if (message.type === 'release') room.letGo(message);
   else if (message.type === 'place') room.place(message);
   else throw new Error(`Unknown message type: ${message.type}`);

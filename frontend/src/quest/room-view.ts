@@ -2,8 +2,10 @@ import type { SplatMesh } from '@sparkjsdev/spark';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { STANDING_EYE_HEIGHT } from '../alignment';
-import type { AlignmentState, Position, PresenceState, SessionState } from '../protocol';
-import { applyPlacement, placeEntities } from '../room';
+import type { AlignmentState, CatalogueItem, Position, PresenceState, RoomEntity, SessionState } from '../protocol';
+import { RAY_REACH_METERS } from '../grab';
+import { LateEntities, ModelCopies, applyPlacement, placeEntities, roomOwn } from '../room';
+import { FIGURE_METRES, LIFE_SIZE, residentFigure, scaleLabel, type DollhouseView } from './dollhouse';
 
 /** A ray drawn from a controller, a hand or a fingertip, in the `local` reference space. */
 export interface DrawnRay {
@@ -14,7 +16,14 @@ export interface DrawnRay {
 }
 
 const RAY_COLOURS = { miss: 0x30b0c7, target: 0xff9500, blocked: 0xff3b30 } as const;
-const REACH_METRES = 4;
+const REACH_METRES = RAY_REACH_METERS;
+/** The card of a piece being made: its size, and how far above the hand it is held. */
+const CARD_METRES = 0.14;
+const CARD_ABOVE_HAND = 0.1;
+/** Palette previews fit a cube this size; the held piece's label is this wide, this far above it. */
+const PREVIEW_METRES = 0.05;
+const LABEL_WIDTH = 0.18;
+const LABEL_ABOVE = 0.03;
 /** The calm view (#156): the room fades to this while an open palm pauses the visit. */
 const CALM_COLOUR = new THREE.Color('#203040');
 const ROOM_BACKGROUND = new THREE.Color('#f5f5f7');
@@ -27,11 +36,29 @@ const ROOM_BACKGROUND = new THREE.Color('#f5f5f7');
 export class QuestRoom {
   /** Holds the room in room metres; turned and moved by the headset's alignment. */
   readonly anchor = new THREE.Group();
+  /** Draws the aligned room smaller, turned and moved as the dollhouse (#180); life size by default. */
+  private readonly dollhouse = new THREE.Group();
   private readonly loader = new GLTFLoader();
+  /** Every catalogue model, loaded once for the room and the palette alike. */
+  private readonly models = new ModelCopies(this.loader);
+  private readonly late = new LateEntities(this.models);
   private readonly phone: THREE.Group;
   private readonly highlight = new THREE.BoxHelper(new THREE.Object3D(), 0xffcc00);
   private readonly control = new THREE.BoxHelper(new THREE.Object3D(), 0xff9500);
   private readonly rays: THREE.Mesh[] = [];
+  /** The picture of a piece being made (#186), held in the hand. */
+  private readonly card = new THREE.Mesh(
+    new THREE.PlaneGeometry(CARD_METRES, CARD_METRES),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }),
+  );
+  private cardUrl: string | null = null;
+  /** The catalogue palette above the hand, and the piece taken from it (#184). */
+  private readonly palette = new THREE.Group();
+  private readonly previews = new Map<string, THREE.Object3D>();
+  private held: { id: string; root: THREE.Group; label: THREE.Sprite; height: number } | null = null;
+  /** The phone user's latest presence, and the dollhouse view the figure is drawn in (#182). */
+  private presence: PresenceState | undefined = undefined;
+  private view: DollhouseView = LIFE_SIZE;
   private roomGroup: THREE.Group | null = null;
   private splat: SplatMesh | null = null;
   private sparkReady: Promise<typeof import('@sparkjsdev/spark')> | null = null;
@@ -53,35 +80,52 @@ export class QuestRoom {
     private readonly container: HTMLElement,
   ) {
     this.anchor.name = 'room-anchor';
-    scene.add(this.anchor);
+    this.dollhouse.name = 'dollhouse';
+    this.dollhouse.add(this.anchor);
+    scene.add(this.dollhouse);
     scene.background = ROOM_BACKGROUND;
     scene.add(new THREE.HemisphereLight(0xdff7ff, 0x344156, 2));
     const light = new THREE.DirectionalLight(0xffffff, 2);
     light.position.set(2, 4, 1);
     scene.add(light);
     this.phone = person(0x30b0c7);
-    this.anchor.add(this.phone);
+    // In the scene, not the anchor: `residentFigure` places it, also in a dollhouse (#182).
+    scene.add(this.phone);
     this.highlight.visible = false;
     this.control.visible = false;
     scene.add(this.highlight, this.control);
+    this.card.name = 'piece-card';
+    this.card.visible = false;
+    scene.add(this.card);
+    this.palette.name = 'palette';
+    this.palette.visible = false;
+    scene.add(this.palette);
+    this.container.dataset.scale = scaleLabel(this.view.scale);
     this.align(this.alignment);
   }
 
   /** Draws the phone user where Python last placed them; faded while their tracking is stale. */
   showPhone(presence: PresenceState | undefined): void {
-    const shown = (presence?.tracking_status === 'tracked' || presence?.tracking_status === 'stale') &&
-      presence.position !== null && presence.heading !== null;
-    this.phone.visible = shown;
-    this.container.dataset.phoneShown = String(shown);
-    if (!shown || !presence?.position || presence.heading === null) return;
-    this.phone.position.set(presence.position.x, presence.position.y, presence.position.z);
-    this.phone.rotation.y = presence.heading;
-    const stale = presence.tracking_status === 'stale';
+    this.presence = presence;
+    this.drawPhone();
+  }
+
+  /** Puts the phone user's figure where they stand, in the room or the dollhouse (#182). */
+  private drawPhone(): void {
+    const anchor = { yaw: this.anchor.rotation.y, offset: this.anchor.position };
+    const figure = residentFigure(this.presence, this.view, anchor);
+    this.phone.visible = figure !== null;
+    this.container.dataset.phoneShown = String(figure !== null);
+    if (!figure) return;
+    this.phone.position.set(figure.position.x, figure.position.y, figure.position.z);
+    this.phone.rotation.y = figure.heading;
+    this.phone.scale.setScalar(figure.height / FIGURE_METRES);
+    this.container.dataset.phoneHeight = figure.height.toFixed(3);
     this.phone.traverse(child => {
       const material = (child as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
       if (!material) return;
       material.transparent = true;
-      material.opacity = stale ? 0.35 : 1;
+      material.opacity = figure.opacity;
     });
   }
 
@@ -107,6 +151,138 @@ export class QuestRoom {
       this.anchor.position.set(0, this.presenting ? -STANDING_EYE_HEIGHT : 0, 0);
     }
     this.container.dataset.view = alignment.status === 'aligned' ? 'calibrated' : 'overview';
+    this.drawPhone();
+  }
+
+  /**
+   * The picture a new piece is being made from (#186), as a card in the hand while its 3D piece
+   * is made; null takes it away.
+   */
+  showCard(url: string | null): void {
+    if (url === this.cardUrl) return;
+    this.cardUrl = url;
+    const material = this.card.material as THREE.MeshBasicMaterial;
+    material.map?.dispose();
+    material.map = null;
+    material.needsUpdate = true;
+    this.card.visible = false;
+    this.container.dataset.card = url ? 'shown' : '';
+    if (!url) return;
+    new THREE.TextureLoader().load(url, texture => {
+      if (this.cardUrl !== url) {
+        texture.dispose();
+        return;
+      }
+      texture.colorSpace = THREE.SRGBColorSpace;
+      material.map = texture;
+      material.needsUpdate = true;
+    });
+  }
+
+  /** Holds the card just above `hand`, facing `head`, in the `local` space; hidden without either. */
+  placeCard(hand: Position | null, head: Position | null): void {
+    this.card.visible = this.cardUrl !== null && hand !== null && head !== null;
+    if (!this.card.visible || !hand || !head) return;
+    this.card.position.set(hand.x, hand.y + CARD_ABOVE_HAND, hand.z);
+    this.card.lookAt(head.x, head.y, head.z);
+  }
+
+  /**
+   * The catalogue as small pieces at `slots` above the hand while the room is small (#184);
+   * null slots hide it. Each preview fits a 5 cm cube.
+   */
+  showPalette(items: readonly CatalogueItem[], slots: readonly Position[] | null): void {
+    this.palette.visible = slots !== null;
+    this.container.dataset.palette = slots ? String(items.length) : '';
+    if (!slots) return;
+    // A piece no longer in the catalogue leaves the palette.
+    const listed = new Set(items.map(item => item.id));
+    for (const [id, preview] of this.previews) {
+      if (listed.has(id)) continue;
+      preview.removeFromParent();
+      this.previews.delete(id);
+    }
+    items.forEach((item, index) => {
+      let preview = this.previews.get(item.id);
+      if (!preview) {
+        const holder = new THREE.Group();
+        holder.name = `palette:${item.id}`;
+        this.palette.add(holder);
+        this.previews.set(item.id, holder);
+        preview = holder;
+        const { width, height, depth } = item.size;
+        const fit = PREVIEW_METRES / Math.max(width, height, depth);
+        void this.models.copy(item.model_url, item.node).then(model => {
+          if (!model) return;
+          model.scale.setScalar(fit);
+          // The model's origin is its bottom face; the preview is centred on its slot.
+          model.position.y = -height * fit / 2;
+          holder.add(model);
+        });
+      }
+      const slot = slots[index];
+      preview.visible = slot !== undefined;
+      if (slot) preview.position.set(slot.x, slot.y, slot.z);
+    });
+  }
+
+  /**
+   * The piece taken from the palette, at the dollhouse's `scale`, at a fingertip and turned with
+   * the hand, with its true size above it (#184); null puts it away.
+   */
+  showHeld(item: CatalogueItem | null, at: { position: Position; yaw: number } | null, scale: number): void {
+    if (!item || !at) {
+      this.dropHeld();
+      this.held = null;
+      this.container.dataset.held = '';
+      return;
+    }
+    if (this.held?.id !== item.id) {
+      this.dropHeld();
+      const root = new THREE.Group();
+      root.name = `held:${item.id}`;
+      const { width, depth, height } = item.size;
+      const label = textSprite(`${item.name} · ${width} × ${depth} × ${height} m`);
+      root.add(label);
+      void this.models.copy(item.model_url, item.node).then(model => {
+        if (model && this.held?.root === root) root.add(model);
+      });
+      this.scene.add(root);
+      this.held = { id: item.id, root, label, height };
+      this.container.dataset.held = item.id;
+    }
+    const { root, label, height } = this.held!;
+    root.position.set(at.position.x, at.position.y, at.position.z);
+    root.rotation.y = at.yaw;
+    root.scale.setScalar(scale);
+    // The label keeps its size, just above the piece.
+    label.scale.set(LABEL_WIDTH / scale, LABEL_WIDTH / 6 / scale, 1);
+    label.position.set(0, height + LABEL_ABOVE / scale, 0);
+  }
+
+  /** Takes the held piece out of the scene and frees its label's texture. */
+  private dropHeld(): void {
+    if (!this.held) return;
+    this.held.root.removeFromParent();
+    const material = this.held.label.material;
+    material.map?.dispose();
+    material.dispose();
+  }
+
+  /** Draws the aligned room as the dollhouse `view` says: life size, or smaller in front of the person. */
+  setDollhouse(view: DollhouseView): void {
+    // Called every frame: nothing to do for the view already drawn.
+    const now = this.view;
+    if (view.scale === now.scale && view.yaw === now.yaw &&
+      view.offset.x === now.offset.x && view.offset.y === now.offset.y && view.offset.z === now.offset.z) return;
+    this.dollhouse.position.set(view.offset.x, view.offset.y, view.offset.z);
+    this.dollhouse.rotation.y = view.yaw;
+    this.dollhouse.scale.setScalar(view.scale);
+    // Outlines are measured from world matrices now, not at the next render.
+    this.dollhouse.updateMatrixWorld(true);
+    this.container.dataset.scale = scaleLabel(view.scale);
+    this.view = view;
+    this.drawPhone();
   }
 
   /** The calm view: the room fades away until it is called again with false. */
@@ -194,6 +370,7 @@ export class QuestRoom {
     }
     if (this.loadedVersion === room.room_version) {
       const glidingFrom = this.gliding ? this.entityRoots.get(this.gliding.id)?.position.clone() : undefined;
+      this.drawLate(room.entities);
       applyPlacement(this.entityRoots, room.entities);
       const root = this.gliding ? this.entityRoots.get(this.gliding.id) : undefined;
       if (this.gliding && root && glidingFrom) {
@@ -208,8 +385,10 @@ export class QuestRoom {
     const version = room.room_version;
     this.loadingVersion = version;
     try {
-      // Every asset loads before any shows, so a failure never leaves half a room.
-      const urls = [...new Set(room.entities.map(entity => entity.asset_url))];
+      // Every asset loads before any shows, so a failure never leaves half a room. Placed
+      // furniture is drawn by `late` once the room shows: several pieces can share one model.
+      const own = roomOwn(room.entities);
+      const urls = [...new Set(own.map(entity => entity.asset_url))];
       const [scenes, splat] = await Promise.all([
         Promise.all(urls.map(url => this.loader.loadAsync(url).then(
           gltf => [url, gltf.scene] as const,
@@ -221,7 +400,7 @@ export class QuestRoom {
         splat?.dispose();
         return null;
       }
-      const roots = placeEntities(new Map(scenes), room.entities);
+      const roots = placeEntities(new Map(scenes), own);
       if (splat && room.splat_placement) {
         const { position, rotation, scale } = room.splat_placement;
         splat.position.set(position.x, position.y, position.z);
@@ -229,6 +408,7 @@ export class QuestRoom {
         splat.scale.setScalar(scale);
       }
       this.attach(roots, splat, room);
+      this.drawLate(room.entities);
       this.loadedVersion = version;
       return { version, loaded: true };
     } catch (error) {
@@ -237,6 +417,14 @@ export class QuestRoom {
     } finally {
       if (token === this.loadToken) this.loadingVersion = null;
     }
+  }
+
+  /** Draws furniture placed since the room loaded (#181), and takes away what is gone. */
+  private drawLate(entities: readonly RoomEntity[]): void {
+    if (!this.roomGroup) return;
+    this.late.sync(entities, this.entityRoots, this.roomGroup, furniture => {
+      this.container.dataset.furniture = String(furniture);
+    });
   }
 
   private attach(roots: Map<string, THREE.Object3D>, splat: SplatMesh | null, room: SessionState['room']): void {
@@ -321,4 +509,31 @@ function person(colour: number): THREE.Group {
   group.add(body, head, nose);
   group.visible = false;
   return group;
+}
+
+/** A line of text as a sprite, one unit wide and a sixth tall before scaling. */
+function textSprite(text: string): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  canvas.width = 768;
+  canvas.height = 128;
+  const context = canvas.getContext('2d');
+  if (context) {
+    context.fillStyle = '#08111ee8';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = '#ffffff';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    let size = 52;
+    context.font = `700 ${size}px sans-serif`;
+    while (size > 22 && context.measureText(text).width > canvas.width - 40) {
+      size -= 2;
+      context.font = `700 ${size}px sans-serif`;
+    }
+    context.fillText(text, canvas.width / 2, canvas.height / 2);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
+  sprite.renderOrder = 10;
+  return sprite;
 }

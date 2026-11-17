@@ -36,6 +36,9 @@ export function grabbedPosition(grip: Position, orientation: Rotation, offset: P
   return { x: grip.x + moved.x, y: grip.y + moved.y, z: grip.z + moved.z };
 }
 
+/** How far a ray reaches for an object, in meters: as far as the headset draws its rays. */
+export const RAY_REACH_METERS = 4;
+
 /**
  * The nearest movable object the ray hits within `maxDistance` meters, or null.
  * An entity's position is the center of its bottom face.
@@ -44,7 +47,7 @@ export function targetAlongRay(
   origin: Position,
   direction: Position,
   entities: readonly RoomEntity[],
-  maxDistance = 4,
+  maxDistance = RAY_REACH_METERS,
 ): string | null {
   const length = Math.hypot(direction.x, direction.y, direction.z);
   if (length < 1e-8) return null;

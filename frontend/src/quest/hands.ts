@@ -4,7 +4,7 @@
  */
 import { rayForward } from '../grab';
 import type { Position, Rotation } from '../protocol';
-import { handPose, type HandJoints, type HandPose } from './gestures';
+import { handPose, pinchPoint, type HandJoints, type HandPose } from './gestures';
 
 export interface Pose { position: Position; orientation: Rotation }
 export interface Ray { origin: Position; direction: Position }
@@ -21,6 +21,8 @@ export interface InputSample {
   mute: boolean;
   /** Where a held object is carried from: the grip, or the hand's palm. */
   grip: Pose | null;
+  /** Where it pinches or grips, for scaling the room (#180): between thumb and index, or the grip. */
+  pinchAt: Position | null;
   /** The pointing ray the system gives: the controller's, or the hand's. */
   ray: Ray | null;
   /** A hand's pose and, while it points, the ray along its index finger. */
@@ -81,6 +83,7 @@ export function readFrame(frame: XRFrame, reference: XRReferenceSpace, pinching:
       holding: false, confirm: false, mute: false,
       grip: grip && !grip.emulatedPosition ? poseOf(grip.transform) : null,
       ray: rayOf(frame, source.targetRaySpace, reference),
+      pinchAt: null,
       pose: 'none', fingerRay: null, wrist: null,
     };
     if (source.hand) {
@@ -92,6 +95,7 @@ export function readFrame(frame: XRFrame, reference: XRReferenceSpace, pinching:
       }
       sample.pose = handPose(joints);
       sample.wrist = joints.wrist ?? null;
+      sample.pinchAt = pinchPoint(joints);
       sample.holding = pinching.has(source);
       if (sample.pose === 'point') sample.fingerRay = fingerRay(joints);
     } else {
@@ -100,6 +104,8 @@ export function readFrame(frame: XRFrame, reference: XRReferenceSpace, pinching:
       sample.holding = Boolean(buttons?.[1]?.pressed);
       sample.confirm = Boolean(buttons?.[4]?.pressed);
       sample.mute = Boolean(buttons?.[5]?.pressed);
+      // Where it holds from, as holding does: the grip, else the ray's start.
+      sample.pinchAt = sample.grip?.position ?? sample.ray?.origin ?? null;
     }
     inputs.push(sample);
   }

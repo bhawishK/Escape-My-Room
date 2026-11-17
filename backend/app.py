@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+import math
 import os
+import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -34,6 +36,13 @@ from backend.captures import (
 from backend.delivery import Outbox
 from backend.env_file import load_env_file
 from backend.errors import Refusal
+from backend.furniture import Catalogue
+from backend.furniture_generation import (
+    FurnitureGeneration,
+    GenerationRequest,
+    generator_from_environment,
+    timeout_from_environment,
+)
 from backend.live_room import LiveRoomError, LiveRooms
 from backend.physics import PhysicsWorker
 from backend.preparation import (
@@ -51,8 +60,10 @@ from backend.prepared_room import (
 )
 from backend.protocol import (
     AcquireMessage,
+    AddFurnitureMessage,
     CalibrateMessage,
     ClearAlignmentMessage,
+    DesignerHandMessage,
     EntityTransformMessage,
     GripMessage,
     MarkerState,
@@ -60,6 +71,7 @@ from backend.protocol import (
     PresenceMessage,
     PresenceState,
     ReleaseMessage,
+    RemoveFurnitureMessage,
     Role,
     RoomLoadedMessage,
     SelectMessage,
@@ -94,6 +106,9 @@ type Incoming = (
     | VoiceReadyMessage
     | VoiceMuteMessage
     | VoiceSignalMessage
+    | AddFurnitureMessage
+    | RemoveFurnitureMessage
+    | DesignerHandMessage
 )
 # The message model for each incoming `type`.
 INCOMING: dict[str, type[Incoming]] = {
@@ -110,6 +125,9 @@ INCOMING: dict[str, type[Incoming]] = {
     "voice_ready": VoiceReadyMessage,
     "voice_mute": VoiceMuteMessage,
     "voice_signal": VoiceSignalMessage,
+    "add_furniture": AddFurnitureMessage,
+    "remove_furniture": RemoveFurnitureMessage,
+    "designer_hand": DesignerHandMessage,
 }
 
 # Why a voice call set-up message was not passed on (#13), as the page shows it.
@@ -132,6 +150,18 @@ SELECTION_REFUSALS = {
     "held": ("selection_held", "Let go of the object before changing the selection."),
 }
 
+# Why a piece of furniture was not placed (#181).
+FURNITURE_REFUSALS = {
+    "mismatch": ROOM_VERSION_MISMATCH,
+    "unknown_item": ("unknown_furniture", "That piece is not in the furniture catalogue."),
+    "outside": ("outside_room", "Place furniture with all of it on the room's floor."),
+    "no_room": ("no_room", "There is no free floor near there for that piece."),
+    "too_many": ("too_much_furniture", "The room is full. Take a piece away before adding more."),
+    "unknown": ("unknown_entity", "That room object does not exist."),
+    "not_furniture": ("not_furniture", "Only placed furniture can be taken away."),
+    "controlled_by_other": ("controlled_by_other", "The other person is holding that piece."),
+}
+
 
 # Why a hold or release was refused, as the phone shows it.
 MANIPULATION_REFUSALS = {
@@ -146,6 +176,10 @@ MANIPULATION_REFUSALS = {
     "no_grip": ("no_grip", "The controller has no grip pose."),
 }
 
+
+# The designer's hand is passed to the phone at most this often, in seconds (#185). The headset
+# sends one every 50 ms; this only stops a flood, never a hand delayed and bunched by the network.
+HAND_SECONDS = 0.025
 
 CARRYING = "Someone is carrying the box. Let go of it before changing the room."
 
@@ -188,6 +222,30 @@ def create_app(
     delay_ms = float(os.environ.get("ESCAPE_ROOM_SIMULATED_DELAY_MS") or 0)
     if not 0 <= delay_ms <= 5000:
         raise ValueError("ESCAPE_ROOM_SIMULATED_DELAY_MS must be from 0 to 5000.")
+    catalogue = Catalogue()
+    # Furniture made from a description (#186), kept with the data so it survives a restart.
+    # The server's event loop, once it runs, for news from worker threads.
+    running: dict[str, asyncio.AbstractEventLoop] = {}
+
+    def piece_added(_item: object) -> None:
+        """A piece joined the catalogue (#187): tell both devices, from the job's thread."""
+        loop = running.get("loop")
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(lambda: room.track(announce_catalogue()))
+
+    async def announce_catalogue() -> None:
+        async with room.lock:
+            room.catalogue_version += 1
+            room.revision += 1
+            await room.broadcast()
+
+    generation = FurnitureGeneration(
+        data / "furniture",
+        catalogue,
+        generator_from_environment(),
+        timeout_from_environment(),
+        on_added=piece_added,
+    )
     room = PrototypeRoom(load_error=load_error, delivery_delay=delay_ms / 1000)
     # The server's one physics simulation (#159), started and stopped with the server.
     physics = PhysicsWorker(room.physics_changed, room.physics_moved)
@@ -231,6 +289,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        running["loop"] = asyncio.get_running_loop()
         physics.start()
         try:
             yield
@@ -418,6 +477,74 @@ def create_app(
             await swap_in(loaded, lambda: live_rooms.record(directory, version, previous.job_id))
             return live_rooms.describe(loaded).model_dump()
 
+    @app.get("/api/furniture")
+    async def furniture_catalogue() -> dict[str, Any]:
+        """The pieces the designer can place, with their true sizes and models (#181)."""
+        items = catalogue.listed()
+        # Without the built-in file, pieces made from descriptions (#186) are still listed.
+        if catalogue.error is not None and not items:
+            raise HTTPException(503, catalogue.error)
+        return {"items": [item.model_dump() for item in items]}
+
+    @app.post("/api/furniture/jobs", status_code=202)
+    async def start_generation(request: GenerationRequest) -> dict[str, Any]:
+        """Make a piece from a description (#186): a picture first, then the 3D piece."""
+        if not generation.available:
+            raise HTTPException(
+                503, "Making furniture from a description isn't set up on this server."
+            )
+        return generation.start(request.description).model_dump()
+
+    @app.post("/api/furniture/jobs/photo", status_code=202)
+    def start_photo_generation(image: UploadFile, description: str = Form("")) -> dict[str, Any]:
+        """Make a piece from the resident's photo (#187), checked with the photo rules."""
+        if not generation.available:
+            raise HTTPException(503, "Making furniture from a photo isn't set up on this server.")
+        if len(description) > 200:
+            raise HTTPException(422, "Describe the piece in at most 200 characters.")
+        # No more than the photo limit and one byte is read: anything larger is refused.
+        data = image.file.read(captures.limits.max_image_bytes + 1)
+        picture = captures.photo_png(Upload(image.filename or "photo", data))
+        try:
+            return generation.start_photo(picture, description).model_dump()
+        except OSError as exc:
+            raise HTTPException(500, "The photo couldn't be saved on the server.") from exc
+
+    @app.get("/api/furniture/jobs/{job_id}")
+    async def generation_job(job_id: str) -> dict[str, Any]:
+        job = generation.get(job_id)
+        if job is None:
+            raise HTTPException(404, "That furniture job does not exist.")
+        return job.model_dump()
+
+    @app.post("/api/furniture/jobs/{job_id}/cancel")
+    async def cancel_generation(job_id: str) -> dict[str, Any]:
+        job = generation.cancel(job_id)
+        if job is None:
+            raise HTTPException(404, "That furniture job does not exist.")
+        return job.model_dump()
+
+    @app.get("/api/furniture/jobs/{job_id}/image")
+    async def generation_image(job_id: str) -> FileResponse:
+        path = generation.image(job_id) if re.fullmatch(r"[0-9a-f]{12}", job_id) else None
+        if path is None:
+            raise HTTPException(404, "That job has no picture yet.")
+        return FileResponse(path, media_type="image/png")
+
+    @app.get("/api/furniture/generated/{item_id}/model.glb")
+    async def generated_model(item_id: str) -> FileResponse:
+        path = generation.model(item_id)
+        if path is None:
+            raise HTTPException(404, "That piece does not exist.")
+        return FileResponse(path, media_type="model/gltf-binary")
+
+    @app.get("/api/furniture/{name}")
+    async def furniture_model(name: str) -> FileResponse:
+        path = catalogue.file(name)
+        if path is None:
+            raise HTTPException(404, "That furniture file does not exist.")
+        return FileResponse(path)
+
     @app.get("/api/rooms/live")
     async def live_room() -> dict[str, Any]:
         try:
@@ -444,6 +571,9 @@ def create_app(
         sequence = 0
         presence_sequence = 0
         grip_sequence = 0
+        hand_sequence = 0
+        # When this headset's hand was last passed to the phone (#185), on the loop's clock.
+        hand_passed_at = -math.inf
         outbox = Outbox(socket, room.delivery_delay)
 
         async def reject(code: str, message: str) -> None:
@@ -469,6 +599,10 @@ def create_app(
                 if room.manipulation is not None and room.manipulation.owner == role:
                     room.drop()
                 if previous is not None:
+                    # A headset replaced by a new tab takes its hand with it (#185).
+                    phone = room.outboxes.get("mobile_master")
+                    if role == "vr_solver" and phone is not None:
+                        phone.reply({"type": "designer_hand", "position": None, "length": None})
                     try:
                         await asyncio.wait_for(
                             previous.close(code=1000, reason="Device connected in another tab"),
@@ -520,6 +654,32 @@ def create_app(
                         sequence = incoming.sequence
                         room.accept_pose(incoming)
                         await room.broadcast()
+                    elif isinstance(incoming, DesignerHandMessage):
+                        if role != "vr_solver":
+                            await reject("role_forbidden", "Only the headset sends its hand.")
+                            continue
+                        if incoming.sequence <= hand_sequence:
+                            await reject(
+                                "stale_sequence", "Hand sequences must increase on this socket."
+                            )
+                            continue
+                        hand_sequence = incoming.sequence
+                        now = asyncio.get_running_loop().time()
+                        # At most one place every HAND_SECONDS; the hand going always passes.
+                        if incoming.position is not None and now - hand_passed_at < HAND_SECONDS:
+                            continue
+                        phone = room.outboxes.get("mobile_master")
+                        if phone is not None:
+                            position = incoming.position
+                            phone.reply(
+                                {
+                                    "type": "designer_hand",
+                                    "position": None if position is None else position.model_dump(),
+                                    "length": None if position is None else incoming.length,
+                                }
+                            )
+                            if position is not None:
+                                hand_passed_at = now
                     elif isinstance(incoming, PresenceMessage):
                         if incoming.sequence <= presence_sequence:
                             await reject(
@@ -634,6 +794,38 @@ def create_app(
                             await reject(*MANIPULATION_REFUSALS[result])
                             continue
                         await room.broadcast()
+                    elif isinstance(incoming, AddFurnitureMessage):
+                        if role != "vr_solver":
+                            await reject("role_forbidden", "Only the headset places furniture.")
+                            continue
+                        result = room.add_furniture(
+                            incoming.room_version,
+                            catalogue.get(incoming.item),
+                            incoming.position,
+                            incoming.yaw,
+                        )
+                        if result == "unavailable":
+                            await reject(
+                                "room_unavailable",
+                                room.load_error or "Prepared room is unavailable.",
+                            )
+                            continue
+                        if result != "ok":
+                            await reject(*FURNITURE_REFUSALS[result])
+                            continue
+                        await room.broadcast()
+                    elif isinstance(incoming, RemoveFurnitureMessage):
+                        result = room.remove_furniture(role, incoming.room_version, incoming.id)
+                        if result == "unavailable":
+                            await reject(
+                                "room_unavailable",
+                                room.load_error or "Prepared room is unavailable.",
+                            )
+                            continue
+                        if result != "ok":
+                            await reject(*FURNITURE_REFUSALS[result])
+                            continue
+                        await room.broadcast()
                     elif isinstance(incoming, SelectMessage):
                         if role != "mobile_master":
                             await reject("role_forbidden", "Only the phone selects objects.")
@@ -678,6 +870,10 @@ def create_app(
                     del room.outboxes[role]
                 if room.sockets.get(role) is socket:
                     room.disconnect(role)
+                    # The headset gone, so is its hand in the phone's room (#185).
+                    phone = room.outboxes.get("mobile_master")
+                    if role == "vr_solver" and phone is not None:
+                        phone.reply({"type": "designer_hand", "position": None, "length": None})
                     await room.broadcast()
             await outbox.close()
 

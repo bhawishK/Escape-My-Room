@@ -46,6 +46,14 @@ export function handPose(joints: HandJoints): HandPose {
   return 'none';
 }
 
+/** Where a hand pinches: between its thumb tip and index tip, or null when either is unseen. */
+export function pinchPoint(joints: HandJoints): Position | null {
+  const thumb = joints['thumb-tip'];
+  const index = joints['index-finger-tip'];
+  if (!thumb || !index) return null;
+  return { x: (thumb.x + index.x) / 2, y: (thumb.y + index.y) / 2, z: (thumb.z + index.z) / 2 };
+}
+
 /**
  * A hand counts as held up when its wrist is no more than this far below the head, in metres:
  * about chest height. A relaxed hand at the side is curled like a fist, and is well below it.

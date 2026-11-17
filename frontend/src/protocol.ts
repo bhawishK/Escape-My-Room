@@ -26,6 +26,28 @@ export interface RoomEntity {
   position: Position;
   rotation: Rotation;
   size: { width: number; height: number; depth: number };
+  /** The catalogue piece it was placed from (#181); absent or null for the room's own objects. */
+  furniture?: string | null;
+}
+
+/** A job making a piece of furniture from a description or a photo (#186, #187). */
+export interface FurnitureJob {
+  id: string;
+  state: 'queued' | 'image_ready' | 'ready' | 'failed' | 'cancelled';
+  error: string | null;
+  image_url: string | null;
+  item: CatalogueItem | null;
+}
+
+/** A piece the designer can place (#181), from GET /api/furniture. */
+export interface CatalogueItem {
+  id: string;
+  name: string;
+  node: string;
+  size: { width: number; height: number; depth: number };
+  model_url: string;
+  /** Made from a description (#186), rather than built in. */
+  generated?: boolean;
 }
 
 export interface RoomState {
@@ -70,6 +92,8 @@ export const NO_PRESENCE: PresenceState = {
 
 export interface SessionState {
   revision: number;
+  /** Counts pieces added to the catalogue, so pages reload it when one is made (#187). */
+  catalogue_version: number;
   mobile_connected: boolean;
   vr_connected: boolean;
   marker: {
@@ -131,4 +155,6 @@ export type ServerEvent =
   | ({ type: 'selection' } & SelectionResult)
   | { type: 'state'; state: SessionState }
   | ({ type: 'voice_signal' } & VoiceSignal)
+  /** The headset's hand inside the dollhouse, for the phone (#185); null when none is. */
+  | { type: 'designer_hand'; position: Position | null; length: number | null }
   | { type: 'error'; code: string; message: string };

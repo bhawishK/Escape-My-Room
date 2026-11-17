@@ -45,30 +45,31 @@ WALL_THICKNESS = 0.2
 PhysicsState = Literal["starting", "running", "unavailable"]
 
 
+def body_for(entity: SceneEntity, epoch: int) -> dict[str, Any] | None:
+    """An entity's simulated body, where it is now: the floor is static, and movable objects,
+    placed furniture (#181) among them, are dynamic. None for the room's own static objects."""
+    if entity.kind == "movable":
+        motion = "dynamic"
+    elif entity.size.height <= FLOOR_THICKNESS:
+        motion = "static"
+    else:
+        # The room's own static furniture isn't a collider yet (#159, out of scope).
+        return None
+    return {
+        "id": entity.id,
+        "motion": motion,
+        "size": entity.size.model_dump(),
+        "position": entity.position.model_dump(),
+        "rotation": entity.rotation.model_dump(),
+        "material": None if entity.physics is None else entity.physics.model_dump(),
+        "epoch": epoch,
+    }
+
+
 def bodies_for(entities: list[SceneEntity], epochs: dict[str, int]) -> list[dict[str, Any]]:
-    """The room's simulated bodies, where they are now: the floor is static, and movable objects
-    are dynamic, each with its epoch."""
-    bodies: list[dict[str, Any]] = []
-    for entity in entities:
-        if entity.kind == "movable":
-            motion = "dynamic"
-        elif entity.size.height <= FLOOR_THICKNESS:
-            motion = "static"
-        else:
-            # Furniture isn't a collider yet (#159, out of scope).
-            continue
-        bodies.append(
-            {
-                "id": entity.id,
-                "motion": motion,
-                "size": entity.size.model_dump(),
-                "position": entity.position.model_dump(),
-                "rotation": entity.rotation.model_dump(),
-                "material": None if entity.physics is None else entity.physics.model_dump(),
-                "epoch": epochs.get(entity.id, 0),
-            }
-        )
-    return bodies + walls_for(entities)
+    """The room's simulated bodies, where they are now, each with its epoch."""
+    bodies = [body_for(entity, epochs.get(entity.id, 0)) for entity in entities]
+    return [body for body in bodies if body is not None] + walls_for(entities)
 
 
 def walls_for(entities: list[SceneEntity]) -> list[dict[str, Any]]:
@@ -237,6 +238,25 @@ class PhysicsWorker:
         motion = {"velocity": capped(velocity, MAX_SPEED)}
         self._command("release", entity.id, pose_of(entity) | motion)
 
+    def add(self, entity: SceneEntity) -> None:
+        """A new body in the live room, already among the session's entities (#181). It falls
+        from where it is. Sent with the room instead if the worker isn't ready yet."""
+        epoch = self.epochs[entity.id] = self._next_epoch()
+        body = body_for(entity, epoch)
+        if body is not None and self.state == "running":
+            self.outgoing.put({"type": "add", "room_version": self.wanted_version, "body": body})
+
+    def remove(self, entity_id: str) -> None:
+        """A body leaves the live room (#183), already gone from the session's entities. Only a
+        body physics was given is taken out of it."""
+        had = self.epochs.pop(entity_id, None) is not None
+        self.held.discard(entity_id)
+        if entity_id in self.moving:
+            self.moving.remove(entity_id)
+        if had and self.state == "running":
+            removal = {"type": "remove", "room_version": self.wanted_version, "id": entity_id}
+            self.outgoing.put(removal)
+
     def place(self, entity: SceneEntity) -> None:
         """Put it where it is, at rest, as the phone's let-go and a direct move do."""
         self._command("place", entity.id, pose_of(entity))
@@ -323,8 +343,9 @@ class PhysicsWorker:
             self.reason = None
             self._send_room()
             self.on_change()
-        elif kind == "loaded":
-            # An answer for a room that has since been replaced is out of date.
+        elif kind in ("loaded", "counted"):
+            # An answer for a room that has since been replaced is out of date. "counted"
+            # answers a body added to the live room (#181).
             if message.get("room_version") != self.wanted_version:
                 return
             self.room_version = message.get("room_version")
@@ -338,7 +359,12 @@ class PhysicsWorker:
                 if self.epochs.get(body["id"]) == body["epoch"] and body["id"] not in self.held
             ]
             reported: list[str] = message.get("moving") or []
-            moving = [entity_id for entity_id in reported if entity_id not in self.held]
+            # A body removed since the worker sent this (#183) is no longer moving here.
+            moving = [
+                entity_id
+                for entity_id in reported
+                if entity_id not in self.held and entity_id in self.epochs
+            ]
             # A hold or place already took its body out of the moving list here; the worker's
             # answer to it changes nothing, and the devices aren't sent a state for it.
             if not current and moving == self.moving:

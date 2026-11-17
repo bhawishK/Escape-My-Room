@@ -11,6 +11,8 @@ body { margin: 0; background: var(--fill); }
   color: #fff; background: var(--blue); cursor: pointer; width: auto;
 }
 .quest-page button:disabled { background: var(--tinted); color: var(--label-2); cursor: default; }
+/* A secondary button in a card is white with a hairline, so its text is dark. */
+.quest-page .card button.secondary:not(:disabled) { color: var(--label); }
 .quest-page .error { color: var(--red); background: var(--red-fill); border-radius: 12px; padding: 8px 12px; }
 .quest-page .statuses { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; margin: 16px 0 0; }
 .quest-page dt { color: var(--label-2); font-size: 13px; }
@@ -20,3 +22,21 @@ body { margin: 0; background: var(--fill); }
 /* The 3D view: what the headset sees, shown small on the page before VR. */
 .quest-scene { height: 320px; border-radius: var(--radius); overflow: hidden; background: #f5f5f7; }
 .quest-scene canvas { display: block; width: 100% !important; height: 100% !important; }
+
+/* The furniture catalogue (#181): one button per piece; the chosen one is filled. */
+.furniture-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.furniture-list button { background: var(--tinted); color: var(--label); }
+.furniture-list button[aria-pressed="true"] { background: var(--blue); color: #ffffff; }
+
+/* Making a piece from a description (#186): the field and buttons on one line, then its picture. */
+.furniture-make { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.furniture-make label { flex-basis: 100%; font-weight: 600; }
+.furniture-make input { flex: 1 1 220px; min-width: 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--separator); font: inherit; }
+.furniture-preview { display: block; width: 160px; height: 160px; margin-top: 12px; border-radius: 12px; object-fit: cover; }
+.furniture-preview[hidden] { display: none; }
+
+/* Placed furniture (#183): each piece with a button to take it away. */
+.placed-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 6px; }
+.placed-list:empty { display: none; }
+.placed-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+

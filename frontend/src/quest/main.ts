@@ -8,12 +8,22 @@ import './quest.css';
 import { ReferenceSpaceType, VERSION, World } from '@iwsdk/core';
 import type * as THREE from 'three';
 import { alignmentFromPose, roomDirection, roomOrientation, roomPoint, type CalibrationInput } from '../alignment';
+import { errorMessage } from '../api';
 import { element } from '../dom';
-import { grabbedPosition, offsetOf, rayForward, targetAlongRay } from '../grab';
-import type { AlignmentState, Position, PresenceInput, RoomEntity, Rotation, SessionState } from '../protocol';
+import { RAY_REACH_METERS, grabbedPosition, offsetOf, rayForward, targetAlongRay } from '../grab';
+import type {
+  AlignmentState, CatalogueItem, FurnitureJob, Position, PresenceInput, RoomEntity, Rotation, SessionState,
+} from '../protocol';
+import { floorPieces } from '../room';
 import { RoomMap, type Spot } from '../room-map';
 import { SessionClient } from '../session';
 import { VoiceCall, voiceLine, voiceNote } from '../voice';
+import {
+  DollhouseCarry, DollhouseScaling, GripSmoother, HAND_METRES, dollhousePlacement, fromDollhouse, handInDollhouse,
+  paletteSlots,
+  slotAt, throwInRoom, yawOf, orientationFromDollhouse, scaleLabel, velocityFromDollhouse,
+} from './dollhouse';
+import { Dictation } from './dictation';
 import { Dwell, FIST_COOLDOWN_MS, FIST_HOLD_MS, GestureGate, HeadNods, fistHeldUp, unmuteHint } from './gestures';
 import { readFrame, type FrameSample, type InputSample, type Pose, type Ray } from './hands';
 import { Hud } from './hud';
@@ -24,12 +34,16 @@ import { ThrowVelocity } from './throw';
 const PRESENCE_MS = 50;
 const GRIP_MS = 100;
 const REPORT_MS = 500;
+/** A press waits this long for a second one, which together scale the room instead (#180). */
+const PAIR_MS = 150;
 /** Resting the gaze this long on an object starts a topic about it. */
 const DWELL_MS = 1500;
 /** A pointing finger draws its ray once it has pointed this long, so a hand passing through does not. */
 const POINT_MS = 200;
 /** A gesture line in the headset stays this long. */
 const SAID_MS = 2000;
+/** How far the gaze reaches for an object at life size, in room metres. */
+const GAZE_METRES = 6;
 /** Static objects this thin are the floor, which the gaze is not starting a topic about. */
 const FLOOR_METRES = 0.05;
 /** Before a tracked head pose, lining up takes the `local` origin as the floor centre. */
@@ -60,11 +74,19 @@ let grabOffset: { x: number; y: number; z: number } | null = null;
 let releasing: number | null = null;
 /** The held object's recent places, for the speed it is thrown at, and the latest grip. */
 const swing = new ThrowVelocity();
+/** Steadies the holding hand in a small room, where its tremble is many times larger (#184). */
+const smoother = new GripSmoother();
+/** The catalogue, for the palette above the hand while the room is small (#184). */
+let catalogueItems: CatalogueItem[] = [];
+/** A piece taken from the palette, the input holding it, and where it was last held. */
+let taking: { item: CatalogueItem; source: XRInputSource; last: Pose | null } | null = null;
 let lastGripPose: { position: Position; orientation: Rotation } | null = null;
 /** Each input's holding and confirm last frame, to tell a press from a hold. */
 const wasHolding = new WeakMap<XRInputSource, boolean>();
 const wasConfirming = new WeakMap<XRInputSource, boolean>();
 const wasMuting = new WeakMap<XRInputSource, boolean>();
+/** When each input's press began, while it waits to see whether a second pinch scales the room. */
+const pressedAt = new WeakMap<XRInputSource, number>();
 /** What the voice call last said in the headset, and until when (#173). */
 let voiceSaid: { text: string; until: number } | null = null;
 /** Since when each hand has pointed. */
@@ -78,6 +100,11 @@ let paused = false;
 const palmGate = new GestureGate<'open-palm'>({ holdMs: 800, cooldownMs: 1500 });
 /** A fist held up mutes and unmutes the voice call (#175). */
 const fistGate = new GestureGate<'fist'>({ holdMs: FIST_HOLD_MS, cooldownMs: FIST_COOLDOWN_MS });
+/** Two pinches shrink the room into a dollhouse and grow it back (#180). Only this headset's view. */
+const scaling = new DollhouseScaling();
+/** One hand holding nothing carries a small room, to move and turn it (#182). */
+const carry = new DollhouseCarry();
+let carrier: XRInputSource | null = null;
 const nods = new HeadNods();
 const dwell = new Dwell(DWELL_MS);
 let lastPresence = -Infinity;
@@ -137,6 +164,7 @@ function report(): void {
     xr_frame_rate_hz: Number((frameTimes.length / 5).toFixed(1)),
     room_version: state?.room.room_version ?? null,
     splat: sceneElement.dataset.splat === 'shown',
+    room_scale: scaleLabel(scaling.view.scale),
     gestures: gestureLog.slice(-20),
     voice: voice.report(),
     user_agent: navigator.userAgent,
@@ -145,7 +173,8 @@ function report(): void {
 
 /** Mutes or unmutes from inside VR, where the page's Mute button cannot be reached. */
 function toggleMute(how: 'fist' | 'button', now: number): void {
-  if (!voice.on) return;
+  // Not while dictating: the call stays muted until the description is said (#188).
+  if (!voice.on || dictationListening) return;
   const muted = !voice.status.muted;
   voice.setMuted(muted);
   // Muting is followed by the line that stays, saying how to unmute.
@@ -163,11 +192,24 @@ let room: QuestRoom | null = null;
 const hud = new Hud();
 
 /** The voice call with the phone user (#13). Started on the page, before Enter VR. */
+/** Muted for dictation (#188): the call is unmuted when dictation ends. */
+let mutedForDictation = false;
+/** Whether dictation is listening; a flag, as the call's callback can run before it exists. */
+let dictationListening = false;
+/** While dictating, the call stays muted, whenever it connects or is unmuted. */
+function keepDictationMuted(): void {
+  if (!dictationListening || !voice.on || voice.status.muted || voice.status.phase === 'asking') return;
+  mutedForDictation = true;
+  voice.setMuted(true);
+}
+
 const voice = new VoiceCall({
   sendReady: ready => client.sendVoiceReady(ready),
   sendSignal: signal => client.sendVoiceSignal(signal),
   sendMuted: muted => client.sendVoiceMuted(muted),
   changed: status => {
+    // A call that connects, or is unmuted, while dictating is muted again (#188).
+    keepDictationMuted();
     muteButton.hidden = status.phase === 'off' || status.phase === 'asking';
     muteButton.textContent = status.muted ? 'Unmute' : 'Mute';
     const line = element('voice-status');
@@ -196,6 +238,8 @@ const client = new SessionClient({
   connection: value => {
     connected = value;
     element('connection').textContent = value ? 'Connected · VR headset' : 'Not connected';
+    // A new connection has shown the phone no hand yet (#185).
+    handShown = false;
     if (!value) {
       voice.connectionLost();
       state = null;
@@ -207,7 +251,12 @@ const client = new SessionClient({
     controls();
   },
   selection: () => {},
-  error: message => showError(message),
+  error: message => {
+    showError(message);
+    // In VR the page is out of sight, so a refusal, such as a piece let go off the floor, is
+    // said in the headset too.
+    if (xrActive) gesture(message, performance.now());
+  },
 });
 
 function applyState(next: SessionState): void {
@@ -220,6 +269,10 @@ function applyState(next: SessionState): void {
   map.showPlayers(next.participants, 'vr_solver');
   room?.align(next.alignment.vr_solver);
   room?.showPhone(next.participants.mobile_master);
+  showPlaced(next);
+  // A piece made from a description or a photo joined the catalogue (#187).
+  if (catalogueShown !== null && next.catalogue_version !== catalogueShown) void showCatalogue();
+  catalogueShown = next.catalogue_version;
   const held = next.manipulation;
   room?.showControl(held?.entity ?? null);
   room?.glide(held?.owner === 'mobile_master' ? held.entity : null);
@@ -252,9 +305,39 @@ function applyState(next: SessionState): void {
   });
 }
 
+/** The placed pieces, each with a button to take it away unless the phone holds it (#183). */
+const placedList = element('placed-list');
+let placedShown = '';
+function showPlaced(next: SessionState): void {
+  const pieces = next.room.entities.filter(entity => entity.furniture);
+  const phoneHolds = next.manipulation?.owner === 'mobile_master' ? next.manipulation.entity : null;
+  // Rebuilt only when the list or what the phone holds changes, not with every move.
+  const shown = JSON.stringify([pieces.map(piece => piece.id), phoneHolds]);
+  if (shown === placedShown) return;
+  placedShown = shown;
+  placedList.replaceChildren(...pieces.map(piece => {
+    const row = document.createElement('li');
+    const name = document.createElement('span');
+    name.textContent = piece.label;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary';
+    button.textContent = 'Take away';
+    button.setAttribute('aria-label', `Take away ${piece.label}`);
+    button.disabled = piece.id === phoneHolds;
+    button.addEventListener('click', () => {
+      const version = state?.room.room_version;
+      if (version !== null && version !== undefined) client.sendRemoveFurniture(version, piece.id);
+    });
+    row.append(name, button);
+    return row;
+  }));
+}
+
 /** The person stands on the page's map: the alignment is turned and moved so they are there. */
 function standOnMap(spot: Spot, heading: number | null): void {
   if (!connected) return;
+  lifeSize();
   const now = calibrationNow ?? NO_CALIBRATION;
   const current = aligned();
   // A tap without a drag keeps the way the person faces now.
@@ -267,11 +350,246 @@ function standOnMap(spot: Spot, heading: number | null): void {
     origin: { x: cosine * x + sine * z + spot.x, y, z: -sine * x + cosine * z + spot.z },
   });
 }
-const map = new RoomMap(element('quest-map'), 'quest-map', { pick: standOnMap });
+
+/** The catalogue piece the next press on the map places (#181), or null to stand there instead. */
+let chosenPiece: CatalogueItem | null = null;
+const furnitureList = element('furniture-list');
+const furnitureStatus = element('furniture-status');
+const FURNITURE_HINT = furnitureStatus.textContent ?? '';
+
+function choosePiece(item: CatalogueItem | null): void {
+  chosenPiece = chosenPiece?.id === item?.id ? null : item;
+  for (const button of furnitureList.querySelectorAll<HTMLButtonElement>('button')) {
+    button.setAttribute('aria-pressed', String(button.dataset.item === chosenPiece?.id));
+  }
+  const where = chosenPiece?.generated ? 'your new piece' : `the ${chosenPiece?.name.toLowerCase()}`;
+  furnitureStatus.textContent = chosenPiece
+    ? `Press on the room map where ${where} goes, and drag the way it faces.`
+    : FURNITURE_HINT;
+}
+
+/** Making a piece from a description (#186): the job, polled until it ends. */
+const makeForm = element<HTMLFormElement>('furniture-make');
+const makeInput = element<HTMLInputElement>('furniture-description');
+const makeButton = element<HTMLButtonElement>('furniture-make-button');
+const cancelButton = element<HTMLButtonElement>('furniture-cancel');
+const preview = element<HTMLImageElement>('furniture-preview');
+/** How often a job is asked about, in milliseconds. */
+const JOB_POLL_MS = 1000;
+let making: string | null = null;
+
+/** The catalogue version last seen, to reload the catalogue when a piece is added (#187). */
+let catalogueShown: number | null = null;
+
+/** Shows a job's progress on the page and its picture in the hand in VR; ends it when it's done. */
+function showJob(job: FurnitureJob): void {
+  making = job.state === 'queued' || job.state === 'image_ready' ? job.id : null;
+  makeButton.disabled = making !== null;
+  cancelButton.hidden = making === null;
+  preview.hidden = job.image_url === null || making === null;
+  if (job.image_url && !preview.hidden && preview.getAttribute('src') !== job.image_url) preview.src = job.image_url;
+  room?.showCard(making && job.image_url ? job.image_url : null);
+  if (job.state === 'queued') furnitureStatus.textContent = 'Making a picture of it…';
+  else if (job.state === 'image_ready') furnitureStatus.textContent = 'Here is the picture. Making it into a 3D piece, which can take a few minutes…';
+  else if (job.state === 'failed') furnitureStatus.textContent = job.error ?? 'The piece could not be made.';
+  else if (job.state === 'cancelled') furnitureStatus.textContent = 'Stopped. Nothing was added.';
+  else if (job.item) {
+    const item = job.item;
+    void showCatalogue().then(() => {
+      chosenPiece = null;
+      choosePiece(item);
+    });
+  }
+}
+
+async function followJob(id: string): Promise<void> {
+  while (making === id) {
+    await new Promise(resolve => setTimeout(resolve, JOB_POLL_MS));
+    if (making !== id) return;
+    try {
+      const response = await fetch(`/api/furniture/jobs/${id}`);
+      if (response.ok) showJob(await response.json() as FurnitureJob);
+      // Jobs live in the server's memory: after a restart this one is gone, so stop asking.
+      else if (response.status === 404 && making === id) {
+        showJob({ id, state: 'failed', error: 'The server lost this piece, perhaps because it restarted. Make it again.', image_url: null, item: null });
+      }
+    } catch {
+      // A dropped request is asked again next time.
+    }
+  }
+}
+
+makeForm.addEventListener('submit', event => {
+  event.preventDefault();
+  const description = makeInput.value.trim();
+  if (description.length < 3 || making) return;
+  makeButton.disabled = true;
+  void (async () => {
+    const response = await fetch('/api/furniture/jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description }),
+    }).catch(() => null);
+    if (!response?.ok) {
+      makeButton.disabled = false;
+      furnitureStatus.textContent = response
+        ? await errorMessage(response, 'The piece could not be started.')
+        : 'The server could not be reached. Try again.';
+      return;
+    }
+    const job = await response.json() as FurnitureJob;
+    showJob(job);
+    void followJob(job.id);
+  })();
+});
+/**
+ * Holding the talk button says the description instead of typing it (#188). The call is kept
+ * muted while it listens, so the phone user doesn't hear the dictation, and unmuted after if it
+ * was on. A click, as from the keyboard, starts or stops listening instead of a hold.
+ */
+const dictateButton = element<HTMLButtonElement>('furniture-dictate');
+/** Whether the button is held, and whether this hold has failed, for what the status says. */
+let dictationHeld = false;
+let dictationFailed = false;
+const listeningLine = (): string => mutedForDictation
+  ? 'Listening, with the call muted… let go when you have said it.'
+  : 'Listening… let go when you have said it.';
+const dictation = new Dictation({
+  heard: text => {
+    makeInput.value = text;
+    // Late words after letting go don't say "listening" again.
+    if (dictationHeld) furnitureStatus.textContent = listeningLine();
+  },
+  failed: message => {
+    dictationFailed = true;
+    furnitureStatus.textContent = message;
+  },
+  ended: () => {
+    dictationHeld = false;
+    dictationListening = false;
+    dictateButton.setAttribute('aria-pressed', 'false');
+    if (mutedForDictation) {
+      mutedForDictation = false;
+      voice.setMuted(false);
+    }
+    if (!dictationFailed && makeInput.value.trim()) furnitureStatus.textContent = 'Check the description, then press Make it.';
+  },
+});
+function startDictation(): void {
+  if (dictation.listening) return;
+  dictationFailed = false;
+  if (!dictation.start()) return;
+  // Cleared only once listening has started, so a browser that can't listen keeps what was typed.
+  makeInput.value = '';
+  dictationHeld = true;
+  dictationListening = true;
+  dictateButton.setAttribute('aria-pressed', 'true');
+  keepDictationMuted();
+  furnitureStatus.textContent = listeningLine();
+}
+dictateButton.addEventListener('pointerdown', event => {
+  // Held to the button, so a wobbling ray or finger doesn't end the hold early. A pointer the
+  // browser doesn't know as active can't be captured, which never stops dictation.
+  try {
+    dictateButton.setPointerCapture(event.pointerId);
+  } catch {
+    // Listening goes on without the capture.
+  }
+  startDictation();
+});
+for (const name of ['pointerup', 'pointercancel'] as const) {
+  dictateButton.addEventListener(name, () => {
+    dictationHeld = false;
+    dictation.stop();
+  });
+}
+dictateButton.addEventListener('click', event => {
+  // A pointer's hold has its own events; a keyboard's click starts or stops listening.
+  if (event.detail !== 0) return;
+  if (dictation.listening) {
+    dictationHeld = false;
+    dictation.stop();
+  } else {
+    startDictation();
+  }
+});
+
+cancelButton.addEventListener('click', () => {
+  const id = making;
+  if (!id) return;
+  void fetch(`/api/furniture/jobs/${id}/cancel`, { method: 'POST' })
+    .then(response => response.ok ? response.json() as Promise<FurnitureJob> : null)
+    .then(job => { if (job) showJob(job); });
+});
+
+/** The catalogue's pieces as buttons, each with its true size. */
+async function showCatalogue(): Promise<void> {
+  try {
+    const response = await fetch('/api/furniture');
+    if (!response.ok) throw new Error();
+    const { items } = await response.json() as { items: CatalogueItem[] };
+    catalogueItems = items;
+    furnitureList.replaceChildren(...items.map(item => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.item = item.id;
+      // A reload, when a piece joins, keeps the piece chosen before it.
+      button.setAttribute('aria-pressed', String(item.id === chosenPiece?.id));
+      const { width, depth, height } = item.size;
+      button.textContent = `${item.name} · ${width} × ${depth} × ${height} m`;
+      button.addEventListener('click', () => choosePiece(item));
+      return button;
+    }));
+  } catch {
+    furnitureStatus.textContent = 'The furniture catalogue could not be loaded. Reload to try again.';
+  }
+}
+
+/** A press on the map places the chosen piece there, facing the way dragged; else the person stands there. */
+function pickOnMap(spot: Spot, heading: number | null): void {
+  const piece = chosenPiece;
+  const version = state?.room.room_version;
+  if (!piece) {
+    standOnMap(spot, heading);
+    return;
+  }
+  if (!connected || version === null || version === undefined) {
+    // The piece stays chosen, for when the room is back.
+    furnitureStatus.textContent = `The ${piece.name.toLowerCase()} can be placed once the headset is connected and the room has loaded.`;
+    return;
+  }
+  // Python lifts it to the floor's top; it faces -z unless dragged another way.
+  client.sendAddFurniture(version, piece.id, { x: spot.x, y: 0, z: spot.z }, heading ?? 0);
+  choosePiece(null);
+}
+const map = new RoomMap(element('quest-map'), 'quest-map', { pick: pickOnMap });
+void showCatalogue();
+
+/** Places the piece taken from the palette where it was last held (#184); it then falls there. */
+function placeTaken(): void {
+  const piece = taking;
+  taking = null;
+  const alignment = aligned();
+  const version = state?.room.room_version;
+  if (!piece?.last || !alignment || version === null || version === undefined) return;
+  const { position, yaw } = dollhousePlacement(scaling.view, alignment, piece.last.position, piece.last.orientation);
+  // Python takes a yaw from -π to π.
+  client.sendAddFurniture(version, piece.item.id, position, Math.atan2(Math.sin(yaw), Math.cos(yaw)));
+}
+
+/** Back to life size: the dollhouse is drawn from an alignment that is about to change or is gone. */
+function lifeSize(): void {
+  taking = null;
+  carry.end();
+  carrier = null;
+  scaling.reset();
+  room?.setDollhouse(scaling.view);
+}
 
 function confirmAlignment(): void {
   if (!connected) return;
   pauseNotice = null;
+  lifeSize();
   client.sendCalibration(calibrationNow ?? NO_CALIBRATION);
 }
 
@@ -282,7 +600,8 @@ function confirmAlignment(): void {
 function release(throwing = false): void {
   const mine = ownHold();
   holder = null;
-  const velocity = throwing ? swing.velocity(performance.now()) ?? undefined : undefined;
+  const moving = throwing ? swing.velocity(performance.now()) : null;
+  const velocity = moving ? throwInRoom(scaling.view, moving) ?? undefined : undefined;
   swing.clear();
   const finalGrip = lastGripPose;
   lastGripPose = null;
@@ -303,17 +622,32 @@ function pause(reason: 'lost' | 'ended' | 'reset'): void {
   release();
   grabOffset = null;
   if (reason === 'lost' && !wasHolding) return;
-  if (reason !== 'lost') client.sendClearAlignment();
+  if (reason !== 'lost') {
+    client.sendClearAlignment();
+    lifeSize();
+  }
   pauseNotice = reason === 'lost'
     ? 'Tracking lost. The object stays where it was. Take hold again when the line is orange.'
     : 'Line the room up again: press A, or pinch. The object stays where it was.';
 }
 
+/**
+ * A point, a direction or a turn in the `local` space, in room metres: through the dollhouse
+ * first, so a hand in a small room reaches what is drawn under it.
+ */
+const inRoom = (alignment: AlignmentState, point: Position) => roomPoint(alignment, fromDollhouse(scaling.view, point));
+const directionInRoom = (alignment: AlignmentState, direction: Position) =>
+  roomDirection(alignment, velocityFromDollhouse(scaling.view, direction));
+const turnInRoom = (alignment: AlignmentState, orientation: Rotation) =>
+  roomOrientation(alignment, orientationFromDollhouse(scaling.view, orientation));
+
 /** The movable object a ray is on, and whether the phone holds it. */
 function aimedAt(ray: Ray | null): { hit: string | null; blocked: boolean } {
   const alignment = aligned();
   if (!ray || !alignment) return { hit: null, blocked: false };
-  const hit = targetAlongRay(roomPoint(alignment, ray.origin), roomDirection(alignment, ray.direction), entities());
+  // A ray reaches as far in a small room as it does at life size.
+  const hit = targetAlongRay(
+    inRoom(alignment, ray.origin), directionInRoom(alignment, ray.direction), entities(), RAY_REACH_METERS / scaling.view.scale);
   const blocked = phoneHolds(hit);
   return { hit: blocked ? null : hit, blocked };
 }
@@ -327,7 +661,8 @@ function lookedAt(): string | null {
     // Every object counts here, not only the ones that can be picked up.
     .map(entity => ({ ...entity, kind: 'movable' as const, selectable: true }));
   return targetAlongRay(
-    roomPoint(alignment, head.position), roomDirection(alignment, rayForward(head.orientation)), topics, 6);
+    inRoom(alignment, head.position), directionInRoom(alignment, rayForward(head.orientation)), topics,
+    GAZE_METRES / scaling.view.scale);
 }
 
 /** Where a held object is carried from: the grip, else the ray's start turned as the head is. */
@@ -337,29 +672,31 @@ function gripOf(input: InputSample): Pose | null {
 }
 
 /** Starts holding with `input`: before alignment it lines up; after, it takes what it aims at. */
-function takeHold(input: InputSample, gazeTarget: string | null): void {
+function takeHold(input: InputSample, gazeTarget: string | null): 'held' | 'refused' | 'nothing' {
   const alignment = aligned();
   if (!alignment) {
     confirmAlignment();
-    return;
+    return 'refused';
   }
   pauseNotice = null;
   const { hit, blocked } = aimedAt(input.ray);
   if (blocked) {
     gestureLine = { text: BLOCKED, until: performance.now() + SAID_MS };
-    return;
+    return 'refused';
   }
   // Look and pinch: a hand aimed at nothing takes what the head is looking at.
   const target = hit ?? (input.kind === 'hand' ? movable(gazeTarget) : null);
   const version = state?.room.room_version;
   const entity = entities().find(candidate => candidate.id === target);
   const grip = gripOf(input);
-  if (!entity || !grip || version === null || version === undefined) return;
-  const position = roomPoint(alignment, grip.position);
-  const orientation = roomOrientation(alignment, grip.orientation);
+  if (!entity || !grip || version === null || version === undefined) return 'nothing';
+  const position = inRoom(alignment, grip.position);
+  const orientation = turnInRoom(alignment, grip.orientation);
   holder = input.source;
+  smoother.reset();
   grabOffset = offsetOf(position, orientation, entity.position);
   client.sendAcquire(version, entity.id, { position, orientation });
+  return 'held';
 }
 
 /** The gaze target when it can be picked up, else null. */
@@ -391,6 +728,30 @@ function frame(xrFrame: XRFrame, time: number): void {
   if (head) calibrationNow = alignmentFromPose(head.position, head.orientation);
   const alignment = aligned();
 
+  const palm = palmGate.update(sample.inputs.some(input => input.pose === 'open-palm') ? 'open-palm' : 'none', time);
+  if (palm) {
+    paused = !paused;
+    if (paused) release();
+    room?.setCalm(paused);
+    gesture(paused ? 'Paused · calm view (open palm again to come back)' : 'Back in the room', time);
+  }
+  // A fist held up mutes and unmutes. Not in the pause, and not by a hand that pinches, carries
+  // an object or the room, or takes a piece from the catalogue.
+  const fist = !paused && voice.on && fistHeldUp(sample.inputs.map(input => ({
+    pose: input.pose, wrist: input.wrist,
+    busy: input.holding || input.source === holder || input.source === carrier || input.source === taking?.source,
+  })), head?.position ?? null);
+  if (fistGate.update(fist ? 'fist' : 'none', time)) toggleMute('fist', time);
+
+  // Two pinches holding nothing scale the room, and take hold of nothing while they do (#180).
+  // First, so the gaze and every hand below reach into the room as it is drawn this frame.
+  // The dollhouse is drawn from the alignment: without one, back to life size, carried or not.
+  if (!alignment) lifeSize();
+  const pinches = paused ? [] : sample.inputs
+    .filter(input => input.holding && input.source !== holder && input.source !== taking?.source)
+    .flatMap(input => input.pinchAt ? [input.pinchAt] : []);
+  room?.setDollhouse(scaling.update(pinches, alignment !== null && !holder && !ownHold()));
+
   // Gestures from the head and hands.
   const looking = lookedAt();
   const rest = dwell.update(looking, time);
@@ -399,18 +760,13 @@ function frame(xrFrame: XRFrame, time: number): void {
     const answer = nods.update(head.orientation, time);
     if (answer) gesture(answer === 'yes' ? 'Yes (nod)' : 'No (shake)', time);
   }
-  const palm = palmGate.update(sample.inputs.some(input => input.pose === 'open-palm') ? 'open-palm' : 'none', time);
-  if (palm) {
-    paused = !paused;
-    if (paused) release();
-    room?.setCalm(paused);
-    gesture(paused ? 'Paused · calm view (open palm again to come back)' : 'Back in the room', time);
-  }
-  // A fist held up mutes and unmutes. Not in the pause, and not by a hand that pinches or carries.
-  const fist = !paused && voice.on && fistHeldUp(sample.inputs.map(input => ({
-    pose: input.pose, wrist: input.wrist, busy: input.holding || input.source === holder,
-  })), head?.position ?? null);
-  if (fistGate.update(fist ? 'fist' : 'none', time)) toggleMute('fist', time);
+
+  // While the room is small, the catalogue floats above the left hand (#184).
+  const paletteInput = sample.inputs.find(input => input.source.handedness === 'left');
+  const paletteAt = paletteInput?.grip?.position ?? paletteInput?.pinchAt ?? null;
+  const slots = alignment && scaling.view.scale < 1 && !paused && !scaling.scaling && head && paletteAt &&
+    catalogueItems.length > 0 ? paletteSlots(paletteAt, yawOf(head.orientation), catalogueItems.length) : null;
+  room?.showPalette(catalogueItems, slots);
 
   // Holding: a press of the grip or a pinch takes hold; letting go puts the object down.
   for (const input of sample.inputs) {
@@ -421,20 +777,83 @@ function frame(xrFrame: XRFrame, time: number): void {
     wasMuting.set(input.source, input.mute);
     const before = wasHolding.get(input.source) ?? false;
     wasHolding.set(input.source, input.holding);
+    // A pinch on the palette takes that piece into the hand at once (#184).
+    if (input.holding && !before && !holder && !taking && slots && input.pinchAt &&
+      input.source !== paletteInput?.source) {
+      const index = slotAt(slots, input.pinchAt);
+      if (index !== null) {
+        taking = { item: catalogueItems[index], source: input.source, last: null };
+        pressedAt.delete(input.source);
+        continue;
+      }
+    }
+    // Let go, the piece taken is placed at the room point under the fingertip (#184).
+    if (taking?.source === input.source && !input.holding) {
+      // Paused, the piece is put away rather than placed.
+      if (paused) taking = null;
+      else placeTaken();
+      continue;
+    }
+    // A press while something is held, while scaling or while paused takes hold of nothing.
+    if (input.holding && !before && !holder) pressedAt.set(input.source, time);
+    if (!input.holding || holder || scaling.scaling || paused) pressedAt.delete(input.source);
     if (paused) continue;
-    if (input.holding && !before && !holder) takeHold(input, looking);
+    // Lined up, a press waits a moment for the other hand, so two pinches can scale the room
+    // instead of the first one taking hold. Before that, a pinch lines the room up at once.
+    const since = pressedAt.get(input.source);
+    if (since !== undefined && (!alignment || time - since >= PAIR_MS)) {
+      pressedAt.delete(input.source);
+      // A press on nothing in a small room takes hold of the dollhouse itself (#182).
+      // Only a real grip turns the dollhouse: without one, the head's turn would.
+      const grip = input.grip;
+      if (takeHold(input, looking) === 'nothing' && grip && carry.begin(grip, scaling.view)) {
+        carrier = input.source;
+      }
+    }
+    if (carrier === input.source && !input.holding) {
+      carry.end();
+      carrier = null;
+    }
+    // Opening the hand throws what it held: in the dollhouse as far as the toss looks, and a
+    // slow drift only puts it down (#184).
     if (!input.holding && before && holder === input.source) release(true);
   }
+  // The carried dollhouse follows its hand; two pinches scaling it, or the hand gone, end that.
+  const carrierInput = sample.inputs.find(input => input.source === carrier);
+  const carryGrip = carrierInput?.grip ?? null;
+  if (carrier && (!carryGrip || scaling.scaling || paused)) {
+    carry.end();
+    carrier = null;
+  } else if (carryGrip) {
+    scaling.view = carry.update(carryGrip);
+    room?.setDollhouse(scaling.view);
+  }
+  const takingInput = taking ? sample.inputs.find(input => input.source === taking?.source) : undefined;
+  if (taking && (!takingInput || paused || scaling.view.scale >= 1)) {
+    taking = null;
+  } else if (taking && takingInput?.pinchAt && takingInput.grip) {
+    taking.last = { position: takingInput.pinchAt, orientation: takingInput.grip.orientation };
+  }
+  room?.showHeld(
+    taking?.item ?? null,
+    taking?.last ? { position: taking.last.position, yaw: yawOf(taking.last.orientation) } : null,
+    scaling.view.scale,
+  );
   const mine = ownHold();
   const holding = sample.inputs.find(input => input.source === holder);
   if (holder && !holding) release();
   const grip = holding && gripOf(holding);
   if (mine && grip && grabOffset && alignment) {
-    const position = roomPoint(alignment, grip.position);
-    const orientation = roomOrientation(alignment, grip.orientation);
+    // Steadied in a small room, then in room metres (#180, #184).
+    const steady = smoother.smooth(grip.position, time, scaling.view.scale);
+    const position = inRoom(alignment, steady);
+    const orientation = turnInRoom(alignment, grip.orientation);
     const carried = grabbedPosition(position, orientation, grabOffset);
     room?.predict(mine.entity, carried);
-    swing.add(carried, performance.now());
+    // A throw is the held point's own motion in room metres, wrist flick included, measured
+    // without the smoothing's lag; its regression over 100 ms steadies it instead.
+    const unsteadied = inRoom(alignment, grip.position);
+    swing.add(grabbedPosition(unsteadied, orientation, grabOffset), performance.now());
     lastGripPose = { position, orientation };
     if (time - lastGrip >= GRIP_MS && client.sendGrip(mine.id, lastGripPose)) lastGrip = time;
   }
@@ -460,9 +879,45 @@ function frame(xrFrame: XRFrame, time: number): void {
   const topic = rest.progress >= 1 ? rest.target : null;
   room?.showHighlight(mine || paused ? null : aimed ?? topic);
 
+  // The picture of a piece being made rides above the left hand, else the first one (#186).
+  const carrying = sample.inputs.find(input => input.source.handedness === 'left') ?? sample.inputs[0];
+  room?.placeCard(carrying?.pinchAt ?? carrying?.grip?.position ?? null, head?.position ?? null);
+
+  // A hand inside the small room shows on the phone as a giant hand coming down (#185).
+  const reaching = alignment && !paused && scaling.view.scale < 1
+    ? handInDollhouse(scaling.view, alignment, handPoints(sample.inputs), floor()) : null;
+  publishHand(reaching, time);
   publishPresence(time);
   showHud(time, drawn.some(ray => ray.look === 'blocked'));
   if (performance.now() - lastReport >= REPORT_MS) report();
+}
+
+/** Where each hand or controller pinches or grips, in the `local` space. */
+const handPoints = (inputs: readonly InputSample[]): Position[] =>
+  inputs.flatMap(input => input.pinchAt ? [input.pinchAt] : input.grip ? [input.grip.position] : []);
+
+/** The room's floor pieces, worked out once per room version. */
+let floorCache: { version: number | null; pieces: RoomEntity[] } = { version: null, pieces: [] };
+function floor(): RoomEntity[] {
+  const version = state?.room.room_version ?? null;
+  if (floorCache.version !== version) floorCache = { version, pieces: floorPieces(entities()) };
+  return floorCache.pieces;
+}
+
+/** Sends the hand in the dollhouse at most as often as presence, and says once when it leaves. */
+let lastHand = -Infinity;
+let handShown = false;
+function publishHand(reaching: Position | null, time: number): void {
+  if (!connected) return;
+  if (reaching) {
+    // As long as a real hand times how many times smaller the room is drawn.
+    const length = HAND_METRES / scaling.view.scale;
+    if (time - lastHand < PRESENCE_MS || !client.sendDesignerHand(reaching, length)) return;
+    lastHand = time;
+    handShown = true;
+  } else if (handShown && client.sendDesignerHand(null, null)) {
+    handShown = false;
+  }
 }
 
 function publishPresence(time: number): void {
@@ -470,8 +925,11 @@ function publishPresence(time: number): void {
   const alignment = aligned();
   let presence: PresenceInput | null = null;
   if (xrActive && head && alignment) {
-    const forward = roomDirection(alignment, rayForward(head.orientation));
-    presence = { tracking_status: 'tracked', position: roomPoint(alignment, head.position), heading: Math.atan2(-forward.x, -forward.z) };
+    presence = {
+      tracking_status: 'tracked',
+      position: roomPoint(alignment, head.position),
+      heading: yawOf(roomOrientation(alignment, head.orientation)),
+    };
   }
   if (!presence) {
     if (presenceSent) presenceSent = !client.sendPresence({ tracking_status: 'inactive', position: null, heading: null });
@@ -486,6 +944,9 @@ function showHud(time: number, blocked: boolean): void {
   const held = state?.manipulation ?? null;
   if (gestureLine && time > gestureLine.until) gestureLine = null;
   const text = pauseNotice
+    ?? (scaling.scaling ? `Room at ${scaleLabel(scaling.view.scale)} · let go to keep this size` : null)
+    ?? (carrier ? 'Carrying the room · let go to leave it here' : null)
+    ?? (taking ? `${taking.item.name} · let go over the dollhouse to place it` : null)
     ?? (blocked ? BLOCKED : null)
     ?? (held?.owner === 'mobile_master' ? `Phone is holding ${label(held.entity)}` : null)
     ?? (held?.owner === 'vr_solver' ? `Holding ${label(held.entity)} · let go to put it down` : null)
@@ -547,6 +1008,8 @@ async function start(): Promise<void> {
   });
   renderer.xr.addEventListener('sessionend', () => {
     xrActive = false;
+    // Out of VR the hand is no longer in the dollhouse (#185).
+    if (handShown && client.sendDesignerHand(null, null)) handShown = false;
     pinching.clear();
     pause('ended');
     room?.setPresenting(false);

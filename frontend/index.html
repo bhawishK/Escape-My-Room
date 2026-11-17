@@ -59,6 +59,16 @@
                 <li><strong>Gaze cursor</strong> points at objects with your eyes or head through the front camera, after a short calibration.</li>
                 <li><strong>Measure height</strong> measures once how high the phone is, from the back camera. It downloads 76 MB the first time.</li>
               </ul>
+              <form id="photo-piece" class="photo-piece">
+                <label for="photo-piece-file">Make a piece from a photo</label>
+                <input id="photo-piece-file" name="image" type="file" accept="image/jpeg,image/png">
+                <input id="photo-piece-description" name="description" type="text" maxlength="200" placeholder="What is it? For example: an armchair" autocomplete="off" aria-label="What the piece is">
+                <div class="button-row">
+                  <button id="photo-piece-make" type="submit">Make it</button>
+                  <button id="photo-piece-cancel" class="secondary" type="button" hidden>Stop</button>
+                </div>
+                <p id="photo-piece-status" class="hint" data-testid="photo-piece-status" role="status">The designer can place it once it's made.</p>
+              </form>
             </div>
             <div class="button-row">
               <button id="voice-toggle" class="secondary" disabled>Start voice</button>
@@ -118,6 +128,7 @@
         <button id="walk-length" class="secondary" hidden>Step 0.6 m</button>
         <button id="hud-voice" class="secondary" disabled>Start voice</button>
         <button id="hud-mute" class="secondary" hidden>Mute</button>
+        <button id="hud-remove" class="secondary" data-testid="hud-remove" hidden>Take it away</button>
         <button id="gaze-toggle">Gaze cursor</button>
         <button id="depth-toggle">Measure height</button>
         <button id="depth-default" class="secondary" hidden>Default height</button>

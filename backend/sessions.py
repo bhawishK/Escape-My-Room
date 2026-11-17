@@ -3,6 +3,7 @@
 import asyncio
 import math
 import time
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -10,6 +11,13 @@ from fastapi import WebSocket
 
 from backend.alignment import Alignment
 from backend.delivery import Outbox
+from backend.furniture import (
+    CatalogueItem,
+    free_spot,
+    furniture_entity,
+    on_floor,
+    overlapping,
+)
 from backend.grab import grab_offset, grabbed_point, normalize
 from backend.physics import PhysicsWorker
 from backend.prepared_room import (
@@ -36,6 +44,9 @@ from backend.protocol import (
 
 # A tracked participant who stops sending is marked stale after this long. The last place stays.
 PRESENCE_STALE_AFTER = 1.5
+
+# A room holds at most this many placed pieces (#181), so a stuck client can't fill it without end.
+MAX_FURNITURE = 24
 
 # A carried object sits where the screen's centre meets the floor, no nearer or further than this.
 CARRY_NEAREST = 0.3
@@ -89,6 +100,10 @@ class PrototypeRoom:
     # The one hold in progress, shared with both devices; its id counts up across holds.
     manipulation: Manipulation | None = None
     manipulation_count: int = 0
+    # Placed furniture is numbered furniture_1, furniture_2, ... and a number is never reused.
+    furniture_count: int = 0
+    # Counts pieces added to the catalogue, so pages reload it when one is made (#187).
+    catalogue_version: int = 0
     alignment: dict[Role, Alignment] = field(
         default_factory=lambda: {
             "mobile_master": Alignment(),
@@ -119,7 +134,8 @@ class PrototypeRoom:
     voice_sessions: dict[Role, int] = field(
         default_factory=lambda: {"mobile_master": 0, "vr_solver": 0}
     )
-    physics_tasks: set[asyncio.Task[None]] = field(
+    # Work started from callbacks, held until it has run: physics news, catalogue news.
+    background_tasks: set[asyncio.Task[None]] = field(
         default_factory=lambda: set[asyncio.Task[None]]()
     )
 
@@ -128,6 +144,7 @@ class PrototypeRoom:
         return {
             "revision": self.revision,
             "mobile_connected": "mobile_master" in self.sockets,
+            "catalogue_version": self.catalogue_version,
             "vr_connected": "vr_solver" in self.sockets,
             # Recorded with motion measurements, so each is read against its network conditions.
             "delivery": {"simulated_delay_ms": round(self.delivery_delay * 1000)},
@@ -194,6 +211,60 @@ class PrototypeRoom:
                 self.revision += 1
                 return "ok"
         return "unknown"
+
+    def add_furniture(
+        self, room_version: int, item: CatalogueItem | None, position: Position, yaw: float
+    ) -> str:
+        """Place a catalogue piece (#181). It starts no lower than the floor, and physics drops
+        it there from higher up."""
+        if self.load_error is not None or self.room_version is None:
+            return "unavailable"
+        if room_version != self.room_version:
+            return "mismatch"
+        if item is None:
+            return "unknown_item"
+        if sum(1 for entity in self.entities if entity.furniture) >= MAX_FURNITURE:
+            return "too_many"
+        start = on_floor(self.entities, position, item.size, yaw)
+        if start is None:
+            return "outside"
+        entity = furniture_entity(f"furniture_{self.furniture_count + 1}", item, start, yaw)
+        # Placed on another piece, it goes beside it instead of being shoved out by physics.
+        spot = free_spot(entity, start, self.entities)
+        if spot is None:
+            return "no_room"
+        self.furniture_count += 1
+        entity.position = spot
+        self.entities.append(entity)
+        if self.physics is not None:
+            self.physics.add(entity)
+        self.revision += 1
+        return "ok"
+
+    def remove_furniture(self, role: Role, room_version: int, entity_id: str) -> str:
+        """Take a placed piece away (#183): from the room, the phone's selection and physics. A
+        piece the other person holds stays; one this person holds is let go of and taken."""
+        if self.load_error is not None or self.room_version is None:
+            return "unavailable"
+        if room_version != self.room_version:
+            return "mismatch"
+        entity = next((entity for entity in self.entities if entity.id == entity_id), None)
+        if entity is None:
+            return "unknown"
+        if not entity.furniture:
+            return "not_furniture"
+        held = self.manipulation
+        if held is not None and held.entity == entity_id:
+            if held.owner != role:
+                return "controlled_by_other"
+            self.manipulation = None
+        if self.selection == entity_id:
+            self.selection = None
+        self.entities.remove(entity)
+        if self.physics is not None:
+            self.physics.remove(entity_id)
+        self.revision += 1
+        return "ok"
 
     def accept_alignment(self, role: Role, yaw: float, origin: Position) -> str:
         if self.load_error is not None or self.room_version is None:
@@ -434,18 +505,20 @@ class PrototypeRoom:
         seen = self.presence_seen[role]
         self.presence_timers[role] = loop.call_later(delay, self._presence_due, role, seen)
 
+    def track(self, work: Coroutine[Any, Any, None]) -> None:
+        """Run `work` on the event loop, held until it has run: the loop keeps only a weak
+        reference to a task."""
+        task = asyncio.get_running_loop().create_task(work)
+        self.background_tasks.add(task)
+        task.add_done_callback(self.background_tasks.discard)
+
     def physics_changed(self) -> None:
         """The physics status changed: tell both devices, after anything in progress."""
-        task = asyncio.get_running_loop().create_task(self._publish_physics())
-        # The loop keeps only a weak reference to a task; hold it until it has run.
-        self.physics_tasks.add(task)
-        task.add_done_callback(self.physics_tasks.discard)
+        self.track(self._publish_physics())
 
     def physics_moved(self, poses: list[dict[str, Any]]) -> None:
         """Physics moved some objects, or they came to rest: place them and tell both devices."""
-        task = asyncio.get_running_loop().create_task(self._apply_physics(poses))
-        self.physics_tasks.add(task)
-        task.add_done_callback(self.physics_tasks.discard)
+        self.track(self._apply_physics(poses))
 
     async def _apply_physics(self, poses: list[dict[str, Any]]) -> None:
         async with self.lock:
@@ -556,6 +629,12 @@ class PrototypeRoom:
         entity = self.entity(held.entity)
         if held.owner == "mobile_master":
             entity.position = Position(x=entity.position.x, y=held.rest_y, z=entity.position.z)
+        # Let go inside another piece, it is put beside it rather than shoved out by physics (#183).
+        if overlapping(entity, entity.position, self.entities):
+            spot = free_spot(entity, entity.position, self.entities)
+            if spot is not None:
+                entity.position = spot
+        if held.owner == "mobile_master":
             if self.physics is not None:
                 self.physics.place(entity)
         elif self.physics is not None:

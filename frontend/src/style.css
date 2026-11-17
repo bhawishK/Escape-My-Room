@@ -306,3 +306,8 @@ textarea::placeholder { color: var(--label-2); }
   align-content: center;
   gap: 8px;
 }
+
+/* A piece of furniture from a photo (#187). */
+.photo-piece { display: grid; gap: 8px; margin-top: 16px; }
+.photo-piece label { font-weight: 600; }
+.photo-piece input[type="text"] { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--separator); font: inherit; }
