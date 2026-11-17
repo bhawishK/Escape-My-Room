@@ -20,8 +20,8 @@ import { SessionClient } from '../session';
 import { VoiceCall, voiceLine, voiceNote } from '../voice';
 import {
   DollhouseCarry, DollhouseScaling, GripSmoother, HAND_METRES, dollhousePlacement, fromDollhouse, handInDollhouse,
-  paletteSlots,
-  slotAt, throwInRoom, yawOf, orientationFromDollhouse, scaleLabel, velocityFromDollhouse,
+  paletteChoice, wristPalette,
+  throwInRoom, yawOf, orientationFromDollhouse, scaleLabel, velocityFromDollhouse,
 } from './dollhouse';
 import { Dictation } from './dictation';
 import { Dwell, FIST_COOLDOWN_MS, FIST_HOLD_MS, GestureGate, HeadNods, fistHeldUp, unmuteHint } from './gestures';
@@ -95,9 +95,6 @@ const pointingSince = new WeakMap<XRInputSource, number>();
 let pauseNotice: string | null = null;
 /** What a gesture last said in the headset, and until when. */
 let gestureLine: { text: string; until: number } | null = null;
-/** The open palm's pause: the room fades, and nothing is held or aimed until it ends. */
-let paused = false;
-const palmGate = new GestureGate<'open-palm'>({ holdMs: 800, cooldownMs: 1500 });
 /** A fist held up mutes and unmutes the voice call (#175). */
 const fistGate = new GestureGate<'fist'>({ holdMs: FIST_HOLD_MS, cooldownMs: FIST_COOLDOWN_MS });
 /** Two pinches shrink the room into a dollhouse and grow it back (#180). Only this headset's view. */
@@ -728,16 +725,9 @@ function frame(xrFrame: XRFrame, time: number): void {
   if (head) calibrationNow = alignmentFromPose(head.position, head.orientation);
   const alignment = aligned();
 
-  const palm = palmGate.update(sample.inputs.some(input => input.pose === 'open-palm') ? 'open-palm' : 'none', time);
-  if (palm) {
-    paused = !paused;
-    if (paused) release();
-    room?.setCalm(paused);
-    gesture(paused ? 'Paused · calm view (open palm again to come back)' : 'Back in the room', time);
-  }
-  // A fist held up mutes and unmutes. Not in the pause, and not by a hand that pinches, carries
-  // an object or the room, or takes a piece from the catalogue.
-  const fist = !paused && voice.on && fistHeldUp(sample.inputs.map(input => ({
+  // A fist held up mutes and unmutes. Not by a hand that pinches, carries an object or the room,
+  // or takes a piece from the catalogue.
+  const fist = voice.on && fistHeldUp(sample.inputs.map(input => ({
     pose: input.pose, wrist: input.wrist,
     busy: input.holding || input.source === holder || input.source === carrier || input.source === taking?.source,
   })), head?.position ?? null);
@@ -747,7 +737,7 @@ function frame(xrFrame: XRFrame, time: number): void {
   // First, so the gaze and every hand below reach into the room as it is drawn this frame.
   // The dollhouse is drawn from the alignment: without one, back to life size, carried or not.
   if (!alignment) lifeSize();
-  const pinches = paused ? [] : sample.inputs
+  const pinches = sample.inputs
     .filter(input => input.holding && input.source !== holder && input.source !== taking?.source)
     .flatMap(input => input.pinchAt ? [input.pinchAt] : []);
   room?.setDollhouse(scaling.update(pinches, alignment !== null && !holder && !ownHold()));
@@ -761,12 +751,13 @@ function frame(xrFrame: XRFrame, time: number): void {
     if (answer) gesture(answer === 'yes' ? 'Yes (nod)' : 'No (shake)', time);
   }
 
-  // While the room is small, the catalogue floats above the left hand (#184).
+  // While the room is small, the catalogue floats above the left hand (#184), ending in the
+  // Exit button (#200).
   const paletteInput = sample.inputs.find(input => input.source.handedness === 'left');
   const paletteAt = paletteInput?.grip?.position ?? paletteInput?.pinchAt ?? null;
-  const slots = alignment && scaling.view.scale < 1 && !paused && !scaling.scaling && head && paletteAt &&
-    catalogueItems.length > 0 ? paletteSlots(paletteAt, yawOf(head.orientation), catalogueItems.length) : null;
-  room?.showPalette(catalogueItems, slots);
+  const palette = alignment && scaling.view.scale < 1 && !scaling.scaling && head && paletteAt
+    ? wristPalette(paletteAt, yawOf(head.orientation), catalogueItems.length) : null;
+  room?.showPalette(catalogueItems, palette);
 
   // Holding: a press of the grip or a pinch takes hold; letting go puts the object down.
   for (const input of sample.inputs) {
@@ -777,27 +768,30 @@ function frame(xrFrame: XRFrame, time: number): void {
     wasMuting.set(input.source, input.mute);
     const before = wasHolding.get(input.source) ?? false;
     wasHolding.set(input.source, input.holding);
-    // A pinch on the palette takes that piece into the hand at once (#184).
-    if (input.holding && !before && !holder && !taking && slots && input.pinchAt &&
+    // A pinch on the palette takes that piece into the hand at once (#184), or on Exit leaves VR
+    // (#200).
+    if (input.holding && !before && !holder && !taking && palette && input.pinchAt &&
       input.source !== paletteInput?.source) {
-      const index = slotAt(slots, input.pinchAt);
-      if (index !== null) {
-        taking = { item: catalogueItems[index], source: input.source, last: null };
+      const choice = paletteChoice(palette, input.pinchAt);
+      if (choice === 'exit') {
+        pressedAt.delete(input.source);
+        void world?.session?.end();
+        return;
+      }
+      if (choice !== null) {
+        taking = { item: catalogueItems[choice], source: input.source, last: null };
         pressedAt.delete(input.source);
         continue;
       }
     }
     // Let go, the piece taken is placed at the room point under the fingertip (#184).
     if (taking?.source === input.source && !input.holding) {
-      // Paused, the piece is put away rather than placed.
-      if (paused) taking = null;
-      else placeTaken();
+      placeTaken();
       continue;
     }
-    // A press while something is held, while scaling or while paused takes hold of nothing.
+    // A press while something is held, or while scaling, takes hold of nothing.
     if (input.holding && !before && !holder) pressedAt.set(input.source, time);
-    if (!input.holding || holder || scaling.scaling || paused) pressedAt.delete(input.source);
-    if (paused) continue;
+    if (!input.holding || holder || scaling.scaling) pressedAt.delete(input.source);
     // Lined up, a press waits a moment for the other hand, so two pinches can scale the room
     // instead of the first one taking hold. Before that, a pinch lines the room up at once.
     const since = pressedAt.get(input.source);
@@ -821,7 +815,7 @@ function frame(xrFrame: XRFrame, time: number): void {
   // The carried dollhouse follows its hand; two pinches scaling it, or the hand gone, end that.
   const carrierInput = sample.inputs.find(input => input.source === carrier);
   const carryGrip = carrierInput?.grip ?? null;
-  if (carrier && (!carryGrip || scaling.scaling || paused)) {
+  if (carrier && (!carryGrip || scaling.scaling)) {
     carry.end();
     carrier = null;
   } else if (carryGrip) {
@@ -829,7 +823,7 @@ function frame(xrFrame: XRFrame, time: number): void {
     room?.setDollhouse(scaling.view);
   }
   const takingInput = taking ? sample.inputs.find(input => input.source === taking?.source) : undefined;
-  if (taking && (!takingInput || paused || scaling.view.scale >= 1)) {
+  if (taking && (!takingInput || scaling.view.scale >= 1)) {
     taking = null;
   } else if (taking && takingInput?.pinchAt && takingInput.grip) {
     taking.last = { position: takingInput.pinchAt, orientation: takingInput.grip.orientation };
@@ -858,10 +852,10 @@ function frame(xrFrame: XRFrame, time: number): void {
     if (time - lastGrip >= GRIP_MS && client.sendGrip(mine.id, lastGripPose)) lastGrip = time;
   }
 
-  // Rays: each controller's, a pinching hand's, and a pointing finger's; none while paused.
+  // Rays: each controller's, a pinching hand's, and a pointing finger's.
   const drawn: DrawnRay[] = [];
   let aimed: string | null = null;
-  for (const input of paused ? [] : sample.inputs) {
+  for (const input of sample.inputs) {
     if (input.fingerRay) {
       if (!pointingSince.has(input.source)) pointingSince.set(input.source, time);
     } else {
@@ -877,14 +871,14 @@ function frame(xrFrame: XRFrame, time: number): void {
   room?.showRays(drawn);
   // What a ray is on, else the object the gaze has rested on long enough to start a topic.
   const topic = rest.progress >= 1 ? rest.target : null;
-  room?.showHighlight(mine || paused ? null : aimed ?? topic);
+  room?.showHighlight(mine ? null : aimed ?? topic);
 
   // The picture of a piece being made rides above the left hand, else the first one (#186).
   const carrying = sample.inputs.find(input => input.source.handedness === 'left') ?? sample.inputs[0];
   room?.placeCard(carrying?.pinchAt ?? carrying?.grip?.position ?? null, head?.position ?? null);
 
   // A hand inside the small room shows on the phone as a giant hand coming down (#185).
-  const reaching = alignment && !paused && scaling.view.scale < 1
+  const reaching = alignment && scaling.view.scale < 1
     ? handInDollhouse(scaling.view, alignment, handPoints(sample.inputs), floor()) : null;
   publishHand(reaching, time);
   publishPresence(time);

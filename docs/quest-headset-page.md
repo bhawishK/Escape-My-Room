@@ -32,7 +32,7 @@ It joins the same session as the phone's page, as the headset (`vr_solver`), wit
 | Move an object | Aim at it, squeeze the grip, let go to put it down | Aim the hand ray and pinch, or **look at it and pinch** |
 | Throw an object | Let go of the grip while swinging | Open the pinch while swinging: it flies at your hand's speed (capped at 8 m/s) |
 | Show something | — | **Point** with the index finger: its ray outlines what it is on |
-| Pause in a calm view | — | Hold an **open palm** for 0.8 s: the room fades, a held object is put down, and nothing is aimed or taken; again to come back |
+| Leave VR | — | Pinch **Exit VR** at the end of the wrist catalogue, while the room is a dollhouse (#200) |
 | Start a topic | Look at an object for 1.5 s | The same |
 | Yes / no | Nod twice / shake twice | The same |
 | Mute or unmute the voice call | B or Y | Hold up a **fist** for 0.8 s; again to unmute (#175) |
@@ -40,14 +40,14 @@ It joins the same session as the phone's page, as the headset (`vr_solver`), wit
 ## How the gestures work
 
 - **Pinch** is the session's own: the hand's `selectstart` and `selectend`. They settle a wavering pinch better than a distance threshold.
-- **Point** and **open palm** come from the joints; a point draws its ray once held 0.2 s. A finger is straight when its tip is more than 1.4 times as far from the wrist as its knuckle. Pointing is the index straight with the others curled; an open palm is all four straight. A thumb tip within 2 cm of the index tip is a pinch, and wins over both.
-- The **open palm** goes through a gate: it fires once it has been held 0.8 s, and again only after it is let go and 1.5 s have passed.
+- **Point** comes from the joints; a point draws its ray once held 0.2 s. A finger is straight when its tip is more than 1.4 times as far from the wrist as its knuckle. Pointing is the index straight with the others curled. A thumb tip within 2 cm of the index tip is a pinch, and wins over it.
+- An **open palm** does nothing. It used to pause in a calm view, but holding the hand open for the wrist catalogue, and before and after every pinch, set it off; it was removed in #200.
 - The **fist** (#175) mutes and unmutes the [voice call](voice.md):
   - **A fist** is all four fingers curled. A finger the frame did not see is not counted as curled, and a pinch wins over a fist.
   - **Held up:** the wrist no more than 0.45 m below the head, about chest height. A relaxed hand at the side is curled too, and is well below that. The limit follows the head, so it works sitting down.
   - **A free hand:** one that is pinching or carrying an object is ignored.
-  - **Held:** it goes through the same gate as the open palm: 0.8 s to fire, and again only after it is let go and 1.5 s have passed.
-  - **Ignored** while voice is off and during the open-palm pause.
+  - **Held:** it goes through a gate: 0.8 s to fire, and again only after it is let go and 1.5 s have passed.
+  - **Ignored** while voice is off.
   - **In the headset:** "Microphone muted (fist)" for two seconds, then "You are muted · hold up a fist to unmute", which stays. With controllers it says "press B or Y". Unmuting says "Microphone on".
 - **Nods and shakes**: two turns back of the head's tilt (yes) or turn (no), of at least 8° each, within 1.2 s. One look down, or a slow look around, is neither; facing backwards, the turn does not wrap at 180°. After one, two new turns are needed.
 - **Look to start**: the head's ray resting 1.5 s on one object, furniture included but not the floor. The object is outlined from then until the gaze leaves it.
@@ -66,7 +66,7 @@ Issue #178. The fist was built and tested on a laptop with made-up joint positio
 | Walking about with the arms swinging does not mute | |
 | Reaching for an object and pinching it does not mute | |
 | Throwing an object does not mute | |
-| The open palm (pause) and pointing do not mute, and a fist does not pause | |
+| An open palm and pointing do not mute | |
 | A real fist is read as a fist, not as a pinch (the thumb resting on the curled index finger) | |
 | The line in the headset is readable, and says "hold up a fist" with hands and "press B or Y" with controllers | |
 
@@ -77,7 +77,7 @@ The values to tune, in `frontend/src/quest/gestures.ts`. Write down each value t
 | `FIST_HOLD_MS` | 800 | Fires by accident: raise it. Feels slow: lower it. |
 | `FIST_COOLDOWN_MS` | 1500 | Mutes and straight away unmutes: raise it |
 | `RAISED_BELOW_HEAD_METRES` | 0.45 | Fires with the hands low: lower it. Needs the fist held uncomfortably high: raise it. |
-| `EXTENDED_RATIO` | 1.4 | A loose fist is not seen as one: raise it a little. It is shared with pointing and the open palm, so check those again. |
+| `EXTENDED_RATIO` | 1.4 | A loose fist is not seen as one: raise it a little. It is shared with pointing, so check that again. |
 | `PINCH_METRES` | 0.02 | A fist is read as a pinch: this is why. Lowering it also makes pinching to grab harder, so try the thumb outside the fist first. |
 
 ## Still to do

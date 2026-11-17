@@ -5,7 +5,9 @@ import { STANDING_EYE_HEIGHT } from '../alignment';
 import type { AlignmentState, CatalogueItem, Position, PresenceState, RoomEntity, SessionState } from '../protocol';
 import { RAY_REACH_METERS } from '../grab';
 import { LateEntities, ModelCopies, applyPlacement, placeEntities, roomOwn } from '../room';
-import { FIGURE_METRES, LIFE_SIZE, residentFigure, scaleLabel, type DollhouseView } from './dollhouse';
+import {
+  FIGURE_METRES, LIFE_SIZE, residentFigure, scaleLabel, type DollhouseView, type WristPalette,
+} from './dollhouse';
 
 /** A ray drawn from a controller, a hand or a fingertip, in the `local` reference space. */
 export interface DrawnRay {
@@ -24,8 +26,8 @@ const CARD_ABOVE_HAND = 0.1;
 const PREVIEW_METRES = 0.05;
 const LABEL_WIDTH = 0.18;
 const LABEL_ABOVE = 0.03;
-/** The calm view (#156): the room fades to this while an open palm pauses the visit. */
-const CALM_COLOUR = new THREE.Color('#203040');
+/** The palette's Exit button (#200): this wide, and a third as tall. */
+const EXIT_METRES = 0.06;
 const ROOM_BACKGROUND = new THREE.Color('#f5f5f7');
 
 /**
@@ -55,6 +57,8 @@ export class QuestRoom {
   /** The catalogue palette above the hand, and the piece taken from it (#184). */
   private readonly palette = new THREE.Group();
   private readonly previews = new Map<string, THREE.Object3D>();
+  /** The Exit button at the end of the palette's row (#200). */
+  private readonly exitButton = exitSprite();
   private held: { id: string; root: THREE.Group; label: THREE.Sprite; height: number } | null = null;
   /** The phone user's latest presence, and the dollhouse view the figure is drawn in (#182). */
   private presence: PresenceState | undefined = undefined;
@@ -72,7 +76,6 @@ export class QuestRoom {
   /** An object the phone holds glides to each placement Python sends, over about this long. */
   private readonly glideMs = 120;
   private gliding: { id: string; target: THREE.Vector3 } | null = null;
-  private calm = false;
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -99,6 +102,7 @@ export class QuestRoom {
     scene.add(this.card);
     this.palette.name = 'palette';
     this.palette.visible = false;
+    this.palette.add(this.exitButton);
     scene.add(this.palette);
     this.container.dataset.scale = scaleLabel(this.view.scale);
     this.align(this.alignment);
@@ -188,13 +192,15 @@ export class QuestRoom {
   }
 
   /**
-   * The catalogue as small pieces at `slots` above the hand while the room is small (#184);
-   * null slots hide it. Each preview fits a 5 cm cube.
+   * The catalogue as small pieces above the hand while the room is small (#184), then the Exit
+   * button (#200); null hides it. Each preview fits a 5 cm cube.
    */
-  showPalette(items: readonly CatalogueItem[], slots: readonly Position[] | null): void {
-    this.palette.visible = slots !== null;
-    this.container.dataset.palette = slots ? String(items.length) : '';
-    if (!slots) return;
+  showPalette(items: readonly CatalogueItem[], palette: WristPalette | null): void {
+    this.palette.visible = palette !== null;
+    this.container.dataset.palette = palette ? String(items.length) : '';
+    if (!palette) return;
+    const slots = palette.pieces;
+    this.exitButton.position.set(palette.exit.x, palette.exit.y, palette.exit.z);
     // A piece no longer in the catalogue leaves the palette.
     const listed = new Set(items.map(item => item.id));
     for (const [id, preview] of this.previews) {
@@ -283,14 +289,6 @@ export class QuestRoom {
     this.container.dataset.scale = scaleLabel(view.scale);
     this.view = view;
     this.drawPhone();
-  }
-
-  /** The calm view: the room fades away until it is called again with false. */
-  setCalm(calm: boolean): void {
-    this.calm = calm;
-    if (this.roomGroup) this.roomGroup.visible = !calm;
-    this.scene.background = calm ? CALM_COLOUR : ROOM_BACKGROUND;
-    this.container.dataset.calm = String(calm);
   }
 
   /** Each ray, in the `local` reference space. */
@@ -441,7 +439,6 @@ export class QuestRoom {
         if (root && entity.kind === 'static') root.visible = false;
       }
     }
-    group.visible = !this.calm;
     this.anchor.add(group);
     this.roomGroup = group;
     this.splat = splat;
@@ -509,6 +506,32 @@ function person(colour: number): THREE.Group {
   group.add(body, head, nose);
   group.visible = false;
   return group;
+}
+
+/** The palette's Exit button (#200): a red label that reads as leaving VR. */
+function exitSprite(): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  canvas.width = 384;
+  canvas.height = 128;
+  const context = canvas.getContext('2d');
+  if (context) {
+    context.fillStyle = '#c62f2f';
+    context.beginPath();
+    context.roundRect(4, 4, canvas.width - 8, canvas.height - 8, 56);
+    context.fill();
+    context.fillStyle = '#ffffff';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.font = '700 64px sans-serif';
+    context.fillText('Exit VR', canvas.width / 2, canvas.height / 2);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
+  sprite.name = 'palette:exit';
+  sprite.scale.set(EXIT_METRES, EXIT_METRES / 3, 1);
+  sprite.renderOrder = 10;
+  return sprite;
 }
 
 /** A line of text as a sprite, one unit wide and a sixth tall before scaling. */
