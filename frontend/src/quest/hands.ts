@@ -28,6 +28,8 @@ export interface InputSample {
   /** A hand's pose and, while it points, the ray along its index finger. */
   pose: HandPose;
   fingerRay: Ray | null;
+  /** A hand's wrist, to tell a fist held up from a hand at rest (#177). */
+  wrist: Position | null;
 }
 
 export interface FrameSample {
@@ -82,7 +84,7 @@ export function readFrame(frame: XRFrame, reference: XRReferenceSpace, pinching:
       grip: grip && !grip.emulatedPosition ? poseOf(grip.transform) : null,
       ray: rayOf(frame, source.targetRaySpace, reference),
       pinchAt: null,
-      pose: 'none', fingerRay: null,
+      pose: 'none', fingerRay: null, wrist: null,
     };
     if (source.hand) {
       const joints: HandJoints = {};
@@ -92,6 +94,7 @@ export function readFrame(frame: XRFrame, reference: XRReferenceSpace, pinching:
         if (joint) joints[name] = poseOf(joint.transform).position;
       }
       sample.pose = handPose(joints);
+      sample.wrist = joints.wrist ?? null;
       sample.pinchAt = pinchPoint(joints);
       sample.holding = pinching.has(source);
       if (sample.pose === 'point') sample.fingerRay = fingerRay(joints);

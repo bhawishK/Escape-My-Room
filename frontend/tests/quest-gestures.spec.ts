@@ -1,5 +1,9 @@
 import { expect, test } from '@playwright/test';
-import { Dwell, GestureGate, HeadNods, handPose, type HandJoints } from '../src/quest/gestures';
+import {
+  Dwell, FIST_COOLDOWN_MS, FIST_HOLD_MS, GestureGate, HeadNods, RAISED_BELOW_HEAD_METRES,
+  fistHeldUp, handPose, raised, unmuteHint, type FistHand, type HandJoints,
+} from '../src/quest/gestures';
+import { voiceNote, type VoiceStatus } from '../src/voice';
 
 // Hand and head gestures on the headset page (#156), from WebXR joint positions in metres.
 
@@ -30,11 +34,54 @@ test('a flat hand with the thumb away is an open palm', () => {
   expect(handPose(hand(FINGERS))).toBe('open-palm');
 });
 
-test('only the index finger straight is pointing; a fist is no pose', () => {
+test('only the index finger straight is pointing', () => {
   expect(handPose(hand(['index']))).toBe('point');
-  expect(handPose(hand([]))).toBe('none');
   // Index and middle together is neither pointing nor an open palm.
   expect(handPose(hand(['index', 'middle']))).toBe('none');
+});
+
+test('all four fingers curled is a fist (#176)', () => {
+  expect(handPose(hand([]))).toBe('fist');
+});
+
+test('a half-closed hand is not a fist', () => {
+  // Any finger still straight, whichever it is.
+  for (const finger of FINGERS) expect(handPose(hand([finger]))).not.toBe('fist');
+  expect(handPose(hand(['middle', 'ring']))).toBe('none');
+  expect(handPose(hand(['ring', 'pinky']))).toBe('none');
+  expect(handPose(hand(FINGERS))).toBe('open-palm');
+});
+
+test('a pinch wins over a fist', () => {
+  // The thumb tip 1 cm from the curled index tip.
+  expect(handPose(hand([], { x: -0.025, y: -0.02, z: -0.05 }))).toBe('pinch');
+});
+
+test('a curled hand with a finger the frame did not see is not a fist', () => {
+  for (const joint of ['pinky-finger-tip', 'index-finger-phalanx-proximal', 'wrist'] as const) {
+    const joints = hand([]);
+    delete joints[joint];
+    expect(handPose(joints)).toBe('none');
+  }
+});
+
+test('a hand is held up when its wrist is at chest height or above, not at the side', () => {
+  const head = { x: 0, y: 1.6, z: 0 };
+  const wristAt = (y: number) => ({ x: 0.2, y, z: -0.3 });
+  // In front of the face, at the shoulder, and at the chest.
+  for (const y of [1.7, 1.45, 1.2]) expect(raised(wristAt(y), head)).toBe(true);
+  // Exactly at the limit counts; just under it does not.
+  expect(raised(wristAt(1.6 - RAISED_BELOW_HEAD_METRES), head)).toBe(true);
+  expect(raised(wristAt(1.6 - RAISED_BELOW_HEAD_METRES - 0.01), head)).toBe(false);
+  // Hanging at the side, about 0.8 m below the head.
+  expect(raised(wristAt(0.8), head)).toBe(false);
+  // It follows the head: sitting down lowers the limit with it.
+  expect(raised(wristAt(0.8), { x: 0, y: 1.1, z: 0 })).toBe(true);
+});
+
+test('a hand is not held up when its wrist or the head was not seen', () => {
+  expect(raised(undefined, { x: 0, y: 1.6, z: 0 })).toBe(false);
+  expect(raised({ x: 0, y: 1.6, z: 0 }, null)).toBe(false);
 });
 
 test('the thumb tip on the index tip is a pinch, whatever the other fingers do', () => {
@@ -148,4 +195,71 @@ test('a shake while facing backwards is still no, not a jump all the way round',
   // Turning slowly across 180°, one way only, is neither.
   const across: [number, number][] = Array.from({ length: 20 }, (_, frame) => [170 + frame, 0]);
   expect(watch(new HeadNods(), across).filter(Boolean)).toEqual([]);
+});
+
+// The mute gesture (#175): a fist, held up, held for a moment.
+
+const HEAD = { x: 0, y: 1.6, z: 0 };
+const UP = { x: 0.2, y: 1.4, z: -0.3 };
+const AT_SIDE = { x: 0.25, y: 0.8, z: 0 };
+const fistHand = (changes: Partial<FistHand> = {}): FistHand => ({ pose: 'fist', wrist: UP, busy: false, ...changes });
+
+test('a fist held up by a free hand is the mute gesture', () => {
+  expect(fistHeldUp([fistHand()], HEAD)).toBe(true);
+  // Either hand will do, whatever the other is doing.
+  expect(fistHeldUp([fistHand({ pose: 'open-palm' }), fistHand()], HEAD)).toBe(true);
+});
+
+test('a fist at the side, a busy hand, and other poses are not the mute gesture', () => {
+  expect(fistHeldUp([fistHand({ wrist: AT_SIDE })], HEAD)).toBe(false);
+  // Pinching, or carrying an object.
+  expect(fistHeldUp([fistHand({ busy: true })], HEAD)).toBe(false);
+  for (const pose of ['open-palm', 'point', 'pinch', 'none'] as const) {
+    expect(fistHeldUp([fistHand({ pose })], HEAD)).toBe(false);
+  }
+  // A controller has no wrist, and a lost head gives nothing to measure against.
+  expect(fistHeldUp([fistHand({ wrist: null })], HEAD)).toBe(false);
+  expect(fistHeldUp([fistHand()], null)).toBe(false);
+  expect(fistHeldUp([], HEAD)).toBe(false);
+});
+
+/** Whether the fist gate mutes on each frame, 100 ms apart, for the frames a fist is held up. */
+function fistFrames(gate: GestureGate<'fist'>, held: boolean[], from = 0): boolean[] {
+  return held.map((fist, frame) => gate.update(fist ? 'fist' : 'none', from + frame * 100) !== null);
+}
+
+test('a fist mutes once it has been held 0.8 s, and only once however long it is held', () => {
+  const gate = new GestureGate<'fist'>({ holdMs: FIST_HOLD_MS, cooldownMs: FIST_COOLDOWN_MS });
+  // Frames at 0 to 2000 ms: the ninth, at 800 ms, is the only one that toggles.
+  const fired = fistFrames(gate, Array<boolean>(21).fill(true));
+  expect(fired.indexOf(true)).toBe(8);
+  expect(fired.filter(Boolean)).toHaveLength(1);
+});
+
+test('a fist shorter than the hold, or one that wavers, does not mute', () => {
+  const gate = new GestureGate<'fist'>({ holdMs: FIST_HOLD_MS, cooldownMs: FIST_COOLDOWN_MS });
+  expect(fistFrames(gate, [true, true, true, true, true, false, false])).not.toContain(true);
+  // Broken off for one frame at 500 ms: the hold starts over, and 700 ms more is not enough.
+  expect(fistFrames(gate, [true, true, true, true, true, false, true, true, true, true, true, true, true, false], 2000)).not.toContain(true);
+});
+
+test('a second fist unmutes only after the hand is let go and the cool-down has passed', () => {
+  const gate = new GestureGate<'fist'>({ holdMs: FIST_HOLD_MS, cooldownMs: FIST_COOLDOWN_MS });
+  const held = Array<boolean>(9).fill(true);
+  // Mutes at 800 ms.
+  expect(fistFrames(gate, held).filter(Boolean)).toHaveLength(1);
+  // Let go at 900 ms, and a new fist from 1000 ms: held 0.8 s at 1800 ms, but the cool-down
+  // runs to 2300 ms, so it toggles on the frame at 2300 ms.
+  expect(gate.update('none', 900)).toBeNull();
+  const again = fistFrames(gate, Array<boolean>(16).fill(true), 1000);
+  expect(again.indexOf(true)).toBe(13);
+  expect(again.filter(Boolean)).toHaveLength(1);
+});
+
+test('the line in the headset names the fist with hands, and B or Y with controllers', () => {
+  const muted: VoiceStatus = { phase: 'connected', problem: null, receiving: true, muted: true, peerMuted: false, path: null };
+  expect(voiceNote(muted, 'the phone', unmuteHint('hands'))).toBe('You are muted · hold up a fist to unmute');
+  expect(voiceNote(muted, 'the phone', unmuteHint('controllers'))).toBe('You are muted · press B or Y to unmute');
+  // Before any hand or controller is seen, hands are assumed: the page is moving to them.
+  expect(unmuteHint('none')).toBe('hold up a fist');
 });

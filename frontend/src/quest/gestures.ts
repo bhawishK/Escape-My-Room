@@ -9,7 +9,7 @@ import type { Position, Rotation } from '../protocol';
 /** WebXR hand joints by name, where the frame gave a pose for them. */
 export type HandJoints = Partial<Record<XRHandJoint, Position>>;
 
-export type HandPose = 'pinch' | 'point' | 'open-palm' | 'none';
+export type HandPose = 'pinch' | 'point' | 'open-palm' | 'fist' | 'none';
 
 const FINGERS = ['index-finger', 'middle-finger', 'ring-finger', 'pinky-finger'] as const;
 /**
@@ -41,6 +41,8 @@ export function handPose(joints: HandJoints): HandPose {
   if (straight.every(finger => finger === true)) return 'open-palm';
   const [index, ...others] = straight;
   if (index === true && others.every(finger => finger === false)) return 'point';
+  // All four curled. A finger the frame did not see is not counted as curled.
+  if (straight.every(finger => finger === false)) return 'fist';
   return 'none';
 }
 
@@ -50,6 +52,45 @@ export function pinchPoint(joints: HandJoints): Position | null {
   const index = joints['index-finger-tip'];
   if (!thumb || !index) return null;
   return { x: (thumb.x + index.x) / 2, y: (thumb.y + index.y) / 2, z: (thumb.z + index.z) / 2 };
+}
+
+/**
+ * A hand counts as held up when its wrist is no more than this far below the head, in metres:
+ * about chest height. A relaxed hand at the side is curled like a fist, and is well below it.
+ */
+export const RAISED_BELOW_HEAD_METRES = 0.45;
+
+/**
+ * Whether the hand is held up, from its wrist and the head in the same space, with +y up. Not
+ * known, and so not raised, when either was not seen this frame.
+ */
+export function raised(wrist: Position | undefined, head: Position | null): boolean {
+  return Boolean(wrist && head && wrist.y >= head.y - RAISED_BELOW_HEAD_METRES);
+}
+
+/** A fist mutes once held this long, and again only this long after it last did, in milliseconds. */
+export const FIST_HOLD_MS = 800;
+export const FIST_COOLDOWN_MS = 1500;
+
+/** What the mute gesture needs to know about one hand this frame. */
+export interface FistHand {
+  pose: HandPose;
+  wrist: Position | null;
+  /** Pinching, or carrying an object: a busy hand is not asking to mute. */
+  busy: boolean;
+}
+
+/**
+ * Whether a hand is making the mute gesture this frame (#177): a fist, held up, by a hand that
+ * is not pinching or carrying anything. Holding it for `FIST_HOLD_MS` is what mutes.
+ */
+export function fistHeldUp(hands: readonly FistHand[], head: Position | null): boolean {
+  return hands.some(hand => hand.pose === 'fist' && !hand.busy && raised(hand.wrist ?? undefined, head));
+}
+
+/** How to unmute from inside VR, for the line in the headset: by hand, or on a controller. */
+export function unmuteHint(mode: 'hands' | 'controllers' | 'none'): string {
+  return mode === 'controllers' ? 'press B or Y' : 'hold up a fist';
 }
 
 /**

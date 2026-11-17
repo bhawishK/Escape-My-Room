@@ -24,7 +24,7 @@ import {
   slotAt, throwInRoom, yawOf, orientationFromDollhouse, scaleLabel, velocityFromDollhouse,
 } from './dollhouse';
 import { Dictation } from './dictation';
-import { Dwell, GestureGate, HeadNods } from './gestures';
+import { Dwell, FIST_COOLDOWN_MS, FIST_HOLD_MS, GestureGate, HeadNods, fistHeldUp, unmuteHint } from './gestures';
 import { readFrame, type FrameSample, type InputSample, type Pose, type Ray } from './hands';
 import { Hud } from './hud';
 import { QuestRoom, type DrawnRay } from './room-view';
@@ -89,8 +89,6 @@ const wasMuting = new WeakMap<XRInputSource, boolean>();
 const pressedAt = new WeakMap<XRInputSource, number>();
 /** What the voice call last said in the headset, and until when (#173). */
 let voiceSaid: { text: string; until: number } | null = null;
-/** How to unmute from inside VR, as the headset's line says it. */
-const UNMUTE = 'press B or Y';
 /** Since when each hand has pointed. */
 const pointingSince = new WeakMap<XRInputSource, number>();
 /** Shown in the headset after a loss, a reset or the phone leaving, until the person acts. */
@@ -100,6 +98,8 @@ let gestureLine: { text: string; until: number } | null = null;
 /** The open palm's pause: the room fades, and nothing is held or aimed until it ends. */
 let paused = false;
 const palmGate = new GestureGate<'open-palm'>({ holdMs: 800, cooldownMs: 1500 });
+/** A fist held up mutes and unmutes the voice call (#175). */
+const fistGate = new GestureGate<'fist'>({ holdMs: FIST_HOLD_MS, cooldownMs: FIST_COOLDOWN_MS });
 /** Two pinches shrink the room into a dollhouse and grow it back (#180). Only this headset's view. */
 const scaling = new DollhouseScaling();
 /** One hand holding nothing carries a small room, to move and turn it (#182). */
@@ -171,6 +171,16 @@ function report(): void {
   }, null, 2);
 }
 
+/** Mutes or unmutes from inside VR, where the page's Mute button cannot be reached. */
+function toggleMute(how: 'fist' | 'button', now: number): void {
+  // Not while dictating: the call stays muted until the description is said (#188).
+  if (!voice.on || dictationListening) return;
+  const muted = !voice.status.muted;
+  voice.setMuted(muted);
+  // Muting is followed by the line that stays, saying how to unmute.
+  gesture(muted ? `Microphone muted (${how})` : 'Microphone on', now);
+}
+
 function gesture(text: string, now: number): void {
   gestureLine = { text, until: now + SAID_MS };
   element('gesture-status').textContent = text;
@@ -209,7 +219,7 @@ const voice = new VoiceCall({
     line.dataset.path = status.path ? (status.path.relayed ? 'relayed' : 'direct') : '';
     voiceButton.textContent = status.phase === 'off' ? 'Start voice' : 'Stop voice';
     // In VR the page is out of sight: say each change of the call in the headset for a moment.
-    const note = voiceNote(status, 'the phone', UNMUTE);
+    const note = voiceNote(status, 'the phone', unmuteHint(inputMode()));
     if (note !== voiceSaid?.text) voiceSaid = note === null ? null : { text: note, until: performance.now() + SAID_MS };
     // The report shows how the call connected, and outside VR nothing else refreshes it.
     report();
@@ -725,6 +735,13 @@ function frame(xrFrame: XRFrame, time: number): void {
     room?.setCalm(paused);
     gesture(paused ? 'Paused · calm view (open palm again to come back)' : 'Back in the room', time);
   }
+  // A fist held up mutes and unmutes. Not in the pause, and not by a hand that pinches, carries
+  // an object or the room, or takes a piece from the catalogue.
+  const fist = !paused && voice.on && fistHeldUp(sample.inputs.map(input => ({
+    pose: input.pose, wrist: input.wrist,
+    busy: input.holding || input.source === holder || input.source === carrier || input.source === taking?.source,
+  })), head?.position ?? null);
+  if (fistGate.update(fist ? 'fist' : 'none', time)) toggleMute('fist', time);
 
   // Two pinches holding nothing scale the room, and take hold of nothing while they do (#180).
   // First, so the gaze and every hand below reach into the room as it is drawn this frame.
@@ -756,10 +773,7 @@ function frame(xrFrame: XRFrame, time: number): void {
     if (input.confirm && !wasConfirming.get(input.source)) confirmAlignment();
     wasConfirming.set(input.source, input.confirm);
     // B or Y mutes and unmutes: the page's Mute button cannot be reached from inside VR.
-    // Not while dictating: the call stays muted until the description is said (#188).
-    if (input.mute && !wasMuting.get(input.source) && voice.on && !dictation.listening) {
-      voice.setMuted(!voice.status.muted);
-    }
+    if (input.mute && !wasMuting.get(input.source)) toggleMute('button', time);
     wasMuting.set(input.source, input.mute);
     const before = wasHolding.get(input.source) ?? false;
     wasHolding.set(input.source, input.holding);
@@ -939,7 +953,9 @@ function showHud(time: number, blocked: boolean): void {
     ?? gestureLine?.text
     ?? (aligned() ? null : 'Stand where you like, then press A or pinch to line up')
     // A change in the call shows for a moment; being muted stays, so nobody talks to no one.
-    ?? (voiceSaid && (time <= voiceSaid.until || voice.status.muted) ? voiceSaid.text : null);
+    // It names the way to unmute for what is in use now: hands, or controllers.
+    ?? (voice.status.muted ? voiceNote(voice.status, 'the phone', unmuteHint(inputMode())) : null)
+    ?? (voiceSaid && time <= voiceSaid.until ? voiceSaid.text : null);
   hud.show(text, text === gestureLine?.text || (text === voiceSaid?.text && voice.status.phase === 'connected' && !voice.status.muted));
 }
 
