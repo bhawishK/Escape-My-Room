@@ -112,6 +112,17 @@ class AddFurnitureMessage(WireModel):
     yaw: float = Field(ge=-3.141592653589793, le=3.141592653589793)
 
 
+class ResizeFurnitureMessage(WireModel):
+    """Resize a placed piece evenly to `scale` times its catalogue size (#202), kept within a
+    quarter and three times. `final` ends the resize: a piece grown into another moves beside it."""
+
+    type: Literal["resize_furniture"]
+    room_version: int = Field(ge=1)
+    id: str = Field(max_length=64)
+    scale: float = Field(gt=0, le=100)
+    final: bool = True
+
+
 class RemoveFurnitureMessage(WireModel):
     """Take a placed piece away (#183). Either person may, unless the other is holding it."""
 

@@ -28,6 +28,8 @@ export interface RoomEntity {
   size: { width: number; height: number; depth: number };
   /** The catalogue piece it was placed from (#181); absent or null for the room's own objects. */
   furniture?: string | null;
+  /** How many times its catalogue size a placed piece is drawn (#202); `size` is already scaled. */
+  scale?: number;
 }
 
 /** A job making a piece of furniture from a description or a photo (#186, #187). */

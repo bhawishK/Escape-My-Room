@@ -8,6 +8,7 @@ import { LateEntities, ModelCopies, applyPlacement, placeEntities, roomOwn } fro
 import {
   FIGURE_METRES, LIFE_SIZE, residentFigure, scaleLabel, type DollhouseView, type WristPalette,
 } from './dollhouse';
+import type { PieceMenu } from './piece-resize';
 
 /** A ray drawn from a controller, a hand or a fingertip, in the `local` reference space. */
 export interface DrawnRay {
@@ -26,8 +27,12 @@ const CARD_ABOVE_HAND = 0.1;
 const PREVIEW_METRES = 0.05;
 const LABEL_WIDTH = 0.18;
 const LABEL_ABOVE = 0.03;
-/** The palette's Exit button (#200): this wide, and a third as tall. */
+/** The palette's Exit button (#200) and a piece's Move and Resize (#202): this wide, a third as tall. */
 const EXIT_METRES = 0.06;
+const MENU_BUTTON_METRES = 0.08;
+/** The label of a piece being resized (#202): this wide, this far above its top. */
+const RESIZE_LABEL_WIDTH = 0.24;
+const RESIZE_LABEL_ABOVE = 0.06;
 const ROOM_BACKGROUND = new THREE.Color('#f5f5f7');
 
 /**
@@ -58,7 +63,13 @@ export class QuestRoom {
   private readonly palette = new THREE.Group();
   private readonly previews = new Map<string, THREE.Object3D>();
   /** The Exit button at the end of the palette's row (#200). */
-  private readonly exitButton = exitSprite();
+  private readonly exitButton = buttonSprite('Exit VR', '#c62f2f', 'palette:exit', EXIT_METRES);
+  /** Move and Resize above a tapped piece (#202). */
+  private readonly menu = new THREE.Group();
+  /** The piece being resized, drawn at its new scale until Python says so, and its size label. */
+  private resizing: { id: string; scale: number } | null = null;
+  private readonly resizeLabel = textSprite('');
+  private resizeText = '';
   private held: { id: string; root: THREE.Group; label: THREE.Sprite; height: number } | null = null;
   /** The phone user's latest presence, and the dollhouse view the figure is drawn in (#182). */
   private presence: PresenceState | undefined = undefined;
@@ -104,6 +115,17 @@ export class QuestRoom {
     this.palette.visible = false;
     this.palette.add(this.exitButton);
     scene.add(this.palette);
+    this.menu.name = 'piece-menu';
+    this.menu.visible = false;
+    this.menu.add(
+      buttonSprite('Move', '#2f6fc6', 'piece-menu:move', MENU_BUTTON_METRES),
+      buttonSprite('Resize', '#2f8f5f', 'piece-menu:resize', MENU_BUTTON_METRES),
+    );
+    scene.add(this.menu);
+    this.resizeLabel.name = 'resize-label';
+    this.resizeLabel.visible = false;
+    this.resizeLabel.scale.set(RESIZE_LABEL_WIDTH, RESIZE_LABEL_WIDTH / 6, 1);
+    scene.add(this.resizeLabel);
     this.container.dataset.scale = scaleLabel(this.view.scale);
     this.align(this.alignment);
   }
@@ -266,6 +288,56 @@ export class QuestRoom {
     label.position.set(0, height + LABEL_ABOVE / scale, 0);
   }
 
+  /** The top centre of a drawn piece, in the `local` space, or null if it isn't drawn. */
+  pieceTop(id: string): Position | null {
+    const root = this.entityRoots.get(id);
+    if (!root) return null;
+    const box = new THREE.Box3().setFromObject(root);
+    if (box.isEmpty()) return null;
+    const centre = box.getCenter(new THREE.Vector3());
+    return { x: centre.x, y: box.max.y, z: centre.z };
+  }
+
+  /** Move and Resize above a tapped piece (#202); null hides them. */
+  showPieceMenu(menu: PieceMenu | null): void {
+    this.menu.visible = menu !== null;
+    this.container.dataset.pieceMenu = menu ? 'shown' : '';
+    if (!menu) return;
+    const [move, resize] = this.menu.children;
+    move.position.set(menu.move.x, menu.move.y, menu.move.z);
+    resize.position.set(menu.resize.x, menu.resize.y, menu.resize.z);
+  }
+
+  /**
+   * Draws the piece being resized at `scale` with its true size, `text`, above it (#202), whatever
+   * Python last said, until it is called with a null id.
+   */
+  showResize(id: string | null, scale = 1, text = ''): void {
+    this.container.dataset.resizing = id ?? '';
+    this.resizeLabel.visible = id !== null;
+    if (!id) {
+      this.resizing = null;
+      return;
+    }
+    if (text !== this.resizeText) {
+      this.resizeText = text;
+      drawText(this.resizeLabel, text);
+    }
+    this.resizing = { id, scale };
+    this.applyResize();
+  }
+
+  /** The piece being resized at its new scale, its label above it. */
+  private applyResize(): void {
+    if (!this.resizing) return;
+    const root = this.entityRoots.get(this.resizing.id);
+    if (!root) return;
+    root.scale.setScalar(this.resizing.scale);
+    const top = this.pieceTop(this.resizing.id);
+    this.resizeLabel.visible = top !== null;
+    if (top) this.resizeLabel.position.set(top.x, top.y + RESIZE_LABEL_ABOVE, top.z);
+  }
+
   /** Takes the held piece out of the scene and frees its label's texture. */
   private dropHeld(): void {
     if (!this.held) return;
@@ -370,6 +442,8 @@ export class QuestRoom {
       const glidingFrom = this.gliding ? this.entityRoots.get(this.gliding.id)?.position.clone() : undefined;
       this.drawLate(room.entities);
       applyPlacement(this.entityRoots, room.entities);
+      // A piece being resized stays at the hands' scale, not the last one Python was sent.
+      this.applyResize();
       const root = this.gliding ? this.entityRoots.get(this.gliding.id) : undefined;
       if (this.gliding && root && glidingFrom) {
         this.gliding.target.copy(root.position);
@@ -508,14 +582,14 @@ function person(colour: number): THREE.Group {
   return group;
 }
 
-/** The palette's Exit button (#200): a red label that reads as leaving VR. */
-function exitSprite(): THREE.Sprite {
+/** A button in the headset: white `text` on a rounded `colour`, `width` metres wide (#200, #202). */
+function buttonSprite(text: string, colour: string, name: string, width: number): THREE.Sprite {
   const canvas = document.createElement('canvas');
   canvas.width = 384;
   canvas.height = 128;
   const context = canvas.getContext('2d');
   if (context) {
-    context.fillStyle = '#c62f2f';
+    context.fillStyle = colour;
     context.beginPath();
     context.roundRect(4, 4, canvas.width - 8, canvas.height - 8, 56);
     context.fill();
@@ -523,13 +597,13 @@ function exitSprite(): THREE.Sprite {
     context.textAlign = 'center';
     context.textBaseline = 'middle';
     context.font = '700 64px sans-serif';
-    context.fillText('Exit VR', canvas.width / 2, canvas.height / 2);
+    context.fillText(text, canvas.width / 2, canvas.height / 2);
   }
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
-  sprite.name = 'palette:exit';
-  sprite.scale.set(EXIT_METRES, EXIT_METRES / 3, 1);
+  sprite.name = name;
+  sprite.scale.set(width, width / 3, 1);
   sprite.renderOrder = 10;
   return sprite;
 }
@@ -539,8 +613,21 @@ function textSprite(text: string): THREE.Sprite {
   const canvas = document.createElement('canvas');
   canvas.width = 768;
   canvas.height = 128;
-  const context = canvas.getContext('2d');
-  if (context) {
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
+  sprite.renderOrder = 10;
+  drawText(sprite, text);
+  return sprite;
+}
+
+/** Draws `text` on a text sprite's own canvas, in place of what it said. */
+function drawText(sprite: THREE.Sprite, text: string): void {
+  const texture = sprite.material.map as THREE.CanvasTexture | null;
+  const canvas = texture?.image as HTMLCanvasElement | undefined;
+  const context = canvas?.getContext('2d');
+  if (texture && canvas && context) {
+    context.clearRect(0, 0, canvas.width, canvas.height);
     context.fillStyle = '#08111ee8';
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.fillStyle = '#ffffff';
@@ -553,10 +640,6 @@ function textSprite(text: string): THREE.Sprite {
       context.font = `700 ${size}px sans-serif`;
     }
     context.fillText(text, canvas.width / 2, canvas.height / 2);
+    texture.needsUpdate = true;
   }
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
-  sprite.renderOrder = 10;
-  return sprite;
 }

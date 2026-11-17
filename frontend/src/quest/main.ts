@@ -27,6 +27,7 @@ import { Dictation } from './dictation';
 import { Dwell, FIST_COOLDOWN_MS, FIST_HOLD_MS, GestureGate, HeadNods, fistHeldUp, unmuteHint } from './gestures';
 import { readFrame, type FrameSample, type InputSample, type Pose, type Ray } from './hands';
 import { Hud } from './hud';
+import { PieceResize, TAP_MS, isTap, menuChoice, pieceMenu, sizeLabel, type PieceMenu } from './piece-resize';
 import { QuestRoom, type DrawnRay } from './room-view';
 import { ThrowVelocity } from './throw';
 
@@ -36,6 +37,9 @@ const GRIP_MS = 100;
 const REPORT_MS = 500;
 /** A press waits this long for a second one, which together scale the room instead (#180). */
 const PAIR_MS = 150;
+/** Move and Resize stay above a tapped piece this long (#202); a resize is sent this often. */
+const OFFER_MS = 6000;
+const RESIZE_MS = 100;
 /** Resting the gaze this long on an object starts a topic about it. */
 const DWELL_MS = 1500;
 /** A pointing finger draws its ray once it has pointed this long, so a hand passing through does not. */
@@ -102,6 +106,18 @@ const scaling = new DollhouseScaling();
 /** One hand holding nothing carries a small room, to move and turn it (#182). */
 const carry = new DollhouseCarry();
 let carrier: XRInputSource | null = null;
+/** The placed piece offered Move and Resize after a tap on it (#202), until when. */
+let offer: { id: string; until: number } | null = null;
+let offeredMenu: PieceMenu | null = null;
+/** A piece in resize mode (#202), and when its scale was last sent. */
+const resize = new PieceResize();
+let lastResize = -Infinity;
+/** Resize mode ends by itself if both hands haven't pinched by then. */
+let resizeUntil = -Infinity;
+/** The current hold, from when its press began and where the hand was, to tell a tap (#202). */
+let holdStart: { since: number; at: Position; id: string } | null = null;
+/** The object the last hold took, known before Python confirms the hold. */
+let heldId: string | null = null;
 const nods = new HeadNods();
 const dwell = new Dwell(DWELL_MS);
 let lastPresence = -Infinity;
@@ -669,14 +685,15 @@ function gripOf(input: InputSample): Pose | null {
 }
 
 /** Starts holding with `input`: before alignment it lines up; after, it takes what it aims at. */
-function takeHold(input: InputSample, gazeTarget: string | null): 'held' | 'refused' | 'nothing' {
+function takeHold(input: InputSample, gazeTarget: string | null, chosen?: string): 'held' | 'refused' | 'nothing' {
   const alignment = aligned();
   if (!alignment) {
     confirmAlignment();
     return 'refused';
   }
   pauseNotice = null;
-  const { hit, blocked } = aimedAt(input.ray);
+  const aimed = chosen ? { hit: chosen, blocked: phoneHolds(chosen) } : aimedAt(input.ray);
+  const { hit, blocked } = aimed;
   if (blocked) {
     gestureLine = { text: BLOCKED, until: performance.now() + SAID_MS };
     return 'refused';
@@ -690,10 +707,69 @@ function takeHold(input: InputSample, gazeTarget: string | null): 'held' | 'refu
   const position = inRoom(alignment, grip.position);
   const orientation = turnInRoom(alignment, grip.orientation);
   holder = input.source;
+  heldId = entity.id;
   smoother.reset();
   grabOffset = offsetOf(position, orientation, entity.position);
   client.sendAcquire(version, entity.id, { position, orientation });
   return 'held';
+}
+
+/** What a tap with `input` is on: what its ray is on, else, for a hand, what the head looks at. */
+function tapped(input: InputSample, gazeTarget: string | null): string | null {
+  const { hit } = aimedAt(input.ray);
+  return hit ?? (input.kind === 'hand' ? movable(gazeTarget) : null);
+}
+
+/** Offers Move and Resize above `id`, if it is a placed piece of furniture (#202). */
+function offerPiece(id: string | null, time: number): void {
+  const piece = entities().find(entity => entity.id === id);
+  if (!piece?.furniture || phoneHolds(piece.id)) return;
+  offer = { id: piece.id, until: time + OFFER_MS };
+}
+
+/** Where Move and Resize float now, above the offered piece, or null once the offer is over. */
+function offeredPiece(time: number): PieceMenu | null {
+  if (offer && (time > offer.until || !entities().some(entity => entity.id === offer?.id))) offer = null;
+  const top = offer ? room?.pieceTop(offer.id) ?? null : null;
+  if (!offer || !top || !head) return null;
+  return pieceMenu(top, yawOf(head.orientation));
+}
+
+/**
+ * The piece in resize mode follows the two pinches (#202): drawn at once, sent to Python every
+ * 100 ms, and sent as final when either hand lets go. Without a room, or with no two pinches
+ * within six seconds, it leaves resize mode.
+ */
+function resizePiece(pinches: readonly Position[], lined: boolean, time: number): void {
+  const id = resize.piece;
+  const piece = entities().find(entity => entity.id === id);
+  const version = state?.room.room_version;
+  if (!id || !piece || !lined || version === null || version === undefined || phoneHolds(id)) {
+    if (id) resize.cancel();
+    room?.showResize(null);
+    return;
+  }
+  const step = resize.update(pinches);
+  if (step.phase === 'waiting' && time > resizeUntil) {
+    resize.cancel();
+    room?.showResize(null);
+    return;
+  }
+  const catalogue = piece.scale ?? 1;
+  const size = {
+    width: piece.size.width / catalogue, height: piece.size.height / catalogue, depth: piece.size.depth / catalogue,
+  };
+  if (step.phase === 'done') {
+    client.sendResizeFurniture(version, id, step.scale, true);
+    room?.showResize(null);
+    gesture(`${piece.label} · ${sizeLabel(size, step.scale)}`, time);
+    return;
+  }
+  room?.showResize(id, step.scale, `${piece.label} · ${sizeLabel(size, step.scale)}`);
+  if (step.phase === 'resizing' && time - lastResize >= RESIZE_MS) {
+    client.sendResizeFurniture(version, id, step.scale, false);
+    lastResize = time;
+  }
 }
 
 /** The gaze target when it can be picked up, else null. */
@@ -740,7 +816,9 @@ function frame(xrFrame: XRFrame, time: number): void {
   const pinches = sample.inputs
     .filter(input => input.holding && input.source !== holder && input.source !== taking?.source)
     .flatMap(input => input.pinchAt ? [input.pinchAt] : []);
-  room?.setDollhouse(scaling.update(pinches, alignment !== null && !holder && !ownHold()));
+  // A piece in resize mode takes the two pinches, not the room (#202).
+  resizePiece(pinches, alignment !== null, time);
+  room?.setDollhouse(scaling.update(resize.piece ? [] : pinches, alignment !== null && !holder && !ownHold()));
 
   // Gestures from the head and hands.
   const looking = lookedAt();
@@ -755,9 +833,11 @@ function frame(xrFrame: XRFrame, time: number): void {
   // Exit button (#200).
   const paletteInput = sample.inputs.find(input => input.source.handedness === 'left');
   const paletteAt = paletteInput?.grip?.position ?? paletteInput?.pinchAt ?? null;
-  const palette = alignment && scaling.view.scale < 1 && !scaling.scaling && head && paletteAt
+  const palette = alignment && scaling.view.scale < 1 && !scaling.scaling && !resize.piece && head && paletteAt
     ? wristPalette(paletteAt, yawOf(head.orientation), catalogueItems.length) : null;
   room?.showPalette(catalogueItems, palette);
+  offeredMenu = offeredPiece(time);
+  room?.showPieceMenu(offeredMenu);
 
   // Holding: a press of the grip or a pinch takes hold; letting go puts the object down.
   for (const input of sample.inputs) {
@@ -789,6 +869,41 @@ function frame(xrFrame: XRFrame, time: number): void {
       placeTaken();
       continue;
     }
+    // In resize mode, pinches resize the piece and take hold of nothing (#202).
+    if (resize.piece) {
+      pressedAt.delete(input.source);
+      continue;
+    }
+    // A pinch on Move takes hold of the offered piece; on Resize, resizes it; anywhere else, the
+    // offer goes and the pinch does what it would have (#202).
+    if (input.holding && !before && !holder && offer) {
+      const choice = offeredMenu && input.pinchAt ? menuChoice(offeredMenu, input.pinchAt) : null;
+      const chosen = offer.id;
+      offer = null;
+      if (choice === 'move') {
+        if (takeHold(input, null, chosen) === 'held') holdStart = null;
+        continue;
+      }
+      if (choice === 'resize') {
+        const piece = entities().find(entity => entity.id === chosen);
+        if (piece) {
+          resize.begin(piece.id, piece.scale ?? 1);
+          resizeUntil = time + OFFER_MS;
+          // Both hands are the resize's now: a hand carrying the dollhouse lets go of it.
+          carry.end();
+          carrier = null;
+          gesture('Resize: pinch with both hands, then pull apart or together', time);
+        }
+        continue;
+      }
+    }
+    // A quick pinch let go before it took hold is a tap: on placed furniture, it offers Move
+    // and Resize (#202).
+    const pressed = pressedAt.get(input.source);
+    if (!input.holding && before && !holder && pressed !== undefined && alignment &&
+      time - pressed < TAP_MS) {
+      offerPiece(tapped(input, looking), time);
+    }
     // A press while something is held, or while scaling, takes hold of nothing.
     if (input.holding && !before && !holder) pressedAt.set(input.source, time);
     if (!input.holding || holder || scaling.scaling) pressedAt.delete(input.source);
@@ -800,9 +915,12 @@ function frame(xrFrame: XRFrame, time: number): void {
       // A press on nothing in a small room takes hold of the dollhouse itself (#182).
       // Only a real grip turns the dollhouse: without one, the head's turn would.
       const grip = input.grip;
-      if (takeHold(input, looking) === 'nothing' && grip && carry.begin(grip, scaling.view)) {
+      const took = takeHold(input, looking);
+      if (took === 'nothing' && grip && carry.begin(grip, scaling.view)) {
         carrier = input.source;
       }
+      const from = took === 'held' ? gripOf(input) : null;
+      holdStart = from && heldId ? { since, at: from.position, id: heldId } : null;
     }
     if (carrier === input.source && !input.holding) {
       carry.end();
@@ -810,7 +928,16 @@ function frame(xrFrame: XRFrame, time: number): void {
     }
     // Opening the hand throws what it held: in the dollhouse as far as the toss looks, and a
     // slow drift only puts it down (#184).
-    if (!input.holding && before && holder === input.source) release(true);
+    if (!input.holding && before && holder === input.source) {
+      // A quick pinch on placed furniture that hardly moved it is a tap: it is put down where
+      // it was, and Move and Resize are offered (#202).
+      const start = holdStart;
+      const here = gripOf(input)?.position;
+      const tap = start !== null && here !== undefined && isTap(start.since, start.at, time, here);
+      holdStart = null;
+      release(!tap);
+      if (tap) offerPiece(start.id, time);
+    }
   }
   // The carried dollhouse follows its hand; two pinches scaling it, or the hand gone, end that.
   const carrierInput = sample.inputs.find(input => input.source === carrier);

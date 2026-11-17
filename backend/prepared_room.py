@@ -91,6 +91,8 @@ class SceneEntity(WireModel):
     physics: PhysicsMaterial | None = None
     # The catalogue piece it was placed from (#181); None for the room's own objects.
     furniture: str | None = None
+    # How many times its catalogue size a placed piece is drawn (#202); `size` is already scaled.
+    scale: float = Field(default=1.0, gt=0, le=100)
 
 
 def floor_pieces(entities: list[SceneEntity]) -> list[SceneEntity]:

@@ -164,6 +164,12 @@ export class SessionClient {
   }
 
   /** Take a placed piece away (#183), unless the other person is holding it. */
+  /** Resizes a placed piece to `scale` times its catalogue size (#202); `final` ends the resize. */
+  sendResizeFurniture(roomVersion: number, id: string, scale: number, final: boolean): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: 'resize_furniture', room_version: roomVersion, id, scale, final }));
+  }
+
   sendRemoveFurniture(roomVersion: number, id: string): void {
     if (this.socket?.readyState !== WebSocket.OPEN) return;
     this.socket.send(JSON.stringify({ type: 'remove_furniture', room_version: roomVersion, id }));

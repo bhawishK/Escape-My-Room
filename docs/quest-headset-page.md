@@ -32,6 +32,7 @@ It joins the same session as the phone's page, as the headset (`vr_solver`), wit
 | Move an object | Aim at it, squeeze the grip, let go to put it down | Aim the hand ray and pinch, or **look at it and pinch** |
 | Throw an object | Let go of the grip while swinging | Open the pinch while swinging: it flies at your hand's speed (capped at 8 m/s) |
 | Show something | — | **Point** with the index finger: its ray outlines what it is on |
+| Move or resize a placed piece | — | **Tap** it (pinch and let go within 0.35 s, the hand moving no more than 3 cm): **Move** and **Resize** float above it for 6 s. Move takes hold of it; after Resize, pinch with both hands and pull apart or together, from 0.25 to 3 times its catalogue size, and let go to finish (#202) |
 | Leave VR | — | Pinch **Exit VR** at the end of the wrist catalogue, while the room is a dollhouse (#200) |
 | Start a topic | Look at an object for 1.5 s | The same |
 | Yes / no | Nod twice / shake twice | The same |
