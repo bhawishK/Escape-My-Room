@@ -100,6 +100,8 @@ export class QuestRoom {
   private loadingVersion: number | null = null;
   private loadToken = 0;
   private presenting = false;
+  /** Whether the VR reference space's y = 0 is the real floor (#207). */
+  private onFloor = false;
   private alignment: AlignmentState = { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } };
   private predicted: { id: string; position: THREE.Vector3 } | null = null;
   /** An object the phone holds glides to each placement Python sends, over about this long. */
@@ -170,9 +172,14 @@ export class QuestRoom {
     });
   }
 
-  /** Puts the room where the headset's alignment says it is; before alignment, the floor under the eyes. */
-  setPresenting(active: boolean): void {
+  /**
+   * Puts the room where the headset's alignment says it is; before alignment, the floor under the
+   * eyes: on the real floor when the reference space has one (`onFloor`, #207), else standing eye
+   * height below them.
+   */
+  setPresenting(active: boolean, onFloor = false): void {
     this.presenting = active;
+    this.onFloor = onFloor;
     this.align(this.alignment);
   }
 
@@ -188,8 +195,9 @@ export class QuestRoom {
     } else {
       this.anchor.rotation.y = 0;
       // The `local` space starts at the eyes, so in VR the room's floor is standing eye height
-      // below. On the page the preview camera stands on the room's own floor.
-      this.anchor.position.set(0, this.presenting ? -STANDING_EYE_HEIGHT : 0, 0);
+      // below; `local-floor` has the real floor at y = 0 (#207). On the page the preview camera
+      // stands on the room's own floor.
+      this.anchor.position.set(0, this.presenting && !this.onFloor ? -STANDING_EYE_HEIGHT : 0, 0);
     }
     this.container.dataset.view = alignment.status === 'aligned' ? 'calibrated' : 'overview';
     this.drawPhone();

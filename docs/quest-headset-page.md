@@ -29,6 +29,7 @@ It joins the same session as the phone's page, as the headset (`vr_solver`), wit
 | Action | Controllers | Hands |
 | --- | --- | --- |
 | Line the room up | A or X | Pinch, before the room is lined up (each new VR session, and a reset, ask again) |
+| Where the floor is | The real floor: the page asks for `local-floor`, whose y = 0 is the floor the Quest knows from its boundary, and puts the room's floor on it, so your eyes keep their real height, standing or sitting (#207). Where only `local` is given, the eyes are taken as 1.5 m up, as before. The page's report says which (`floor`) | The same |
 | Move an object | Aim at it, squeeze the grip, let go to put it down | Aim the hand ray and pinch; in the dollhouse, also **look at it and pinch** (at life size a pinch at nothing would take whatever is in view, #204) |
 | Throw an object | Let go of the grip while swinging | Open the pinch while swinging: it flies at your hand's speed (capped at 8 m/s) |
 | Show something | — | **Point** with the index finger: its ray outlines what it is on |
