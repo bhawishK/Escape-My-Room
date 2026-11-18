@@ -12,6 +12,9 @@ export interface ViewRequest {
   fov_degrees: number;
   width: number;
   height: number;
+  /** The colour behind the splat, as #rrggbb; rendering a view on black and on white shows how
+   * see-through it is (#206). Dark grey when not given. */
+  background?: string | null;
 }
 
 export interface RenderRequest {
@@ -38,7 +41,8 @@ const renderer = new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuff
 renderer.setPixelRatio(1);
 document.body.append(renderer.domElement);
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x1d1d1f);
+const BACKGROUND = 0x1d1d1f;
+scene.background = new THREE.Color(BACKGROUND);
 const spark = new SparkRenderer({ renderer });
 scene.add(spark);
 const camera = new THREE.PerspectiveCamera(60, 4 / 3, 0.05, 200);
@@ -65,6 +69,7 @@ function nextFrame(): Promise<void> {
 
 async function draw(view: ViewRequest): Promise<string> {
   renderer.setSize(view.width, view.height, false);
+  (scene.background as THREE.Color).set(view.background ?? BACKGROUND);
   camera.aspect = view.width / view.height;
   camera.fov = view.fov_degrees;
   camera.position.set(...view.position);
