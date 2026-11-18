@@ -37,3 +37,15 @@ test('the headset sees the room from the phone user’s 1.5 m eye height, floor 
   expect(roomPoint(alignment, { ...atStart.position, y: 0.03 - 1.5 }).y).toBeCloseTo(0, 8);
   expect(roomPoint(alignment, { ...atStart.position, y: 0.03 - 0.6 }).y).toBeCloseTo(0.9, 8);
 });
+
+test('on the headset\'s real floor (local-floor), the room\'s floor is put on it and the head keeps its height', () => {
+  // #207: y = 0 is the real floor, so a 1.72 m tall person's eyes stay 1.72 m up, and sitting, 1.2 m.
+  const standing = { position: { x: 0.2, y: 1.72, z: -0.1 }, orientation: headset.orientation };
+  const alignment = alignmentFromPose(standing.position, standing.orientation, true);
+  expect(roomPoint(alignment, standing.position).y).toBeCloseTo(1.72, 8);
+  expect(roomPoint(alignment, { ...standing.position, y: 0 }).y).toBeCloseTo(0, 8);
+  expect(roomPoint(alignment, { ...standing.position, y: 1.2 }).y).toBeCloseTo(1.2, 8);
+  // It still lines up across the floor and facing, as before.
+  expect(roomPoint(alignment, standing.position).x).toBeCloseTo(0, 8);
+  expect(roomHeading(alignment, standing.orientation)).toBeCloseTo(0, 8);
+});

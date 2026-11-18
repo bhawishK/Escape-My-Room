@@ -73,6 +73,11 @@ let xrActive = false;
 let state: SessionState | null = null;
 /** Where the head is now, as the alignment lining up here would save; null before a tracked frame. */
 let calibrationNow: CalibrationInput | null = null;
+/**
+ * Whether the session's reference space is `local-floor`, whose y = 0 is the real floor (#207):
+ * the room's floor is then put on it. Else `local`, and the eyes are taken as 1.5 m up.
+ */
+let onFloor = false;
 let head: Pose | null = null;
 let tracking: FrameSample['tracking'] = 'lost';
 /** The hands whose pinch the session has selected. */
@@ -190,6 +195,7 @@ function report(): void {
     room_version: state?.room.room_version ?? null,
     splat: sceneElement.dataset.splat === 'shown',
     room_scale: scaleLabel(scaling.view.scale),
+    floor: xrActive ? (onFloor ? 'real (local-floor)' : 'assumed: eyes 1.5 m up (local)') : 'not-tested',
     gestures: gestureLog.slice(-20),
     voice: voice.report(),
     user_agent: navigator.userAgent,
@@ -858,7 +864,7 @@ function frame(xrFrame: XRFrame, time: number): void {
     if (tracking !== 'tracked') pause('lost');
   }
   head = sample.head;
-  if (head) calibrationNow = alignmentFromPose(head.position, head.orientation);
+  if (head) calibrationNow = alignmentFromPose(head.position, head.orientation, onFloor);
   const alignment = aligned();
 
   // The wrist menu opens on an open left palm and closes on a fist (#204); with a controller, it
@@ -1167,8 +1173,9 @@ async function start(): Promise<void> {
       // The page offers VR from its own button, once connected.
       xr: {
         offer: 'none',
-        // The alignment maths takes the `local` space, as the phone's page did for the headset.
-        referenceSpace: { type: ReferenceSpaceType.Local, required: true },
+        // The real floor where the headset knows it (#207); `local`, whose origin is the eyes,
+        // where it doesn't.
+        referenceSpace: { type: ReferenceSpaceType.LocalFloor, fallbackOrder: [ReferenceSpaceType.Local] },
         features: { handTracking: true },
       },
       render: { near: 0.01, far: 100, camera: { position: [0, 1.5, 0], lookAt: [0, 1.1, -1.2] } },
@@ -1196,8 +1203,15 @@ async function start(): Promise<void> {
     xrActive = true;
     // A new session has a new `local` origin, so an alignment saved before is in the wrong place.
     client.sendClearAlignment();
+    onFloor = false;
     room?.setPresenting(true);
     const session = renderer.xr.getSession();
+    // IWSDK takes `local-floor` whenever the session supports it, so asking tells which it took.
+    void session?.requestReferenceSpace('local-floor').then(() => {
+      onFloor = true;
+      room?.setPresenting(xrActive, true);
+      report();
+    }, () => undefined);
     session?.addEventListener('selectstart', event => { if (event.inputSource.hand) pinching.add(event.inputSource); });
     session?.addEventListener('selectend', event => { pinching.delete(event.inputSource); });
     session?.addEventListener('inputsourceschange', () => { controls(); report(); });

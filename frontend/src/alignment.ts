@@ -9,13 +9,15 @@ export interface CalibrationInput {
 export const STANDING_EYE_HEIGHT = 1.5;
 
 /**
- * Map the current view onto the floor center, facing the desk, with the eyes at
- * `STANDING_EYE_HEIGHT`. The `local` space has no floor, so the head's height when confirming
- * becomes standing eye height; moving up or down afterwards still moves the view.
+ * Map the current view onto the floor center, facing the desk. The `local` space has no floor,
+ * so the head's height when confirming becomes `STANDING_EYE_HEIGHT`; moving up or down
+ * afterwards still moves the view. With `onFloor`, the space's y = 0 is the real floor (the
+ * headset's `local-floor`, #207), so the room's floor is put on it and the head keeps its height.
  */
 export function alignmentFromPose(
   position: Position,
   orientation: { x: number; y: number; z: number; w: number },
+  onFloor = false,
 ): CalibrationInput {
   const { x: qx, y: qy, z: qz, w: qw } = orientation;
   const forwardX = -2 * (qw * qy + qx * qz);
@@ -27,7 +29,7 @@ export function alignmentFromPose(
     yaw,
     origin: {
       x: -(cosine * position.x + sine * position.z),
-      y: STANDING_EYE_HEIGHT - position.y,
+      y: onFloor ? 0 : STANDING_EYE_HEIGHT - position.y,
       z: -(-sine * position.x + cosine * position.z),
     },
   };
