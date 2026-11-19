@@ -64,7 +64,9 @@ OUT_OF_GPU_MEMORY = 3
 
 type PhotoStageName = Literal["scene_understanding", "geometry", "stabilization", "export"]
 # The stages of `backend.reconstruction`, in its order.
-type ReconstructionStageName = Literal["frames", "colmap", "level", "splat", "vps_map", "package"]
+type ReconstructionStageName = Literal[
+    "frames", "colmap", "level", "depth", "splat", "vps_map", "package"
+]
 type StageName = PhotoStageName | ReconstructionStageName
 type JobState = Literal["queued", "running", "awaiting_review", "failed"]
 # `fixture` is a failure the fixture worker was configured to produce; `worker` is an unexpected

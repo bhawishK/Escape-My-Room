@@ -99,6 +99,7 @@ def main() -> int:
         stage("frames", {"video": video.name, "frames": 120}),
         stage("colmap", {"frames": 120, "frames_placed": 118, "mapper": "incremental"}),
         stage("level", {"scale": 2.1}),
+        stage("depth", {"skipped": "depth_weight is 0"}),
         stage(
             "splat",
             {
