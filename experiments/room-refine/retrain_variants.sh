@@ -18,6 +18,8 @@ VIDEO=${VIDEO:-$REPO/data/captures/cap_6696f94608023d88a08a3b6f68da7bbe/video.mo
 PLACED=${PLACED:-$REPO/data/rooms/refined-206-v9}
 OUT=${OUT:-$REPO/data/refine-209}
 PYTHON=${PYTHON:-$REPO/.venv/bin/python}
+# gsplat compiles its CUDA code on first use with the venv's ninja, as the server's runs do.
+export PATH="$(dirname "$PYTHON"):$PATH"
 
 declare -A FLAGS=(
   [A]=""
