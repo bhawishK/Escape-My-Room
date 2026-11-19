@@ -1,0 +1,118 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Throw video</title>
+<!-- Served by throw_video.mjs: /three/ and /spark/ from frontend/node_modules, /room/ the room. -->
+<script type="importmap">
+{ "imports": {
+  "three": "/three/build/three.module.js",
+  "three/addons/": "/three/examples/jsm/",
+  "@sparkjsdev/spark": "/spark/dist/spark.module.js"
+} }
+</script>
+<style>body { margin: 0; background: #000; }</style>
+</head>
+<body>
+<script type="module">
+// A recorded throw (throw_trace.py) drawn as the headset draws the room (#213): the splat, placed
+// as the manifest says, and the box's own model where physics put it, lit as the Quest page lights
+// it. Each frame is drawn twice: as seen, and with the box's outline drawn through everything, so
+// a box hidden behind splats still shows where it is.
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark';
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+document.body.append(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+scene.add(new THREE.HemisphereLight(0xdff7ff, 0x344156, 2));
+const light = new THREE.DirectionalLight(0xffffff, 2);
+light.position.set(2, 4, 1);
+scene.add(light);
+const spark = new SparkRenderer({ renderer });
+scene.add(spark);
+const camera = new THREE.PerspectiveCamera(90, 4 / 3, 0.01, 100);
+
+const nextFrame = () => new Promise(resolve => requestAnimationFrame(() => resolve()));
+
+async function settle() {
+  let settled = 0;
+  const started = performance.now();
+  while (settled < 3 && performance.now() - started < 20000) {
+    renderer.render(scene, camera);
+    await nextFrame();
+    settled = spark.sorting || spark.sortDirty ? 0 : settled + 1;
+  }
+}
+
+window.drawThrow = async request => {
+  const manifest = await (await fetch('/room/manifest.json')).json();
+  const bytes = await (await fetch(`/room/${manifest.splat.asset}`)).arrayBuffer();
+  const splat = new SplatMesh({ fileBytes: bytes, fileName: manifest.splat.asset, raycastable: false });
+  await splat.initialized;
+  const { position: p, rotation: q, scale } = manifest.splat;
+  splat.position.set(p.x, p.y, p.z);
+  splat.quaternion.set(q.x, q.y, q.z, q.w);
+  splat.scale.setScalar(scale);
+  scene.add(splat);
+
+  const entry = manifest.entities.find(entity => entity.id === 'box');
+  const box = (await new GLTFLoader().loadAsync(`/room/${entry.asset}`)).scene;
+  scene.add(box);
+  // The x-ray copy: the same model drawn over everything, so its pixels are the whole box.
+  const ghost = box.clone(true);
+  ghost.traverse(node => {
+    if (!node.isMesh) return;
+    node.material = node.material.clone();
+    node.material.depthTest = false;
+    node.renderOrder = 9;
+  });
+  // Drawn in a pass of its own after the room, as Spark draws its splats over the scene's meshes.
+  const overlay = new THREE.Scene();
+  overlay.add(new THREE.HemisphereLight(0xdff7ff, 0x344156, 2));
+  const overlayLight = new THREE.DirectionalLight(0xffffff, 2);
+  overlayLight.position.set(2, 4, 1);
+  overlay.add(overlayLight);
+  overlay.add(ghost);
+  const { width, height, depth } = request.box_size;
+  const outline = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(width, height, depth).translate(0, height / 2, 0)),
+    new THREE.LineBasicMaterial({ color: 0x00ff66, depthTest: false }),
+  );
+  outline.renderOrder = 10;
+  overlay.add(outline);
+
+  renderer.setSize(request.width, request.height, false);
+  camera.aspect = request.width / request.height;
+  camera.position.set(...request.eye);
+  camera.updateProjectionMatrix();
+  // The eyes follow the box, as a thrower's do, a little behind it.
+  const gaze = new THREE.Vector3(...request.look_at);
+
+  const frames = [];
+  for (const frame of request.frames) {
+    const { position: at, rotation: turn } = frame;
+    for (const object of [box, ghost, outline]) {
+      object.position.set(at.x, at.y, at.z);
+      object.quaternion.set(turn.x, turn.y, turn.z, turn.w);
+    }
+    gaze.lerp(new THREE.Vector3(at.x, at.y + request.box_size.height / 2, at.z), frames.length ? 0.35 : 0);
+    camera.lookAt(gaze);
+    await settle();
+    renderer.render(scene, camera);
+    const seen = renderer.domElement.toDataURL('image/png');
+    renderer.autoClear = false;
+    renderer.clearDepth();
+    renderer.render(overlay, camera);
+    renderer.autoClear = true;
+    frames.push({ seen, xray: renderer.domElement.toDataURL('image/png') });
+  }
+  return frames;
+};
+window.ready = true;
+</script>
+</body>
+</html>

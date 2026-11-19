@@ -48,6 +48,15 @@ class Settings:
     # `max_anisotropy` times their middle one; 0 lets them stretch.
     anisotropy_weight: float = 0.0
     max_anisotropy: float = 10.0
+    # Difix3D+ repair rounds (#215): views the walk missed are rendered, repaired by Difix in its
+    # own env (research-only licence) and trained on, `fix_rounds` times; 0 trains without them.
+    fix_rounds: int = 0
+    fix_views: int = 24
+    # A repaired view's loss weight against a filmed frame's 1, and how often one is drawn.
+    fix_weight: float = 0.2
+    fix_share: float = 0.3
+    # Repairs are rendered at this long side: Difix fits the 8 GB GPU at about 768 pixels.
+    fix_long_side: int = 768
 
 
 @dataclass

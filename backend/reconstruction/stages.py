@@ -64,7 +64,7 @@ def video_to_room(video: Path, out: Path) -> list[Stage]:
         depths = context.work / "depth" if context.settings.depth_weight > 0 else None
         training, memory = train_within_budget(
             lambda settings: train_splat(
-                cameras, points, colours, settings, out, context.step, depths
+                cameras, points, colours, settings, out, context.step, depths, context.work / "fix"
             ),
             context.settings,
         )
@@ -158,6 +158,11 @@ def video_to_room(video: Path, out: Path) -> list[Stage]:
                 "depth_weight",
                 "anisotropy_weight",
                 "max_anisotropy",
+                "fix_rounds",
+                "fix_views",
+                "fix_weight",
+                "fix_share",
+                "fix_long_side",
             ),
             (out / "room.ply",),
         ),
