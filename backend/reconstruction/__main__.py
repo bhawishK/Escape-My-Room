@@ -1,6 +1,6 @@
 """python -m backend.reconstruction VIDEO OUT [--quick] [--max-frames N] [--exhaustive-up-to N]
     [--train-steps N] [--memory-budget-gb G] [--depth-weight W] [--anisotropy-weight W]
-    [--max-anisotropy R] [--watch-stdin]
+    [--max-anisotropy R] [--fix-rounds N] [--fix-views N] [--watch-stdin]
 
 Prints one JSON line per progress event (stage, state, step, total, message, seconds), which the
 preparation queue (#137) reads. Run it again with the same OUT to continue a stopped run.
@@ -38,6 +38,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--depth-weight", type=float)
     parser.add_argument("--anisotropy-weight", type=float)
     parser.add_argument("--max-anisotropy", type=float)
+    # Difix3D+ repair rounds (#215); off unless given, and Difix must be installed in its own env.
+    parser.add_argument("--fix-rounds", type=int)
+    parser.add_argument("--fix-views", type=int)
     parser.add_argument("--watch-stdin", action="store_true")
     args = parser.parse_args(argv)
     if args.watch_stdin:
@@ -51,7 +54,7 @@ def main(argv: list[str]) -> int:
         settings = replace(settings, train_steps=args.train_steps)
     if args.memory_budget_gb:
         settings = replace(settings, memory_budget_gb=args.memory_budget_gb)
-    for name in ("depth_weight", "anisotropy_weight", "max_anisotropy"):
+    for name in ("depth_weight", "anisotropy_weight", "max_anisotropy", "fix_rounds", "fix_views"):
         if getattr(args, name) is not None:
             settings = replace(settings, **{name: getattr(args, name)})
 

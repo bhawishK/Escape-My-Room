@@ -5,6 +5,7 @@
 #
 #   A: as now              B: needle penalty
 #   C: depth guidance      D: both
+#   E: D, plus four Difix3D+ repair rounds (#215; Difix installed in ~/difix)
 #
 # Run from a worktree of the branch, so the server's own checkout is never touched:
 #   git -C ~/escape-my-room worktree add ~/escape-my-room-209 issue-209-depth-training
@@ -26,7 +27,10 @@ declare -A FLAGS=(
   [B]="--anisotropy-weight 0.1"
   [C]="--depth-weight 0.1"
   [D]="--depth-weight 0.1 --anisotropy-weight 0.1"
+  [E]="--depth-weight 0.1 --anisotropy-weight 0.1 --fix-rounds 4"
 )
+# E starts from D's work, whose depth stage is done; the others from the job's.
+declare -A FROM=([E]="$OUT/D/reconstruction/work")
 VARIANTS=("${@:-A B C D}")
 read -r -a VARIANTS <<< "${VARIANTS[*]}"
 
@@ -40,7 +44,7 @@ for variant in "${VARIANTS[@]}"; do
   if [ ! -d "$recon/work" ]; then
     mkdir -p "$recon"
     # Frames, COLMAP and the finished stages' markers, so only depth and training rerun.
-    cp -r "$JOB/work" "$recon/work"
+    cp -r "${FROM[$variant]:-$JOB/work}" "$recon/work"
   fi
   # shellcheck disable=SC2086
   "$PYTHON" -m backend.reconstruction "$VIDEO" "$recon" ${FLAGS[$variant]} \
@@ -51,5 +55,8 @@ import json, sys
 t = json.load(open(sys.argv[1]))["training"]
 print(f"  held-out PSNR {t['psnr_db']} dB, {t['splats']:,} splats, {t.get('needles')} needles, "
       f"{t.get('depth_guided_frames')} depth-guided frames, peak GPU {t['peak_gpu_memory_gb']} GB")
+for repair in t.get("fix_rounds") or []:
+    print(f"  repair round {repair['round']} after step {repair['after_step']}: "
+          f"{repair['views']} views, {repair['covered']:.0%} covered by splats")
 EOF
 done

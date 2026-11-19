@@ -11,7 +11,14 @@ from typing import Any
 import numpy as np
 
 from backend.reconstruction.depth_prior import training_size
+from backend.reconstruction.difix import repair_views
 from backend.reconstruction.levelling import Camera
+from backend.reconstruction.novel_views import (
+    fix_schedule,
+    interpolate,
+    nearest_camera,
+    target_views,
+)
 from backend.reconstruction.pipeline import Settings, Step
 from backend.reconstruction.splat import OutOfGpuMemory, read_ply, write_ply
 from backend.reconstruction.vps_map import DepthRenderer, MapFrame
@@ -25,6 +32,7 @@ def train_splat(
     out: Path,
     step: Step,
     depths: Path | None = None,
+    fix_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Train a splat on the frames (needs CUDA, torch and gsplat), then write `out/room.ply` and
     held-out previews in `out/previews/`. Frames are shrunk to `settings.long_side` if larger.
@@ -32,7 +40,13 @@ def train_splat(
 
     With `depths`, a folder of each frame's depth in metres (`monodepth`), the rendered inverse
     depth is pulled toward it by `settings.depth_weight` (#209). `settings.anisotropy_weight`
-    penalises splats longer than `settings.max_anisotropy` times their middle axis."""
+    penalises splats longer than `settings.max_anisotropy` times their middle axis.
+
+    With `fix_dir` and `settings.fix_rounds`, views the walk missed are repaired by Difix3D+ (#215)
+    in rounds over the middle of training: each round renders them a step further from their
+    nearest filmed camera, Difix repairs them in its own process (`fix_dir/round-<k>/`), and
+    training then draws a repaired view `settings.fix_share` of the time, at `settings.fix_weight`,
+    only where the render had splats. References are training frames, never held-out ones."""
     import torch
     import torch.nn.functional as F
     from gsplat import rasterization
@@ -146,28 +160,41 @@ def train_splat(
         strategy.check_sanity(params, optimizers)
         state = strategy.initialize_state()
 
-        def render(
-            index: int, sh_degree: int, with_depth: bool = False
-        ) -> tuple[torch.Tensor, torch.Tensor | None, dict]:
-            """The frame's colours and, `with_depth`, its expected depth (gsplat's RGB+ED)."""
-            _, K, width, height = loaded[index]
+        def draw(
+            viewmat: torch.Tensor,
+            K: torch.Tensor,
+            width: int,
+            height: int,
+            sh_degree: int,
+            mode: str = "RGB",
+        ) -> tuple[torch.Tensor, torch.Tensor, dict]:
+            """Any view's render (colours, then depth for RGB+ED) and opacity."""
             colours_sh = torch.cat([params["sh0"], params["shN"]], dim=1)
-            images, _, info = rasterization(
+            images, alphas, info = rasterization(
                 params["means"],
                 params["quats"],
                 torch.exp(params["scales"]),
                 torch.sigmoid(params["opacities"]),
                 colours_sh,
-                viewmats[index][None],
+                viewmat[None],
                 K[None],
                 width,
                 height,
                 sh_degree=sh_degree,
                 packed=False,
-                render_mode="RGB+ED" if with_depth else "RGB",
+                render_mode=mode,
             )
-            depth = images[0, ..., 3] if with_depth else None
-            return images[0, ..., :3].clamp(0, 1), depth, info
+            return images[0], alphas[0, ..., 0], info
+
+        def render(
+            index: int, sh_degree: int, with_depth: bool = False
+        ) -> tuple[torch.Tensor, torch.Tensor | None, dict]:
+            """The frame's colours and, `with_depth`, its expected depth (gsplat's RGB+ED)."""
+            _, K, width, height = loaded[index]
+            mode = "RGB+ED" if with_depth else "RGB"
+            images, _, info = draw(viewmats[index], K, width, height, sh_degree, mode)
+            depth = images[..., 3] if with_depth else None
+            return images[..., :3].clamp(0, 1), depth, info
 
         def ssim(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
             x, y = a.permute(2, 0, 1)[None], b.permute(2, 0, 1)[None]
@@ -184,13 +211,81 @@ def train_splat(
                 ((2 * mx * my + c1) * (2 * cov + c2)) / ((mx**2 + my**2 + c1) * (vx + vy + c2))
             ).mean()
 
+        # Difix3D+ repair rounds (#215): each target view starts at its nearest training frame.
+        rounds = fix_schedule(steps, settings.fix_rounds) if fix_dir is not None else []
+        round_after = {at: k for k, at in enumerate(rounds, start=1)}
+        wanted_views = target_views(cameras, settings.fix_views) if rounds else []
+        references = [cameras[i] for i in training]
+        starts = [
+            references[nearest_camera(references, wanted)]["camera_to_world"]
+            for wanted in wanted_views
+        ]
+        # This round's repaired views: view matrix, K, width, height, picture, where it had splats.
+        novel: list[tuple[torch.Tensor, torch.Tensor, int, int, torch.Tensor, torch.Tensor]] = []
+        repaired: list[dict[str, Any]] = []
+
+        def repair_round(number: int, k: int) -> None:
+            assert fix_dir is not None
+            folder = fix_dir / f"round-{k}"
+            folder.mkdir(parents=True, exist_ok=True)
+            views = []
+            with torch.no_grad():
+                for n, (start, wanted) in enumerate(zip(starts, wanted_views, strict=True)):
+                    pose = interpolate(start, wanted, k / len(rounds))
+                    reference = training[nearest_camera(references, pose)]
+                    picture, K, width, height = loaded[reference]
+                    factor = settings.fix_long_side / max(width, height)
+                    w = max(8, round(width * factor / 8) * 8)
+                    h = max(8, round(height * factor / 8) * 8)
+                    view_K = K.clone()
+                    view_K[0] *= w / width
+                    view_K[1] *= h / height
+                    viewmat = torch.tensor(np.linalg.inv(pose), dtype=torch.float32, device=device)
+                    image, alpha, _ = draw(viewmat, view_K, w, h, min(number // 1000, degree))
+                    shown = image[..., :3].clamp(0, 1).mul(255).byte().cpu().numpy()
+                    Image.fromarray(shown).save(folder / f"{n:02d}-render.png")
+                    Image.fromarray(picture.numpy()).resize((w, h), Image.Resampling.LANCZOS).save(
+                        folder / f"{n:02d}-reference.png"
+                    )
+                    views.append((viewmat, view_K, w, h, alpha > 0.5))
+            # Difix runs in its own process: free what training isn't using for it.
+            torch.cuda.empty_cache()
+            fixed = repair_views(folder)
+            novel.clear()
+            for (viewmat, view_K, w, h, mask), path in zip(views, fixed, strict=True):
+                picture = Image.open(path).convert("RGB").resize((w, h))
+                novel.append((viewmat, view_K, w, h, torch.from_numpy(np.array(picture)), mask))
+            covered = float(np.mean([float(mask.float().mean()) for *_, mask in views]))
+            repaired.append(
+                {
+                    "round": k,
+                    "after_step": number + 1,
+                    "views": len(views),
+                    "covered": round(covered, 3),
+                }
+            )
+            step(number + 1, steps, f"repair round {k} of {len(rounds)}: {len(views)} views")
+
         for number in range(steps):
-            index = training[torch.randint(len(training), (1,)).item()]
-            target = loaded[index][0].to(device, non_blocking=True).float() / 255
-            inverse = targets[index]
-            guiding = settings.depth_weight > 0 and inverse is not None
-            image, depth, info = render(index, min(number // 1000, degree), guiding)
-            loss = 0.8 * F.l1_loss(image, target) + 0.2 * (1 - ssim(image, target))
+            sh_now = min(number // 1000, degree)
+            guiding, depth, inverse = False, None, None
+            if novel and torch.rand(1).item() < settings.fix_share:
+                # A repaired view, trained only where its render had splats.
+                viewmat, view_K, w, h, picture, mask = novel[torch.randint(len(novel), (1,)).item()]
+                images, _, info = draw(viewmat, view_K, w, h, sh_now)
+                keep = mask[..., None].float()
+                image = images[..., :3].clamp(0, 1) * keep
+                wanted_colour = picture.to(device).float() / 255 * keep
+                loss = settings.fix_weight * (
+                    0.8 * F.l1_loss(image, wanted_colour) + 0.2 * (1 - ssim(image, wanted_colour))
+                )
+            else:
+                index = training[torch.randint(len(training), (1,)).item()]
+                target = loaded[index][0].to(device, non_blocking=True).float() / 255
+                inverse = targets[index]
+                guiding = settings.depth_weight > 0 and inverse is not None
+                image, depth, info = render(index, sh_now, guiding)
+                loss = 0.8 * F.l1_loss(image, target) + 0.2 * (1 - ssim(image, target))
             loss = (
                 loss
                 + 0.01 * torch.sigmoid(params["opacities"]).mean()
@@ -219,6 +314,8 @@ def train_splat(
             if number % 100 == 0 or number == steps - 1:
                 splats = len(params["means"])
                 step(number + 1, steps, f"{splats:,} splats, loss {loss.item():.4f}")
+            if number in round_after:
+                repair_round(number, round_after[number])
 
         (out / "previews").mkdir(parents=True, exist_ok=True)
         scores = []
@@ -259,6 +356,8 @@ def train_splat(
                 ).sum()
             ),
             "psnr_db": round(float(np.mean(scores)), 2) if scores else None,
+            # Difix3D+ repair rounds (#215), each with how much of its views the splat covered.
+            "fix_rounds": repaired,
         }
     except torch.cuda.OutOfMemoryError as exc:
         raise OutOfGpuMemory(str(exc)) from exc
