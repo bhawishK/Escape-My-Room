@@ -83,12 +83,12 @@ test('a video of another type is refused with the reason, before anything is sen
 test('a MOV the browser gives no type is still sent as a MOV', async ({ page }) => {
   const video = await openVideo(page);
   await video.getByLabel('Choose video').setInputFiles({
-    name: 'untyped.MOV', mimeType: '', buffer: fixtureVideo(12, 70 * 1024),
+    name: 'untyped.MOV', mimeType: '', buffer: fixtureVideo(25, 70 * 1024),
   });
   await video.getByRole('button', { name: 'Upload video' }).click();
 
   await expect(video.getByRole('list', { name: 'Saved videos' }).getByRole('listitem').first())
-    .toContainText('untyped.MOV · 12 s · 1080 × 1920');
+    .toContainText('untyped.MOV · 25 s · 1080 × 1920');
 });
 
 test('when the answer to finishing is lost, the page asks again and the video is saved once', async ({ page }) => {

@@ -72,11 +72,22 @@
             <li>Film each end of the room both ways: walk there, turn round, and walk back. The phone finds its place in the room from these views.</li>
             <li>Keep it under 5 minutes.</li>
           </ul>
+          <button id="film-with-coach" hidden>Film with coach</button>
           <div class="button-row">
             <label class="file-button secondary">Record video<input id="video-camera" type="file" accept="video/*" capture="environment" /></label>
             <label class="file-button secondary">Choose video<input id="video-input" type="file" accept="video/*" /></label>
           </div>
           <p id="video-selected" data-testid="video-selected" hidden></p>
+          <div id="coach" class="coach" role="dialog" aria-modal="true" aria-label="Filming coach" data-min-seconds="20" hidden>
+            <video id="coach-camera" class="coach-camera" playsinline muted autoplay></video>
+            <p id="coach-prompt" class="coach-prompt" role="status" hidden></p>
+            <canvas id="coach-ring" class="coach-ring" width="96" height="96" aria-label="Directions filmed" role="img"></canvas>
+            <div class="coach-controls">
+              <button id="coach-cancel" class="secondary">Cancel</button>
+              <p id="coach-time" class="coach-time">0:00</p>
+              <button id="coach-record">Record</button>
+            </div>
+          </div>
           <label for="video-instructions">Room instructions</label>
           <textarea id="video-instructions" rows="3" placeholder="Describe the room and the objects that matter."></textarea>
           <button id="upload-video" disabled>Upload video</button>

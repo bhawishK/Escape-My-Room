@@ -36,6 +36,7 @@ from backend.captures import (
 from backend.delivery import Outbox
 from backend.env_file import load_env_file
 from backend.errors import Refusal
+from backend.filming_check import CheckRequest, FilmingChecks
 from backend.furniture import Catalogue
 from backend.furniture_generation import (
     FurnitureGeneration,
@@ -307,6 +308,14 @@ def create_app(
 
     # Read once, so a mistake in the settings stops the server at start-up with its reason.
     voice_config = voice_config_from_environment()
+
+    # The filming coach's check (#100): Qwen looks at a small frame, within each recording's budget.
+    filming_checks = FilmingChecks.from_environment()
+
+    @app.post("/api/coach/check")
+    def coach_check(request: CheckRequest) -> dict[str, str | None]:
+        """A prompt for the frame being filmed, or none; failures are quiet (#100)."""
+        return filming_checks.check(request)
 
     @app.get("/api/voice/config")
     def voice_settings() -> dict[str, Any]:

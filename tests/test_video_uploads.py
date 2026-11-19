@@ -152,6 +152,22 @@ def test_a_video_too_long_is_refused_and_leaves_no_capture(service: str) -> None
     assert httpx.get(f"{service}/api/captures", timeout=5).json()["captures"] == []
 
 
+def test_a_video_too_short_for_a_room_is_refused_with_the_reason(service: str) -> None:
+    # A few seconds can't show a whole room (#100); the coach's recording is refused the same way.
+    video = fixture_video(seconds=8)
+    upload = start(service, video).json()
+    for number, part in enumerate(chunks(video)):
+        send(service, upload["id"], number, part)
+
+    done = httpx.post(f"{service}/api/videos/{upload['id']}/complete", json={}, timeout=5)
+
+    assert done.status_code == 422
+    assert done.json()["detail"] == (
+        "room.mov is 8 s long; film at least 20 s, walking round the whole room."
+    )
+    assert httpx.get(f"{service}/api/captures", timeout=5).json()["captures"] == []
+
+
 def test_a_chunk_of_the_wrong_size_is_refused(service: str) -> None:
     upload = start(service, fixture_video()).json()
 
