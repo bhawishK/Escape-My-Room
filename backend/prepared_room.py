@@ -93,6 +93,8 @@ class SceneEntity(WireModel):
     furniture: str | None = None
     # How many times its catalogue size a placed piece is drawn (#202); `size` is already scaled.
     scale: float = Field(default=1.0, gt=0, le=100)
+    # A static object physics treats as solid (#211); off, it isn't simulated, as before.
+    solid: bool = False
 
 
 def floor_pieces(entities: list[SceneEntity]) -> list[SceneEntity]:
@@ -270,6 +272,8 @@ class RoomEntity(WireModel):
     size: EntitySize
     position: Position
     physics: PhysicsMaterial | None = None
+    # A static object physics treats as solid (#211); off, it isn't simulated, as before.
+    solid: bool = False
 
 
 class PreparedRoom(WireModel):
@@ -303,6 +307,8 @@ class AssetEntity(WireModel):
     position: Position
     rotation: Rotation
     physics: PhysicsMaterial | None = None
+    # A static object physics treats as solid (#211); off, it isn't simulated, as before.
+    solid: bool = False
 
 
 # A splat file in the room's folder.
@@ -408,6 +414,7 @@ def _load_legacy(directory: Path, room: PreparedRoom) -> LoadedRoom:
                 position=entity.position,
                 rotation=Rotation(),
                 physics=entity.physics,
+                solid=entity.solid,
             )
             for entity in room.entities
         ],
@@ -457,6 +464,7 @@ def _load_scene(directory: Path, scene: PreparedScene) -> LoadedRoom:
                 position=entity.position,
                 rotation=entity.rotation,
                 physics=entity.physics,
+                solid=entity.solid,
             )
             for entity in scene.entities
         ],
