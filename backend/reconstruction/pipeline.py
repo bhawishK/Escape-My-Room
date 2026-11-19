@@ -41,6 +41,13 @@ class Settings:
     min_start_splats: int = 50_000
     # Splat training's share of the GPU, so the positioning service (#133) keeps its own.
     memory_budget_gb: float = 5.5
+    # Depth guidance (#209): the weight of the L1 between the splat's rendered inverse depth and
+    # each frame's monocular depth fitted to metres; 0 trains on colour alone.
+    depth_weight: float = 0.0
+    # Needles (#209): the weight of the penalty on splats whose longest axis is more than
+    # `max_anisotropy` times their middle one; 0 lets them stretch.
+    anisotropy_weight: float = 0.0
+    max_anisotropy: float = 10.0
 
 
 @dataclass

@@ -10,6 +10,7 @@ from typing import Any
 
 import numpy as np
 
+from backend.reconstruction.depth_prior import training_size
 from backend.reconstruction.levelling import Camera
 from backend.reconstruction.pipeline import Settings, Step
 from backend.reconstruction.splat import OutOfGpuMemory, read_ply, write_ply
@@ -23,10 +24,15 @@ def train_splat(
     settings: Settings,
     out: Path,
     step: Step,
+    depths: Path | None = None,
 ) -> dict[str, Any]:
     """Train a splat on the frames (needs CUDA, torch and gsplat), then write `out/room.ply` and
     held-out previews in `out/previews/`. Frames are shrunk to `settings.long_side` if larger.
-    Running past `settings.memory_budget_gb` raises OutOfGpuMemory."""
+    Running past `settings.memory_budget_gb` raises OutOfGpuMemory.
+
+    With `depths`, a folder of each frame's depth in metres (`monodepth`), the rendered inverse
+    depth is pulled toward it by `settings.depth_weight` (#209). `settings.anisotropy_weight`
+    penalises splats longer than `settings.max_anisotropy` times their middle axis."""
     import torch
     import torch.nn.functional as F
     from gsplat import rasterization
@@ -44,8 +50,7 @@ def train_splat(
 
     def load(camera: Camera) -> tuple[torch.Tensor, torch.Tensor, int, int]:
         image = Image.open(camera["path"]).convert("RGB")
-        factor = min(1.0, settings.long_side / max(image.size))
-        width, height = round(image.width * factor), round(image.height * factor)
+        width, height, factor = training_size(image.width, image.height, settings.long_side)
         if factor < 1:
             image = image.resize((width, height), Image.Resampling.LANCZOS)
         K = camera["K"].copy()
@@ -59,6 +64,18 @@ def train_splat(
 
     try:
         loaded = [load(camera) for camera in cameras]
+        # Each frame's inverse depth in metres, where its fit gave one (#209); None for none.
+        targets: list[torch.Tensor | None] = []
+        for camera in cameras:
+            file = depths / f"{camera['name']}.npz" if depths else None
+            if file is None or not file.is_file():
+                targets.append(None)
+                continue
+            depth = torch.from_numpy(np.load(file)["depth"].astype(np.float32))
+            targets.append(
+                torch.where(depth > 0, 1 / depth.clamp_min(1e-3), torch.zeros_like(depth))
+            )
+        guided = sum(target is not None for target in targets)
         viewmats = [
             torch.tensor(np.linalg.inv(c["camera_to_world"]), dtype=torch.float32, device=device)
             for c in cameras
@@ -129,7 +146,10 @@ def train_splat(
         strategy.check_sanity(params, optimizers)
         state = strategy.initialize_state()
 
-        def render(index: int, sh_degree: int) -> tuple[torch.Tensor, dict]:
+        def render(
+            index: int, sh_degree: int, with_depth: bool = False
+        ) -> tuple[torch.Tensor, torch.Tensor | None, dict]:
+            """The frame's colours and, `with_depth`, its expected depth (gsplat's RGB+ED)."""
             _, K, width, height = loaded[index]
             colours_sh = torch.cat([params["sh0"], params["shN"]], dim=1)
             images, _, info = rasterization(
@@ -144,8 +164,10 @@ def train_splat(
                 height,
                 sh_degree=sh_degree,
                 packed=False,
+                render_mode="RGB+ED" if with_depth else "RGB",
             )
-            return images[0].clamp(0, 1), info
+            depth = images[0, ..., 3] if with_depth else None
+            return images[0, ..., :3].clamp(0, 1), depth, info
 
         def ssim(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
             x, y = a.permute(2, 0, 1)[None], b.permute(2, 0, 1)[None]
@@ -165,13 +187,27 @@ def train_splat(
         for number in range(steps):
             index = training[torch.randint(len(training), (1,)).item()]
             target = loaded[index][0].to(device, non_blocking=True).float() / 255
-            image, info = render(index, min(number // 1000, degree))
+            inverse = targets[index]
+            guiding = settings.depth_weight > 0 and inverse is not None
+            image, depth, info = render(index, min(number // 1000, degree), guiding)
             loss = 0.8 * F.l1_loss(image, target) + 0.2 * (1 - ssim(image, target))
             loss = (
                 loss
                 + 0.01 * torch.sigmoid(params["opacities"]).mean()
                 + 0.01 * torch.exp(params["scales"]).mean()
             )
+            if guiding and depth is not None and inverse is not None:
+                # L1 in inverse depth, where the fit gave a depth and the splat drew something.
+                wanted = inverse.to(device, non_blocking=True)
+                valid = (wanted > 0) & (depth > 1e-3)
+                if valid.any():
+                    rendered = 1 / depth[valid].clamp_min(1e-3)
+                    loss = loss + settings.depth_weight * (rendered - wanted[valid]).abs().mean()
+            if settings.anisotropy_weight > 0:
+                # needle_excess, in torch: the longest axis past the limit times the middle one.
+                extents = torch.exp(params["scales"]).sort(dim=1).values
+                excess = (extents[:, 2] / extents[:, 1] - settings.max_anisotropy).clamp_min(0)
+                loss = loss + settings.anisotropy_weight * excess.mean()
             loss.backward()
             for optimizer in optimizers.values():
                 optimizer.step()
@@ -189,7 +225,7 @@ def train_splat(
         with torch.no_grad():
             for shown, index in enumerate(held_out):
                 target = loaded[index][0].to(device).float() / 255
-                image, _ = render(index, degree)
+                image, _, _ = render(index, degree)
                 scores.append(float(-10 * torch.log10(F.mse_loss(image, target))))
                 if shown < 4:
                     pair = torch.cat([target, image], dim=1).mul(255).byte().cpu().numpy()
@@ -210,6 +246,18 @@ def train_splat(
             "scene_scale": scene_scale,
             "peak_gpu_memory_gb": round(torch.cuda.max_memory_allocated() / 1024**3, 2),
             "held_out_frames": len(held_out),
+            "depth_guided_frames": guided if settings.depth_weight > 0 else 0,
+            "depth_weight": settings.depth_weight,
+            "anisotropy_weight": settings.anisotropy_weight,
+            "max_anisotropy": settings.max_anisotropy,
+            # Splats more than `max_anisotropy` times longer than their middle axis, at the end.
+            "needles": int(
+                (
+                    torch.exp(params["scales"]).sort(dim=1).values[:, 2]
+                    / torch.exp(params["scales"]).sort(dim=1).values[:, 1]
+                    > settings.max_anisotropy
+                ).sum()
+            ),
             "psnr_db": round(float(np.mean(scores)), 2) if scores else None,
         }
     except torch.cuda.OutOfMemoryError as exc:

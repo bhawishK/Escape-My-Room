@@ -46,13 +46,26 @@ def video_to_room(video: Path, out: Path) -> list[Stage]:
         transform, report = level_room(points, cameras, context.settings.camera_height_m)
         return report | {"transform": transform.tolist()}
 
+    def depth(context: StageContext) -> Report:
+        s = context.settings
+        target = context.work / "depth"
+        if s.depth_weight <= 0:
+            return {"skipped": "depth_weight is 0"}
+        from backend.reconstruction.monodepth import write_depth_priors
+
+        cameras, points, _ = levelled_scene(context)
+        return write_depth_priors(cameras, points, target, s.long_side, context.step)
+
     def splat(context: StageContext) -> Report:
         from backend.reconstruction.splat import train_within_budget
         from backend.reconstruction.training import train_splat
 
         cameras, points, colours = levelled_scene(context)
+        depths = context.work / "depth" if context.settings.depth_weight > 0 else None
         training, memory = train_within_budget(
-            lambda settings: train_splat(cameras, points, colours, settings, out, context.step),
+            lambda settings: train_splat(
+                cameras, points, colours, settings, out, context.step, depths
+            ),
             context.settings,
         )
         return training | {"memory": memory}
@@ -130,6 +143,7 @@ def video_to_room(video: Path, out: Path) -> list[Stage]:
             (out / "work" / "colmap" / "undistorted",),
         ),
         Stage("level", level, ("camera_height_m",)),
+        Stage("depth", depth, ("long_side", "depth_weight")),
         Stage(
             "splat",
             splat,
@@ -141,6 +155,9 @@ def video_to_room(video: Path, out: Path) -> list[Stage]:
                 "holdout_every",
                 "min_start_splats",
                 "memory_budget_gb",
+                "depth_weight",
+                "anisotropy_weight",
+                "max_anisotropy",
             ),
             (out / "room.ply",),
         ),
