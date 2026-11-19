@@ -46,14 +46,15 @@ PhysicsState = Literal["starting", "running", "unavailable"]
 
 
 def body_for(entity: SceneEntity, epoch: int) -> dict[str, Any] | None:
-    """An entity's simulated body, where it is now: the floor is static, and movable objects,
-    placed furniture (#181) among them, are dynamic. None for the room's own static objects."""
+    """An entity's simulated body, where it is now: the floor and the room's furniture marked
+    solid (#211) are static, and movable objects, placed furniture (#181) among them, are dynamic.
+    None for the room's other static objects."""
     if entity.kind == "movable":
         motion = "dynamic"
-    elif entity.size.height <= FLOOR_THICKNESS:
+    elif entity.size.height <= FLOOR_THICKNESS or entity.solid:
         motion = "static"
     else:
-        # The room's own static furniture isn't a collider yet (#159, out of scope).
+        # Not marked solid: the room's own furniture isn't simulated (#159).
         return None
     return {
         "id": entity.id,
