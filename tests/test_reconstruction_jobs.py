@@ -14,7 +14,7 @@ from conftest import StartService
 from test_video_uploads import chunks, fixture_video
 
 ROOT = Path(__file__).resolve().parents[1]
-STAGES = ["frames", "colmap", "level", "splat", "vps_map", "package"]
+STAGES = ["frames", "colmap", "level", "depth", "splat", "vps_map", "package"]
 FAKE = [sys.executable, str(ROOT / "tests" / "fake_reconstruction.py")]
 
 
@@ -82,7 +82,7 @@ def test_a_room_video_becomes_a_reconstruction_to_review(service: str) -> None:
     assert finished["config"]["worker"] == "reconstruction"
     assert finished["input"]["capture_id"] == capture["id"]
     assert finished["input"]["image_sha256"] == [capture["sha256"]]
-    assert [stage["status"] for stage in finished["stages"]] == ["done"] * 6
+    assert [stage["status"] for stage in finished["stages"]] == ["done"] * len(STAGES)
     assert finished["reconstruction"] == {
         "video": "hallway.mov",
         "frames": 120,
@@ -96,7 +96,7 @@ def test_a_room_video_becomes_a_reconstruction_to_review(service: str) -> None:
         "report": "reconstruction/report.json",
         "previews": ["reconstruction/previews/frame_0000.jpg.jpg"],
     }
-    splat_stage = finished["stages"][3]
+    splat_stage = next(s for s in finished["stages"] if s["name"] == "splat")
     assert [a["path"] for a in splat_stage["artifacts"]] == [
         "reconstruction/work/stages/splat.json"
     ]
@@ -114,7 +114,7 @@ def test_training_steps_show_on_the_job_while_it_runs(
         seen: dict[str, Any] | None = None
         deadline = time.monotonic() + 30
         while seen is None and time.monotonic() < deadline:
-            splat = job(url, submitted["id"])["stages"][3]
+            splat = next(s for s in job(url, submitted["id"])["stages"] if s["name"] == "splat")
             if splat["status"] == "running" and splat["step"]:
                 seen = splat
             time.sleep(0.05)
@@ -123,7 +123,7 @@ def test_training_steps_show_on_the_job_while_it_runs(
         assert seen["total"] == 3
         assert seen["message"] == f"{seen['step'] * 1000:,} splats"
         assert seen["elapsed_seconds"] >= 0
-        assert [s["status"] for s in job(url, submitted["id"])["stages"][:3]] == ["done"] * 3
+        assert [s["status"] for s in job(url, submitted["id"])["stages"][:4]] == ["done"] * 4
 
 
 @pytest.mark.parametrize(
@@ -183,7 +183,7 @@ def test_a_restart_during_training_resumes_the_job_without_redoing_finished_stag
     with start_service(tmp_path, **slow) as url:
         submitted = submit(url, save_video(url))
         deadline = time.monotonic() + 30
-        while job(url, submitted["id"])["stages"][3]["status"] != "running":
+        while job(url, submitted["id"])["stages"][STAGES.index("splat")]["status"] != "running":
             assert time.monotonic() < deadline, "Training never started."
             time.sleep(0.05)
     # The service is gone, and the pipeline it started stopped with it.
@@ -194,9 +194,18 @@ def test_a_restart_during_training_resumes_the_job_without_redoing_finished_stag
 
     assert finished["state"] == "awaiting_review", finished["error"]
     ran = (tmp_path / "jobs" / submitted["id"] / "reconstruction" / "ran.txt").read_text()
-    assert ran.split() == ["frames", "colmap", "level", "splat", "splat", "vps_map", "package"]
+    assert ran.split() == [
+        "frames",
+        "colmap",
+        "level",
+        "depth",
+        "splat",
+        "splat",
+        "vps_map",
+        "package",
+    ]
     # Stages finished before the restart keep the time they took then, about 0.5 s each.
-    assert all(stage["elapsed_seconds"] >= 0.4 for stage in finished["stages"][:3])
+    assert all(stage["elapsed_seconds"] >= 0.4 for stage in finished["stages"][:4])
 
 
 def test_training_that_runs_out_of_memory_once_is_trained_again_and_says_so(
@@ -204,7 +213,7 @@ def test_training_that_runs_out_of_memory_once_is_trained_again_and_says_so(
 ) -> None:
     with start_service(tmp_path, **settings(FAKE_RECONSTRUCTION_OUT_OF_MEMORY="once")) as url:
         finished = wait_until_finished(url, submit(url, save_video(url))["id"])
-        [report] = finished["stages"][3]["artifacts"]
+        [report] = finished["stages"][STAGES.index("splat")]["artifacts"]
         splat = httpx.get(
             f"{url}/api/preparations/{finished['id']}/files/{report['path']}", timeout=5
         ).json()

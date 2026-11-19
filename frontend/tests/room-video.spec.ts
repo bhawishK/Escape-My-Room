@@ -124,9 +124,9 @@ test('reconstructing a saved video shows each stage, the live training steps, th
 
   const stages = video.getByRole('list', { name: 'Reconstruction stages' }).getByRole('listitem');
   await expect(stages).toHaveText([
-    /^Frames · /, /^COLMAP · /, /^Levelling · /, /^Splat training · /, /^Positioning map · /, /^Package · /,
+    /^Frames · /, /^COLMAP · /, /^Levelling · /, /^Depth · /, /^Splat training · /, /^Positioning map · /, /^Package · /,
   ]);
-  await expect(stages.nth(3)).toContainText(/step [123] of 3 · [123],000 splats/);
+  await expect(stages.nth(4)).toContainText(/step [123] of 3 · [123],000 splats/);
   await expect(video.getByTestId('reconstruction-state')).toHaveText('Awaiting review', { timeout: 15_000 });
   await expect(stages.nth(0)).toHaveText(/^Frames · done in \d+\.\d s$/);
   await expect(video.getByTestId('reconstruction-summary')).toHaveText(

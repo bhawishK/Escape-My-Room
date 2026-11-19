@@ -95,10 +95,13 @@ def reconstruct(
 
 
 def load_scene(folder: Path) -> tuple[list[Camera], np.ndarray, np.ndarray]:
-    """Cameras (intrinsics, camera-to-world, image path) and coloured points of a model."""
+    """Cameras (intrinsics, camera-to-world, image path, and `seen`: the indices of the points
+    the frame observed) and coloured points of a model."""
     import pycolmap
 
     model = pycolmap.Reconstruction(folder / "sparse")
+    ids = list(model.points3D.keys())
+    index = {point_id: number for number, point_id in enumerate(ids)}
     cameras = []
     for image in sorted(model.images.values(), key=lambda image: image.name):
         if not image.has_pose:
@@ -115,10 +118,13 @@ def load_scene(folder: Path) -> tuple[list[Camera], np.ndarray, np.ndarray]:
                 "height": camera.height,
                 "K": np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]),
                 "camera_to_world": np.linalg.inv(world_to_camera),
+                "seen": np.array(
+                    [index[p.point3D_id] for p in image.points2D if p.has_point3D()], dtype=int
+                ),
             }
         )
-    points = np.array([point.xyz for point in model.points3D.values()])
-    colours = np.array([point.color for point in model.points3D.values()], dtype=np.uint8)
+    points = np.array([model.points3D[point_id].xyz for point_id in ids])
+    colours = np.array([model.points3D[point_id].color for point_id in ids], dtype=np.uint8)
     return cameras, points, colours
 
 

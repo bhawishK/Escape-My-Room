@@ -46,6 +46,8 @@ class View:
     fov_degrees: float = 60.0
     width: int = 640
     height: int = 480
+    # The colour behind the splat, as #rrggbb; None for the render page's dark grey (#206).
+    background: str | None = None
 
 
 @dataclass(frozen=True)

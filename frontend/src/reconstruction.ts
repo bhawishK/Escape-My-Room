@@ -7,7 +7,7 @@ import { element } from './dom';
 import type { LiveRoom } from './live-room';
 import type { VideoCaptureSummary } from './room-video';
 
-type StageName = 'frames' | 'colmap' | 'level' | 'splat' | 'vps_map' | 'package';
+type StageName = 'frames' | 'colmap' | 'level' | 'depth' | 'splat' | 'vps_map' | 'package';
 
 interface Stage {
   name: StageName;
@@ -42,6 +42,8 @@ const STAGE_NAMES: Record<StageName, string> = {
   frames: 'Frames',
   colmap: 'COLMAP',
   level: 'Levelling',
+  // Each frame's depth for training (#209); skipped unless depth guidance is on.
+  depth: 'Depth',
   splat: 'Splat training',
   vps_map: 'Positioning map',
   package: 'Package',
