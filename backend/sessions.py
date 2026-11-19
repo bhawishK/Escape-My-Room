@@ -55,6 +55,8 @@ LARGEST_SCALE = 3.0
 # A carried object sits where the screen's centre meets the floor, no nearer or further than this.
 CARRY_NEAREST = 0.3
 CARRY_FARTHEST = 4.0
+# An object physics has this far below the floor got out of the room and is put back (#213).
+FALLEN_BELOW = 1.0
 # The physics status before the server has started its worker: a worker not yet started.
 NO_PHYSICS = PhysicsWorker(lambda: None).status()
 
@@ -72,6 +74,32 @@ class Manipulation:
     sequence: int | None = None
     # Box position in the headset grip's local frame. None for a phone hold.
     offset: tuple[float, float, float] | None = None
+
+
+def in_room(
+    entity: SceneEntity,
+    where: tuple[float, float, float],
+    entities: list[SceneEntity],
+    floor_level: bool = True,
+) -> Position:
+    """`where` for the entity's bottom centre, kept in the room: whole on the floor's rectangle
+    and, with `floor_level`, no lower than its top. Any place for a room without a floor, within
+    the protocol's ±100 m."""
+    x, y, z = where
+    bounds = floor_bounds(entities)
+    if bounds is not None:
+        margin = max(entity.size.width, entity.size.depth) / 2
+        min_x, max_x, min_z, max_z = bounds
+        x = max(min_x + margin, min(max_x - margin, x))
+        z = max(min_z + margin, min(max_z - margin, z))
+    floor = floor_top(entities) if floor_level else None
+    if floor is not None:
+        y = max(floor, y)
+
+    def bounded(value: float) -> float:
+        return max(-100, min(100, value))
+
+    return Position(x=bounded(x), y=bounded(y), z=bounded(z))
 
 
 @dataclass
@@ -571,8 +599,22 @@ class PrototypeRoom:
                 entity = next((entity for entity in self.entities if entity.id == pose["id"]), None)
                 if entity is None:
                     continue
-                entity.position = Position.model_validate(pose["position"])
                 entity.rotation = Rotation.model_validate(pose["rotation"])
+                where = pose["position"]
+                entity.position = in_room(
+                    entity, (where["x"], where["y"], where["z"]), [], floor_level=False
+                )
+                floor = floor_top(self.entities)
+                if floor is not None and where["y"] < floor - FALLEN_BELOW:
+                    # It got out of the room and fell (#213): back on the floor where it left.
+                    entity.position = in_room(
+                        entity, (where["x"], floor, where["z"]), self.entities
+                    )
+                    spot = free_spot(entity, entity.position, self.entities)
+                    if spot is not None:
+                        entity.position = spot
+                    if self.physics is not None:
+                        self.physics.place(entity)
             self.revision += 1
             await self.broadcast()
 
@@ -649,18 +691,8 @@ class PrototypeRoom:
         x = phone.x - math.sin(heading) * distance
         z = phone.z - math.cos(heading) * distance
         entity = self.entity(held.entity)
-        bounds = floor_bounds(self.entities)
-        if bounds is not None:
-            # Aimed past the floor's edge, the object stays whole on the floor.
-            margin = max(entity.size.width, entity.size.depth) / 2
-            min_x, max_x, min_z, max_z = bounds
-            x = max(min_x + margin, min(max_x - margin, x))
-            z = max(min_z + margin, min(max_z - margin, z))
-
-        def bounded(value: float) -> float:
-            return max(-100, min(100, value))
-
-        entity.position = Position(x=bounded(x), y=held.rest_y, z=bounded(z))
+        # Aimed past the floor's edge, the object stays whole on the floor.
+        entity.position = in_room(entity, (x, held.rest_y, z), self.entities, floor_level=False)
 
     def drop(self, velocity: Velocity | None = None) -> None:
         """End the hold. A phone aim falls back to its floor height; a headset grip lets go where
@@ -671,6 +703,11 @@ class PrototypeRoom:
         entity = self.entity(held.entity)
         if held.owner == "mobile_master":
             entity.position = Position(x=entity.position.x, y=held.rest_y, z=entity.position.z)
+        else:
+            # Physics' walls stop only what it moves, so a held piece can be carried through them
+            # or under the floor; let go there, it would fall forever (#213).
+            where = entity.position
+            entity.position = in_room(entity, (where.x, where.y, where.z), self.entities)
         # Let go inside another piece, it is put beside it rather than shoved out by physics (#183).
         if overlapping(entity, entity.position, self.entities):
             spot = free_spot(entity, entity.position, self.entities)
