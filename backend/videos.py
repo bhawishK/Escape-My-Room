@@ -50,6 +50,8 @@ class VideoError(Refusal):
 class VideoLimits:
     max_bytes: int = 2 * 1024**3
     max_seconds: float = 300
+    # A few seconds can't show a whole room (#100).
+    min_seconds: float = 20
     chunk_bytes: int = 8 * 1024**2
 
     @classmethod
@@ -62,6 +64,7 @@ class VideoLimits:
         return cls(
             max_bytes=int(setting("MAX_BYTES", defaults.max_bytes)),
             max_seconds=setting("MAX_SECONDS", defaults.max_seconds),
+            min_seconds=setting("MIN_SECONDS", defaults.min_seconds),
             chunk_bytes=int(setting("CHUNK_BYTES", defaults.chunk_bytes)),
         )
 
@@ -271,6 +274,13 @@ class VideoStore:
                 f"{upload.filename} is {duration_text(info.seconds)} long; "
                 f"keep it under {duration_text(self.limits.max_seconds)}.",
                 413,
+            )
+        if info.seconds < self.limits.min_seconds:
+            raise VideoError(
+                f"{upload.filename} is {duration_text(info.seconds)} long; "
+                f"film at least {duration_text(self.limits.min_seconds)}, "
+                "walking round the whole room.",
+                422,
             )
         digest = hashlib.sha256()
         with open(path, "rb") as file:

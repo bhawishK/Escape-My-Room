@@ -57,7 +57,7 @@ def repair_views(folder: Path, command: list[str] | None = None) -> list[Path]:
         raise DifixFailed(f"Difix stopped: {reason[-1] if reason else exc.returncode}") from exc
     except subprocess.TimeoutExpired as exc:
         raise DifixFailed(f"Difix took longer than {TIMEOUT_SECONDS} s") from exc
-    fixed = []
+    fixed: list[Path] = []
     for render in sorted(folder.glob("*-render.png")):
         repair = render.with_name(render.name.replace("-render", "-fixed"))
         if not repair.is_file():

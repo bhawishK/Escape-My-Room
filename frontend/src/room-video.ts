@@ -8,6 +8,7 @@
  */
 import { errorMessage } from './api';
 import { element } from './dom';
+import { FilmingRecorder, recordingType } from './filming-recorder';
 import type { RoomReconstruction } from './reconstruction';
 
 export interface VideoCaptureSummary {
@@ -115,6 +116,20 @@ export class RoomVideo {
       });
     }
     this.uploadButton.addEventListener('click', () => { void this.submit(); });
+    // The filming coach (#100), where the browser records MP4; else the camera app records.
+    const type = recordingType();
+    if (type) {
+      const coach = new FilmingRecorder(type, file => this.choose(file), reason => this.showError(reason));
+      const open = element<HTMLButtonElement>('film-with-coach');
+      open.hidden = false;
+      open.addEventListener('click', () => { void coach.open(); });
+    }
+  }
+
+  private showError(reason: string): void {
+    this.status.textContent = '';
+    this.error.textContent = reason;
+    this.error.hidden = false;
   }
 
   showSaved(videos: VideoCaptureSummary[]): void {
