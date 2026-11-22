@@ -12,6 +12,7 @@ each reply, with its tokens and cost, through `on_reply`, as `ask` does.
 
 import json
 import math
+import os
 import shutil
 import subprocess
 import tempfile
@@ -208,7 +209,9 @@ def render_views(
     dist = FRONTEND / "dist"
     if not (dist / "render.html").is_file():
         raise RenderFailure("The render page is not built: run `npm run build` in frontend.")
-    node = shutil.which("node")
+    # The Node to run, as physics chooses it (ESCAPE_ROOM_NODE, else the one on the path): a
+    # server's service may find an old system Node that can't run the render script.
+    node = os.environ.get("ESCAPE_ROOM_NODE") or shutil.which("node")
     if node is None:
         raise RenderFailure("Rendering room views needs Node.js, which was not found.")
     with tempfile.TemporaryDirectory(prefix="room-views-") as out:
