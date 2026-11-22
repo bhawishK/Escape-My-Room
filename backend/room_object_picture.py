@@ -26,9 +26,11 @@ from backend.reconstruction.splat import read_ply, write_ply
 from backend.room_views import View, render_views
 
 PICTURE_SIDE = 768
-# A little from above: level enough for the 4D step's multi-view model, high enough to show a
-# bed's or a desk's top.
-ELEVATION_DEGREES = 20.0
+# From above and from a corner, as spike #220's bed was pictured: a flat, wide object such as a bed
+# seen square on and low is a thin band the video model can't read, and it invents another object
+# (seen live, #251). 35 degrees up and 45 degrees round from the open side show its top and shape.
+ELEVATION_DEGREES = 35.0
+CORNER_DEGREES = 45.0
 FOV_DEGREES = 40.0
 # Room beyond the object's own size in the frame.
 FRAMING = 1.1
@@ -140,6 +142,16 @@ def open_side(entities: Sequence[SceneEntity], entity_id: str) -> tuple[float, f
     return best[1]
 
 
+def _turned(direction: tuple[float, float], degrees: float) -> tuple[float, float]:
+    """A floor direction turned `degrees` about the vertical."""
+    angle = math.radians(degrees)
+    x, z = direction
+    return (
+        x * math.cos(angle) + z * math.sin(angle),
+        -x * math.sin(angle) + z * math.cos(angle),
+    )
+
+
 def object_view(entity: SceneEntity, direction: tuple[float, float]) -> View:
     """Looking at the object's middle from `direction`, a little from above, framing all of it."""
     size, position = entity.size, entity.position
@@ -246,7 +258,9 @@ def object_picture(
             "Film it again with the coach."
         )
 
-    view = object_view(target, open_side(entities, entity_id))
+    # Both corners of the open side are pictured, and the one the object shows most in is kept.
+    side = open_side(entities, entity_id)
+    views = [object_view(target, _turned(side, turn)) for turn in (CORNER_DEGREES, -CORNER_DEGREES)]
     with tempfile.TemporaryDirectory(prefix="object-picture-") as folder:
         cut = Path(folder) / "object.ply"
         write_ply(
@@ -256,9 +270,13 @@ def object_picture(
                 for key in ("means", "scales", "quats", "opacities", "sh0", "shN")
             ),
         )
-        [rendered] = render_views(room_dir, [view], splat=cut)
-    image = np.asarray(Image.open(io.BytesIO(rendered.png)).convert("RGB"))
-    coverage = float((image < 245).any(axis=2).mean())
+        renders = render_views(room_dir, views, splat=cut)
+    shots = [
+        np.asarray(Image.open(io.BytesIO(rendered.png)).convert("RGB")) for rendered in renders
+    ]
+    coverages = [float((shot < 245).any(axis=2).mean()) for shot in shots]
+    best = int(np.argmax(coverages))
+    image, view, coverage = shots[best], views[best], coverages[best]
     if coverage < MIN_COVERAGE:
         raise PictureRefused(
             f"The {label} barely shows in the room's splat, so it can't be pictured well. "
