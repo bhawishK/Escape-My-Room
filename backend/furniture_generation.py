@@ -168,6 +168,7 @@ class HuggingFaceGenerator:
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "picture.png"
             path.write_bytes(picture)
+            video: Any = None
             for attempt in range(1, VIDEO_TRIES + 1):
                 try:
                     video, _seed = self.client(self.video_space).predict(
@@ -194,7 +195,9 @@ class HuggingFaceGenerator:
                         time.sleep(self.retry_seconds * attempt)
                         continue
                     raise video_failure(exc) from exc
-            made = video["video"] if isinstance(video, dict) else video
+            if video is None:
+                raise GenerationError("video")
+            made: Any = cast(dict[str, Any], video)["video"] if isinstance(video, dict) else video
             return Path(cast(str, made)).read_bytes()
 
     def animate(self, video: bytes) -> list[bytes]:
