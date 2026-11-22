@@ -129,9 +129,15 @@ def test_a_filmed_object_is_pictured_whole_on_white_from_its_open_side(tmp_path)
     assert 0.6 < longer < 0.85
     assert white.mean() > 0.1
     assert abs(xs.mean() / 768 - 0.5) < 0.1 and abs(ys.mean() / 768 - 0.5) < 0.1
-    # Seen from the room's side of it (+z), a little from above.
+    # Seen from a corner of the room's side of it (+z), 45 degrees round, from 35 degrees up: a
+    # flat object seen square on and low is a band the video model can't read (#251).
     eye = np.array(picture.view.position)
-    assert eye[2] > BLOCK["z"] and eye[1] > BLOCK["height"] / 2
+    middle = np.array(picture.view.look_at)
+    across = eye - middle
+    assert eye[2] > BLOCK["z"]
+    assert abs(math.degrees(math.atan2(abs(across[0]), across[2]))) == pytest.approx(45, abs=1)
+    up = math.degrees(math.atan2(across[1], math.hypot(across[0], across[2])))
+    assert up == pytest.approx(35, abs=1)
     assert picture.splats > 0
 
 
