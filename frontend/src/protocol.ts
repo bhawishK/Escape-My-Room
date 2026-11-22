@@ -99,6 +99,11 @@ export interface SessionState {
   revision: number;
   /** The server's clock when this state was made, for setting this device's against it (#229). */
   server_time_ms?: number;
+  /**
+   * The drill being prepared or ready (#234). The headset is told on which object and how far
+   * along; the phone only that one is coming.
+   */
+  drill?: { state: 'preparing' | 'ready' | 'failed'; entity?: string; hazard?: string; job?: string | null; hazard_id?: string | null; error?: string | null } | null;
   /** Counts pieces added to the catalogue, so pages reload it when one is made (#187). */
   catalogue_version: number;
   mobile_connected: boolean;

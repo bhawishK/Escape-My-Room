@@ -80,6 +80,14 @@ export class QuestRoom {
       idle: buttonSprite('Make it', '#2f6fc6', 'wrist:make', WRIST_BUTTON_METRES),
       busy: buttonSprite('Stop', '#c62f2f', 'wrist:make:busy', WRIST_BUTTON_METRES),
     },
+    pick: {
+      idle: buttonSprite('Choose object', '#2f6fc6', 'wrist:pick', WRIST_BUTTON_METRES),
+      busy: buttonSprite('Touch one…', '#c68a2f', 'wrist:pick:busy', WRIST_BUTTON_METRES),
+    },
+    run: {
+      idle: buttonSprite('Start', '#2f8f5f', 'wrist:run', WRIST_BUTTON_METRES),
+      busy: buttonSprite('Stop', '#c62f2f', 'wrist:run:busy', WRIST_BUTTON_METRES),
+    },
     move: { idle: buttonSprite('Move', '#2f6fc6', 'wrist:move', WRIST_BUTTON_METRES), busy: null },
     resize: { idle: buttonSprite('Resize', '#2f8f5f', 'wrist:resize', WRIST_BUTTON_METRES), busy: null },
     exit: { idle: buttonSprite('Exit VR', '#c62f2f', 'wrist:exit', WRIST_BUTTON_METRES), busy: null },
@@ -252,7 +260,7 @@ export class QuestRoom {
     items: readonly CatalogueItem[],
     menu: WristMenu | null,
     line = '',
-    busy: { speaking: boolean; making: boolean } = { speaking: false, making: false },
+    busy: { speaking: boolean; making: boolean; picking?: boolean; running?: boolean } = { speaking: false, making: false },
   ): void {
     this.palette.visible = menu !== null;
     this.container.dataset.palette = menu ? menu.page : '';
@@ -273,7 +281,10 @@ export class QuestRoom {
     this.wristLine.position.set(menu.line.x, menu.line.y, menu.line.z);
     for (const [name, { idle, busy: other }] of Object.entries(this.wristButtons) as [WristButton, { idle: THREE.Sprite; busy: THREE.Sprite | null }][]) {
       const at = menu.buttons[name];
-      const showBusy = other !== null && (name === 'speak' ? busy.speaking : name === 'make' && busy.making);
+      const busyFor: Partial<Record<WristButton, boolean | undefined>> = {
+        speak: busy.speaking, make: busy.making, pick: busy.picking, run: busy.running,
+      };
+      const showBusy = other !== null && !!busyFor[name];
       idle.visible = at !== undefined && !showBusy;
       if (other) other.visible = at !== undefined && showBusy;
       if (at) {

@@ -48,6 +48,12 @@ export class HazardFrames {
     private readonly container: HTMLElement,
     /** Every how-many frames are loaded: 1 for all, 2 for every other one on a low-end phone. */
     private readonly stride = 1,
+    /**
+     * Whether a hazard shows only while it plays (the phone, #234): loaded ahead, but the real
+     * object stays and the fire stays unseen until it starts, so the occupant isn't told what
+     * the drill will be. The headset shows a hazard as soon as it's in the room.
+     */
+    private readonly onlyWhilePlaying = false,
   ) {}
 
   /** The hazards in the session now: new ones start loading, gone ones are taken away. */
@@ -74,6 +80,7 @@ export class HazardFrames {
     let changed = false;
     for (const drawn of this.drawn.values()) {
       if (!drawn.ready) continue;
+      if (this.onlyWhilePlaying && this.reveal(drawn, drawn.hazard.playing)) changed = true;
       // The loaded frame at or before this moment's: with a stride of 2, frame 7 shows frame 6.
       const frame = Math.min(Math.floor(frameAt(drawn.hazard, serverMs) / this.stride), drawn.meshes.length - 1);
       if (frame === drawn.frame) continue;
@@ -137,6 +144,7 @@ export class HazardFrames {
       room.group.add(drawn.group);
       drawn.hiding = this.hide(spark, room, hazard.hide);
       drawn.ready = true;
+      if (this.onlyWhilePlaying) this.reveal(drawn, hazard.playing);
     } catch (error) {
       console.warn(error instanceof Error ? error.message : error);
     }
@@ -166,6 +174,16 @@ export class HazardFrames {
     return { edit, box: sdf };
   }
 
+  /** Shows or hides a hazard and its hiding of the real object; true if that changed. */
+  private reveal(drawn: Drawn, shown: boolean): boolean {
+    if (drawn.group.visible === shown) return false;
+    drawn.group.visible = shown;
+    const hiding = drawn.hiding;
+    if (hiding && 'edit' in hiding) hiding.edit.visible = shown;
+    else if (hiding) hiding.root.visible = !shown;
+    return true;
+  }
+
   private remove(id: string, drawn: Drawn): void {
     drawn.gone = true;
     drawn.group.removeFromParent();
@@ -182,7 +200,7 @@ export class HazardFrames {
 
   private showLabel(): void {
     const label = hazardsLabel([...this.drawn.values()].map(drawn => ({ id: drawn.hazard.id, ready: drawn.ready, frame: drawn.frame })));
-    const hidden = [...this.drawn.values()].filter(drawn => drawn.hiding).map(drawn => drawn.hazard.hide).join(',');
+    const hidden = [...this.drawn.values()].filter(drawn => drawn.hiding && drawn.group.visible).map(drawn => drawn.hazard.hide).join(',');
     if (label === this.label && hidden === (this.container.dataset.hazardHidden ?? '')) return;
     this.label = label;
     this.container.dataset.hazards = label;
