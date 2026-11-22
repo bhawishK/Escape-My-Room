@@ -131,6 +131,23 @@ class RemoveFurnitureMessage(WireModel):
     id: str = Field(max_length=64)
 
 
+class AddHazardMessage(WireModel):
+    """Put a finished hazard (#221) into the room, stopped (#229). Headset only."""
+
+    type: Literal["add_hazard"]
+    room_version: int = Field(ge=1)
+    asset: str = Field(max_length=64)
+
+
+class HazardControlMessage(WireModel):
+    """Start, stop or take away a hazard in the room (#229). Headset only. Starting sets one start
+    time on the server's clock for both devices; stopping clears it."""
+
+    type: Literal["start_hazard", "stop_hazard", "remove_hazard"]
+    room_version: int = Field(ge=1)
+    id: str = Field(max_length=64)
+
+
 class DesignerHandMessage(WireModel):
     """The headset's hand inside the dollhouse, in room metres, for the phone to draw as a giant
     hand (#185); null when no hand is in it. Passed to the phone only, never kept as room state."""

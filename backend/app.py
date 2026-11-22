@@ -65,11 +65,13 @@ from backend.prepared_room import (
 from backend.protocol import (
     AcquireMessage,
     AddFurnitureMessage,
+    AddHazardMessage,
     CalibrateMessage,
     ClearAlignmentMessage,
     DesignerHandMessage,
     EntityTransformMessage,
     GripMessage,
+    HazardControlMessage,
     MarkerState,
     PoseMessage,
     PresenceMessage,
@@ -115,6 +117,8 @@ type Incoming = (
     | VoiceSignalMessage
     | AddFurnitureMessage
     | RemoveFurnitureMessage
+    | AddHazardMessage
+    | HazardControlMessage
     | ResizeFurnitureMessage
     | DesignerHandMessage
 )
@@ -135,6 +139,10 @@ INCOMING: dict[str, type[Incoming]] = {
     "voice_signal": VoiceSignalMessage,
     "add_furniture": AddFurnitureMessage,
     "remove_furniture": RemoveFurnitureMessage,
+    "add_hazard": AddHazardMessage,
+    "start_hazard": HazardControlMessage,
+    "stop_hazard": HazardControlMessage,
+    "remove_hazard": HazardControlMessage,
     "resize_furniture": ResizeFurnitureMessage,
     "designer_hand": DesignerHandMessage,
 }
@@ -169,6 +177,14 @@ FURNITURE_REFUSALS = {
     "unknown": ("unknown_entity", "That room object does not exist."),
     "not_furniture": ("not_furniture", "Only placed furniture can be taken away or resized."),
     "controlled_by_other": ("controlled_by_other", "The other person is holding that piece."),
+}
+
+
+# Why a hazard message was refused (#229).
+HAZARD_REFUSALS = {
+    "mismatch": ROOM_VERSION_MISMATCH,
+    "unknown": ("unknown_hazard", "There is no such hazard."),
+    "too_many": ("too_many_hazards", "Take a hazard away before adding another."),
 }
 
 
@@ -308,6 +324,8 @@ def create_app(
         room.map = loaded.map
         room.splat_placement = loaded.splat_placement
         room.load_error = None
+        # Hazards belong to the room they were placed in.
+        room.hazards = []
         physics.load(loaded.room_version, room.entities)
         positioning.use(live_rooms.directory, loaded.splat_placement, loaded.room_version)
 
@@ -937,6 +955,28 @@ def create_app(
                             continue
                         if result != "ok":
                             await reject(*FURNITURE_REFUSALS[result])
+                            continue
+                        await room.broadcast()
+                    elif isinstance(incoming, (AddHazardMessage, HazardControlMessage)):
+                        if role != "vr_solver":
+                            await reject("role_forbidden", "Only the headset runs hazards.")
+                            continue
+                        if isinstance(incoming, AddHazardMessage):
+                            result = room.add_hazard(
+                                incoming.room_version, hazards.asset(incoming.asset)
+                            )
+                        else:
+                            result = room.control_hazard(
+                                incoming.room_version, incoming.id, incoming.type
+                            )
+                        if result == "unavailable":
+                            await reject(
+                                "room_unavailable",
+                                room.load_error or "Prepared room is unavailable.",
+                            )
+                            continue
+                        if result != "ok":
+                            await reject(*HAZARD_REFUSALS[result])
                             continue
                         await room.broadcast()
                     elif isinstance(incoming, SelectMessage):

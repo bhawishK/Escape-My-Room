@@ -205,6 +205,16 @@ class HazardGeneration:
         path = self.root / "jobs" / job_id / name
         return path if path.is_file() else None
 
+    def asset(self, asset_id: str) -> HazardAsset | None:
+        """A finished hazard kept on the server, or None if there is none by that id."""
+        if not ASSET_ID.fullmatch(asset_id):
+            return None
+        path = self.root / "hazards" / asset_id / "hazard.json"
+        try:
+            return HazardAsset.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
     def frame(self, asset_id: str, number: int) -> Path | None:
         if not ASSET_ID.fullmatch(asset_id) or number < 0:
             return None
