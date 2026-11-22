@@ -27,6 +27,9 @@ dev = [
 # Furniture made from a description with Hugging Face Spaces (#186).
 generation = [
     "gradio_client>=2,<3",
+    # The hazard video's quality gate reads and writes video (#225).
+    "numpy>=2.1,<3",
+    "opencv-python-headless>=4.10,<5",
 ]
 # The reconstruction pipeline on the GPU desktop (#135); install torch for its CUDA first, see
 # docs/reconstruction.md.

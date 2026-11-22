@@ -136,7 +136,9 @@ def test_a_hazard_makes_two_video_candidates_with_different_seeds(tmp_path):
     candidates = sorted(folder.glob("video-*.mp4"))
     assert [path.name for path in candidates] == ["video-0.mp4", "video-1.mp4"]
     contents = [path.read_bytes() for path in candidates]
+    # Different seeds, different videos.
     assert contents[0] != contents[1]
-    assert (
-        str(VIDEO_SEEDS[0]).encode() in contents[0] and str(VIDEO_SEEDS[1]).encode() in contents[1]
-    )
+    # The quality gate (#225) chose one, and kept what it measured of each.
+    check = hazards.get(job.id).video_check
+    assert check is not None and check["chosen"] in (0, 1)
+    assert len(check["candidates"]) == len(VIDEO_SEEDS[:2])

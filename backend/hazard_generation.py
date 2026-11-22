@@ -26,6 +26,7 @@ from backend.furniture_generation import (
     Generator,
     run_step,
 )
+from backend.video_gate import gate
 
 HazardState = Literal["queued", "image_ready", "video_ready", "ready", "failed", "cancelled"]
 # States a job can still be cancelled in.
@@ -83,6 +84,8 @@ class HazardJob(BaseModel):
     error: str | None = None
     image_url: str | None = None
     video_url: str | None = None
+    # The quality gate's measures for each video candidate, and which it chose (#225).
+    video_check: dict[str, object] | None = None
     asset: HazardAsset | None = None
 
 
@@ -248,9 +251,15 @@ class HazardGeneration:
                     return
             if not videos:
                 raise first_failure or GenerationError("video")
-            # Until the quality gate (#225) chooses, the first candidate is the video.
-            video = videos[0]
+            # The quality gate (#225) keeps the best candidate, trimmed and on white.
+            checked = run_step(lambda: gate(videos, picture), "video_gate", self.timeout)
+            video = checked.video
             (folder / "video.mp4").write_bytes(video)
+            with self.lock:
+                self.jobs[job_id].video_check = {
+                    "chosen": checked.chosen,
+                    "candidates": checked.candidates,
+                }
             if not self._advance(
                 job_id, "image_ready", "video_ready", video_url=f"/api/hazards/jobs/{job_id}/video"
             ):
