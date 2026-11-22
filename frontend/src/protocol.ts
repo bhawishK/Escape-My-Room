@@ -1,3 +1,4 @@
+import type { SessionHazard } from './hazard-playback';
 export type Role = 'mobile_master' | 'vr_solver';
 export type TrackingStatus = 'inactive' | 'tracked' | 'lost';
 /** Phone positions arrive in room coordinates. */
@@ -71,6 +72,8 @@ export interface RoomState {
   /** Where the splat sits: scaled, rotated, then moved; it levels a splat trained tilted. */
   splat_placement: { position: Position; rotation: Rotation; scale: number } | null;
   loaded_by: { mobile_master: number | null; vr_solver: number | null };
+  /** Hazards in the room (#229): their frames, placement, the object hidden, and when they started. */
+  hazards?: SessionHazard[];
 }
 
 export interface AlignmentState {
@@ -94,6 +97,8 @@ export const NO_PRESENCE: PresenceState = {
 
 export interface SessionState {
   revision: number;
+  /** The server's clock when this state was made, for setting this device's against it (#229). */
+  server_time_ms?: number;
   /** Counts pieces added to the catalogue, so pages reload it when one is made (#187). */
   catalogue_version: number;
   mobile_connected: boolean;
