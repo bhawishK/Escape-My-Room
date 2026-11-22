@@ -37,6 +37,7 @@ from pydantic import Field
 
 from backend.captures import CaptureStore
 from backend.errors import Refusal
+from backend.gpu import GPU
 from backend.openrouter import (
     OBJECT_LIST,
     PROMPTS,
@@ -511,7 +512,8 @@ class ReconstructionWorker:
         out = workspace.folder / RECONSTRUCTION_FOLDER
         out.mkdir(parents=True, exist_ok=True)
         failure: str | None = None
-        with open(out / "pipeline.log", "ab") as log:
+        # The GPU is taken in turn with hazards' 4D step (#226).
+        with GPU, open(out / "pipeline.log", "ab") as log:
             # The pipeline reads stdin and stops when it closes, so it never outlives this service.
             process = subprocess.Popen(
                 [*self.config.command, str(video), str(out), "--watch-stdin"],
