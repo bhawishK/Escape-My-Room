@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
@@ -55,6 +55,15 @@ function keepHazard(): void {
   }));
 }
 
+/**
+ * The id of the hazard a scene shows once all its frames are loaded and its first frame shows. The
+ * server numbers hazards and never reuses a number, so each test reads its own.
+ */
+async function readyHazard(scene: Locator): Promise<string> {
+  await expect(scene).toHaveAttribute('data-hazards', /^hazard_\d+:ready:0$/, { timeout: 30_000 });
+  return (await scene.getAttribute('data-hazards'))!.split(':')[0];
+}
+
 /** Opens the headset page on the splat room; its socket is passed through, and the test can speak on it. */
 async function headset(page: Page): Promise<(message: object) => void> {
   let speak: ((message: object) => void) | null = null;
@@ -79,22 +88,62 @@ test('a hazard added by the headset loads, hides its object, plays on start and 
 
   send({ type: 'add_hazard', room_version: 1, asset: ASSET });
   // Every frame loads before it shows; then its first frame, the object unburnt, takes the box's place.
-  await expect(scene).toHaveAttribute('data-hazards', 'hazard_1:ready:0', { timeout: 30_000 });
+  const id = await readyHazard(scene);
   await expect(scene).toHaveAttribute('data-hazard-hidden', 'box');
 
-  send({ type: 'start_hazard', room_version: 1, id: 'hazard_1' });
+  send({ type: 'start_hazard', room_version: 1, id });
   // It starts 1 s after the asking, on the server's clock, then runs through its frames.
-  await expect(scene).toHaveAttribute('data-hazards', /^hazard_1:ready:([1-9]|1\d)$/, { timeout: 5_000 });
+  await expect(scene).toHaveAttribute('data-hazards', new RegExp(`^${id}:ready:([1-9]|1\\d)$`), { timeout: 5_000 });
   // 24 frames at 16 a second end after 1.5 s; then it keeps burning on its last second (frames 8-23).
   await page.waitForTimeout(3_000);
   const late = Number((await scene.getAttribute('data-hazards'))!.split(':')[2]);
   expect(late).toBeGreaterThanOrEqual(8);
 
-  send({ type: 'stop_hazard', room_version: 1, id: 'hazard_1' });
-  await expect(scene).toHaveAttribute('data-hazards', 'hazard_1:ready:0');
+  send({ type: 'stop_hazard', room_version: 1, id });
+  await expect(scene).toHaveAttribute('data-hazards', `${id}:ready:0`);
 
-  send({ type: 'remove_hazard', room_version: 1, id: 'hazard_1' });
+  send({ type: 'remove_hazard', room_version: 1, id });
   await expect(scene).toHaveAttribute('data-hazards', '');
   await expect(scene).toHaveAttribute('data-hazard-hidden', '');
   expect(errors.filter(text => text.includes('THREE') || text.includes('hazard'))).toEqual([]);
+});
+
+/** The loaded frame a page shows for its hazard, from its scene's `data-hazards`. */
+async function shownFrame(page: Page, scene: string): Promise<number> {
+  const label = (await page.locator(scene).getAttribute('data-hazards')) ?? '';
+  return Number(label.split(':')[2]);
+}
+
+test('the phone plays the headset\'s hazard in step, every other frame on a low-end phone, under a DRILL badge', async ({ browser, page }) => {
+  test.setTimeout(120_000);
+  keepHazard();
+  const send = await headset(page);
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await phone.goto(`${ORIGIN}/?low-end`);
+  await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await expect(phone.getByTestId('connection')).toHaveText('Connected · Phone');
+  await expect(phone.locator('#scene')).toHaveAttribute('data-splat', 'shown', { timeout: 30_000 });
+  await expect(phone.getByTestId('drill-badge')).toBeHidden();
+
+  send({ type: 'add_hazard', room_version: 1, asset: ASSET });
+  const id = await readyHazard(phone.locator('#scene'));
+  await expect(phone.locator('#scene')).toHaveAttribute('data-hazard-hidden', 'box');
+  await expect(phone.getByTestId('drill-badge')).toBeVisible();
+  await expect(phone.getByTestId('drill-badge')).toHaveText(/DRILL/);
+  await expect(page.getByTestId('quest-scene')).toHaveAttribute('data-hazards', `${id}:ready:0`, { timeout: 30_000 });
+
+  send({ type: 'start_hazard', room_version: 1, id });
+  await expect(phone.locator('#scene')).toHaveAttribute('data-hazards', new RegExp(`^${id}:ready:[1-9]\\d?$`), { timeout: 5_000 });
+  // The same moment on both: the phone holds every other frame, so it shows half the headset's.
+  for (let check = 0; check < 5; check++) {
+    const [questFrame, phoneFrame] = await Promise.all([shownFrame(page, '[data-testid="quest-scene"]'), shownFrame(phone, '#scene')]);
+    expect(Math.abs(phoneFrame - Math.floor(questFrame / 2))).toBeLessThanOrEqual(1);
+    await phone.waitForTimeout(150);
+  }
+
+  send({ type: 'remove_hazard', room_version: 1, id });
+  await expect(phone.locator('#scene')).toHaveAttribute('data-hazards', '');
+  await expect(phone.locator('#scene')).toHaveAttribute('data-hazard-hidden', '');
+  await expect(phone.getByTestId('drill-badge')).toBeHidden();
+  await phone.close();
 });

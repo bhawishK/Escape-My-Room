@@ -105,6 +105,16 @@ export function hideBox(entities: readonly RoomEntity[], id: string | null): Hid
   };
 }
 
+/**
+ * Whether this is a low-end device, which loads every other hazard frame (#231): 4 GB of memory
+ * or less, as Chrome on Android reports it (Safari doesn't say), or `?low-end` in the address.
+ */
+export function lowEndDevice(): boolean {
+  if (new URLSearchParams(window.location.search).has('low-end')) return true;
+  const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  return memory !== undefined && memory <= 4;
+}
+
 /** What a page shows of its hazards for tests and diagnostics: `id:loading|ready:frame`, comma-separated. */
 export function hazardsLabel(entries: readonly { id: string; ready: boolean; frame: number }[]): string {
   return entries.map(entry => `${entry.id}:${entry.ready ? 'ready' : 'loading'}:${entry.frame}`).join(',');

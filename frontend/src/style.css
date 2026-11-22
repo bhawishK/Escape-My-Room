@@ -328,3 +328,24 @@ textarea::placeholder { color: var(--label-2); }
 .coach-controls button { min-height: 56px; }
 .coach-time { margin: 0; font-variant-numeric: tabular-nums; font-size: 1.25rem; font-weight: 600; text-align: center; }
 .coach[data-recording] #coach-record { background: var(--red); }
+
+/* While a hazard is in the room (#231): it's a drill, not a real fire. Always on top, never in the way. */
+.drill-badge {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  margin: 0;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #c62f2f;
+  color: #fff;
+  font: 600 14px/1.2 system-ui, sans-serif;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.drill-badge[hidden] {
+  display: none;
+}

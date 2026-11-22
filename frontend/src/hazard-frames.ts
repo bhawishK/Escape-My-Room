@@ -1,16 +1,18 @@
 /**
- * Hazards drawn on the headset (#230, part of #221): each hazard's 4D frames, a Spark splat per
- * frame, shown one at a time like a flip-book, and the real object they replace hidden.
+ * Hazards drawn in a room view (#230 headset, #231 phone; part of #221): each hazard's 4D frames,
+ * a Spark splat per frame, shown one at a time like a flip-book, and the real object they replace
+ * hidden.
  *
- * The frames go in the room group, in room metres, so the dollhouse (#180) shows them too, small,
- * on the same frame as at life size. The real object is hidden with Spark's splat editing: a box
+ * The frames go in the room group, in room metres, so the headset's dollhouse (#180) shows them
+ * too, small, on the same frame as at life size. A low-end phone loads every other frame and
+ * shows the nearest one loaded. The real object is hidden with Spark's splat editing: a box
  * of the room splat's splats made invisible, edited live, with no room rewritten. A room without a
  * splat hides the object's model instead.
  */
 import type { SplatMesh } from '@sparkjsdev/spark';
 import * as THREE from 'three';
-import { frameAt, frameUrl, hazardsLabel, hideBox, type SessionHazard } from '../hazard-playback';
-import type { RoomEntity } from '../protocol';
+import { frameAt, frameUrl, hazardsLabel, hideBox, type SessionHazard } from './hazard-playback';
+import type { RoomEntity } from './protocol';
 
 type Spark = typeof import('@sparkjsdev/spark');
 
@@ -44,6 +46,8 @@ export class HazardFrames {
     /** Spark, loaded the first time it is needed, with its renderer in the scene. */
     private readonly spark: () => Promise<Spark>,
     private readonly container: HTMLElement,
+    /** Every how-many frames are loaded: 1 for all, 2 for every other one on a low-end phone. */
+    private readonly stride = 1,
   ) {}
 
   /** The hazards in the session now: new ones start loading, gone ones are taken away. */
@@ -65,17 +69,26 @@ export class HazardFrames {
     this.showLabel();
   }
 
-  /** Shows each hazard's frame for this moment on the server's clock. */
-  tick(serverMs: number): void {
+  /** Shows each hazard's frame for this moment on the server's clock; true if any changed. */
+  tick(serverMs: number): boolean {
+    let changed = false;
     for (const drawn of this.drawn.values()) {
       if (!drawn.ready) continue;
-      const frame = Math.min(frameAt(drawn.hazard, serverMs), drawn.meshes.length - 1);
+      // The loaded frame at or before this moment's: with a stride of 2, frame 7 shows frame 6.
+      const frame = Math.min(Math.floor(frameAt(drawn.hazard, serverMs) / this.stride), drawn.meshes.length - 1);
       if (frame === drawn.frame) continue;
       drawn.meshes[drawn.frame].visible = false;
       drawn.meshes[frame].visible = true;
       drawn.frame = frame;
+      changed = true;
     }
     this.showLabel();
+    return changed;
+  }
+
+  /** How many hazards are in the room, loaded or not. */
+  get count(): number {
+    return this.drawn.size;
   }
 
   /** Takes every hazard away, as when the room changes. */
@@ -102,7 +115,9 @@ export class HazardFrames {
     const { hazard } = drawn;
     try {
       const spark = await this.spark();
-      const meshes = await Promise.all(Array.from({ length: hazard.frames }, async (_, n) => {
+      const loaded = Math.ceil(hazard.frames / this.stride);
+      const meshes = await Promise.all(Array.from({ length: loaded }, async (_, index) => {
+        const n = index * this.stride;
         const response = await fetch(frameUrl(hazard, n));
         if (!response.ok) throw new Error(`Frame ${n} of hazard ${hazard.id} could not be loaded.`);
         const mesh = new spark.SplatMesh({ fileBytes: await response.arrayBuffer(), fileName: `${n}.spz`, raycastable: false });
