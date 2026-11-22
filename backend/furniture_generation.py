@@ -11,6 +11,7 @@ to the catalogue, so it survives a restart and is placed like a built-in piece.
 """
 
 import io
+import logging
 import math
 import os
 import re
@@ -41,6 +42,9 @@ MAX_MODEL_BYTES = 50 * 1024 * 1024
 WAN_SPACE = (
     os.environ.get("ESCAPE_ROOM_HAZARD_VIDEO_SPACE") or "zerogpu-aoti/wan2-2-fp8da-aoti-faster"
 )
+# A Space call whose upload times out is tried this many times in all.
+VIDEO_TRIES = 3
+LOG = logging.getLogger(__name__)
 # A size asked for or guessed is kept between these, in metres.
 SMALLEST_METRES = 0.05
 LARGEST_METRES = 10.0
@@ -107,6 +111,8 @@ class HuggingFaceGenerator:
         self.token = token
         self.client = client or self._client
         self.video_space = video_space
+        # Seconds before trying a timed-out upload again, times the attempt.
+        self.retry_seconds = 5.0
 
     def _client(self, space: str) -> Any:
         from gradio_client import Client  # pyright: ignore
@@ -162,20 +168,32 @@ class HuggingFaceGenerator:
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "picture.png"
             path.write_bytes(picture)
-            try:
-                video, _seed = self.client(self.video_space).predict(
-                    input_image=handle_file(str(path)),  # pyright: ignore[reportUnknownArgumentType]
-                    prompt=prompt,
-                    steps=6,
-                    duration_seconds=3.0,
-                    guidance_scale=1,
-                    guidance_scale_2=1,
-                    seed=seed,
-                    randomize_seed=False,
-                    api_name="/generate_video",
-                )
-            except Exception as exc:  # noqa: BLE001 - a Space fails in many ways; each is reported
-                raise video_failure(exc) from exc
+            for attempt in range(1, VIDEO_TRIES + 1):
+                try:
+                    video, _seed = self.client(self.video_space).predict(
+                        input_image=handle_file(str(path)),  # pyright: ignore[reportUnknownArgumentType]
+                        prompt=prompt,
+                        steps=6,
+                        duration_seconds=3.0,
+                        guidance_scale=1,
+                        guidance_scale_2=1,
+                        seed=seed,
+                        randomize_seed=False,
+                        api_name="/generate_video",
+                    )
+                    break
+                except Exception as exc:  # noqa: BLE001 - a Space fails in many ways; each is reported
+                    LOG.warning(
+                        "Wan video attempt %d failed: %s: %s", attempt, type(exc).__name__, exc
+                    )
+                    # The upload of the picture times out now and then on a slow line: try again.
+                    if (
+                        attempt < VIDEO_TRIES
+                        and "timeout" in f"{type(exc).__name__} {exc}".lower().replace(" ", "")
+                    ):
+                        time.sleep(self.retry_seconds * attempt)
+                        continue
+                    raise video_failure(exc) from exc
             made = video["video"] if isinstance(video, dict) else video
             return Path(cast(str, made)).read_bytes()
 

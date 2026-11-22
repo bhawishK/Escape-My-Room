@@ -75,6 +75,30 @@ def test_a_used_up_quota_says_how_long_to_wait(tmp_path):
     )
 
 
+def test_an_upload_that_times_out_is_tried_again(tmp_path):
+    space = FakeSpace(tmp_path)
+    timeouts = [TimeoutError("The write operation timed out")]
+    real = space.client
+
+    def flaky(name: str):
+        client = real(name)
+        predict = client.predict
+
+        def once_slow(**kwargs):
+            if timeouts:
+                space.calls.append((name, kwargs))
+                raise timeouts.pop()
+            return predict(**kwargs)
+
+        client.predict = once_slow
+        return client
+
+    made = HuggingFaceGenerator(None, client=flaky)
+    made.retry_seconds = 0
+    assert made.video(b"picture", "the bed catches fire", seed=7).endswith(b"video 7")
+    assert len(space.calls) == 2
+
+
 def test_any_other_failure_is_a_failed_video(tmp_path):
     space = FakeSpace(
         tmp_path, RuntimeError("The current space is in the invalid state: RUNTIME_ERROR.")
