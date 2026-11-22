@@ -194,8 +194,11 @@ class RenderFailure(Exception):
     """The views could not be rendered; the message says why."""
 
 
-def render_views(room_dir: Path, views: Sequence[View]) -> list[RenderedView]:
-    """Each view of the prepared room's splat, as a PNG."""
+def render_views(
+    room_dir: Path, views: Sequence[View], splat: Path | None = None
+) -> list[RenderedView]:
+    """Each view of the prepared room's splat, as a PNG. `splat` renders another splat file in
+    the room's place instead, such as one object cut from it (#223)."""
     try:
         room = load_prepared_room(room_dir)
     except PreparedRoomError as exc:
@@ -211,8 +214,8 @@ def render_views(room_dir: Path, views: Sequence[View]) -> list[RenderedView]:
     with tempfile.TemporaryDirectory(prefix="room-views-") as out:
         request = {
             "dist": str(dist),
-            "room_dir": str(room_dir.resolve()),
-            "splat": room.splat_url.rsplit("/", 1)[-1],
+            "room_dir": str((splat.parent if splat else room_dir).resolve()),
+            "splat": splat.name if splat else room.splat_url.rsplit("/", 1)[-1],
             "placement": room.splat_placement.model_dump(),
             "views": [asdict(view) for view in views],
             "out_dir": out,
