@@ -61,7 +61,11 @@ def test_a_new_object_becomes_a_picture_then_a_video_then_4d_frames(start_servic
         assert asset["frames"] >= 2 and asset["frames_per_second"] > 0
         first = httpx.get(f"{url}{asset['frame_url'].format(n=0)}", timeout=5)
         assert first.status_code == 200
-        assert first.content.startswith(b"ply")
+        # Small SPZ (#227): gzipped, and checked against the video they came from.
+        assert first.content.startswith(b"\x1f\x8b")
+        assert asset["frame_url"].endswith("/{n}.spz")
+        assert len(asset["check"]) == 3 and min(asset["check"]) > 0
+        assert asset["size_bytes"] > 0
         last = httpx.get(f"{url}{asset['frame_url'].format(n=asset['frames'] - 1)}", timeout=5)
         assert last.status_code == 200
         past = httpx.get(f"{url}{asset['frame_url'].format(n=asset['frames'])}", timeout=5)
