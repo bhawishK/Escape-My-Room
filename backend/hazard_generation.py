@@ -10,6 +10,7 @@ step's output is kept, so a failed step still shows what came before it. A finis
 frames are kept with the server's data.
 """
 
+import os
 import re
 import threading
 import uuid
@@ -85,9 +86,26 @@ class HazardJob(BaseModel):
     asset: HazardAsset | None = None
 
 
+# What every hazard video is also asked for (#224): the 4D step needs a still camera, the same
+# object and a plain background (spike #220). The hazard is only filled in before it.
+VIDEO_TEMPLATE = (
+    "the {name} {hazard}; static camera, fixed viewpoint, the {name} itself does not change "
+    "shape or move, the plain white background stays white and still"
+)
+# Each hazard's video is made this many times, with these seeds; the quality gate (#225) keeps
+# the better. Each one uses video quota.
+VIDEO_SEEDS = (7, 11, 23, 41)
+
+
 def video_prompt(name: str, hazard: str) -> str:
-    """What the video is asked to show. #224 makes this the fixed template the quality needs."""
-    return f"the {name} {hazard}"
+    """What the video is asked to show: the hazard, then the fixed wording the quality needs."""
+    return VIDEO_TEMPLATE.format(name=name, hazard=hazard.strip().rstrip(".;,"))
+
+
+def video_candidates() -> int:
+    """How many videos each hazard makes (ESCAPE_ROOM_HAZARD_VIDEO_CANDIDATES, default 2)."""
+    chosen = int(os.environ.get("ESCAPE_ROOM_HAZARD_VIDEO_CANDIDATES") or 2)
+    return max(1, min(len(VIDEO_SEEDS), chosen))
 
 
 def no_room_picture(entity_id: str) -> bytes:
@@ -172,6 +190,10 @@ class HazardGeneration:
             except Exception:  # noqa: BLE001 - one bad job must never stop the ones after it
                 self._fail(job_id, "The hazard couldn't be made. Try again.")
 
+    def _still(self, job_id: str, state: HazardState) -> bool:
+        with self.lock:
+            return self.jobs[job_id].state == state
+
     def _advance(self, job_id: str, before: HazardState, after: HazardState, **fields: str) -> bool:
         """Move the job on a step, unless it was cancelled meanwhile."""
         with self.lock:
@@ -206,7 +228,28 @@ class HazardGeneration:
             ):
                 return
             prompt = video_prompt(name, job.hazard)
-            video = run_step(lambda: generator.video(picture, prompt), "video", self.timeout)
+            videos: list[bytes] = []
+            first_failure: GenerationError | None = None
+            for number, seed in enumerate(VIDEO_SEEDS[: video_candidates()]):
+                try:
+                    made = run_step(
+                        lambda seed=seed: generator.video(picture, prompt, seed),
+                        "video",
+                        self.timeout,
+                    )
+                except GenerationError as exc:
+                    if exc.reason == "quota":
+                        raise
+                    first_failure = first_failure or exc
+                    continue
+                (folder / f"video-{number}.mp4").write_bytes(made)
+                videos.append(made)
+                if not self._still(job_id, "image_ready"):
+                    return
+            if not videos:
+                raise first_failure or GenerationError("video")
+            # Until the quality gate (#225) chooses, the first candidate is the video.
+            video = videos[0]
             (folder / "video.mp4").write_bytes(video)
             if not self._advance(
                 job_id, "image_ready", "video_ready", video_url=f"/api/hazards/jobs/{job_id}/video"
