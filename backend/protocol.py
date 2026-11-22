@@ -148,6 +148,23 @@ class HazardControlMessage(WireModel):
     id: str = Field(max_length=64)
 
 
+class PrepareDrillMessage(WireModel):
+    """Prepare a drill on a room object (#234). Headset only. A fire already made for it in this
+    room goes into the room at once; else one is made and goes in when it is ready."""
+
+    type: Literal["prepare_drill"]
+    room_version: int = Field(ge=1)
+    entity: str = Field(max_length=64)
+    hazard: str = Field(default="catches fire", min_length=3, max_length=120)
+
+
+class CancelDrillMessage(WireModel):
+    """Call the drill off: its fire is taken out of the room and any making of one stopped."""
+
+    type: Literal["cancel_drill"]
+    room_version: int = Field(ge=1)
+
+
 class DesignerHandMessage(WireModel):
     """The headset's hand inside the dollhouse, in room metres, for the phone to draw as a giant
     hand (#185); null when no hand is in it. Passed to the phone only, never kept as room state."""

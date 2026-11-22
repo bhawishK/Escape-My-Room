@@ -56,6 +56,32 @@ HAZARD_START_LEAD_SECONDS = 1.0
 
 
 @dataclass
+class Drill:
+    """The drill being prepared or ready (#234): on which object, what happens to it, the job
+    making its fire (if one is being made) and its hazard in the room once there."""
+
+    entity: str
+    hazard: str
+    state: Literal["preparing", "ready", "failed"]
+    job: str | None = None
+    hazard_id: str | None = None
+    error: str | None = None
+
+    def wire(self, role: Role) -> dict[str, Any]:
+        # The phone learns that a drill is coming, never what it will be.
+        if role == "mobile_master":
+            return {"state": self.state}
+        return {
+            "entity": self.entity,
+            "hazard": self.hazard,
+            "state": self.state,
+            "job": self.job,
+            "hazard_id": self.hazard_id,
+            "error": self.error,
+        }
+
+
+@dataclass
 class SessionHazard:
     """A finished hazard in the room (#229): its frames, where they go and the object they hide,
     and, while it plays, when it started (milliseconds on the server's clock)."""
@@ -174,6 +200,8 @@ class PrototypeRoom:
     # Hazards in the room (#229), numbered hazard_1, hazard_2, ... never reused.
     hazards: list[SessionHazard] = field(default_factory=lambda: list[SessionHazard]())
     hazard_count: int = 0
+    # The drill being prepared or ready (#234), if any.
+    drill: Drill | None = None
     alignment: dict[Role, Alignment] = field(
         default_factory=lambda: {
             "mobile_master": Alignment(),
@@ -377,6 +405,28 @@ class PrototypeRoom:
             self.physics.remove(entity_id)
         self.revision += 1
         return "ok"
+
+    def drill_ready(self, asset: HazardAsset) -> str:
+        """The drill's fire is made or found: it goes into the room, stopped."""
+        drill = self.drill
+        if drill is None or self.room_version is None:
+            return "unknown"
+        result = self.add_hazard(self.room_version, asset)
+        if result != "ok":
+            drill.state, drill.error = "failed", "The fire couldn't be put into the room."
+            return result
+        drill.state, drill.job, drill.hazard_id = "ready", None, self.hazards[-1].id
+        return "ok"
+
+    def drop_drill(self) -> str | None:
+        """Calls the drill off: its fire leaves the room. Returns the job to stop, if any."""
+        drill = self.drill
+        if drill is None:
+            return None
+        self.hazards = [hazard for hazard in self.hazards if hazard.id != drill.hazard_id]
+        self.drill = None
+        self.revision += 1
+        return drill.job if drill.state == "preparing" else None
 
     def add_hazard(self, room_version: int, asset: HazardAsset | None) -> str:
         """Put a finished hazard into the room, stopped (#229)."""
@@ -623,9 +673,13 @@ class PrototypeRoom:
     async def broadcast(self, exclude: WebSocket | None = None) -> None:
         """Hand the newest state to each device's outbox; no device waits on another's network."""
         state = self.snapshot()
-        for outbox in list(self.outboxes.values()):
+        for role, outbox in list(self.outboxes.items()):
             if outbox.socket is not exclude:
-                outbox.publish(state)
+                outbox.publish(self.for_role(state, role))
+
+    def for_role(self, state: dict[str, Any], role: Role) -> dict[str, Any]:
+        """The state as `role` sees it: only the drill differs (#234)."""
+        return state | {"drill": None if self.drill is None else self.drill.wire(role)}
 
     def accept_presence(self, role: Role, presence: PresenceMessage) -> None:
         self.presence[role] = PresenceState(
