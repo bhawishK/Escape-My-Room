@@ -39,11 +39,13 @@ from backend.errors import Refusal
 from backend.filming_check import CheckRequest, FilmingChecks
 from backend.furniture import Catalogue
 from backend.furniture_generation import (
+    FixtureGenerator,
     FurnitureGeneration,
     GenerationRequest,
     generator_from_environment,
     timeout_from_environment,
 )
+from backend.hazard_generation import HazardGeneration, HazardRequest, no_room_picture
 from backend.live_room import LiveRoomError, LiveRooms
 from backend.physics import PhysicsWorker
 from backend.preparation import (
@@ -243,14 +245,31 @@ def create_app(
             room.revision += 1
             await room.broadcast()
 
+    # One generator for furniture and hazards (#222).
+    generator = generator_from_environment()
     generation = FurnitureGeneration(
         data / "furniture",
         catalogue,
-        generator_from_environment(),
+        generator,
         timeout_from_environment(),
         on_added=piece_added,
     )
     room = PrototypeRoom(load_error=load_error, delivery_delay=delay_ms / 1000)
+
+    def object_name(entity_id: str) -> str:
+        """A room object's name for the hazard's video: its label, as people would say it."""
+        entity = next((e for e in room.entities if e.id == entity_id), None)
+        return (entity.label if entity else entity_id.replace("_", " ")).lower()
+
+    # Hazards (#222, part of #221). Until #223 cuts pictures from the room's splat, only the
+    # fixture generator can picture an object already in the room.
+    hazards = HazardGeneration(
+        data / "hazards",
+        generator,
+        generator.room_picture if isinstance(generator, FixtureGenerator) else no_room_picture,
+        object_name,
+        timeout_from_environment(),
+    )
     # The server's one physics simulation (#159), started and stopped with the server.
     physics = PhysicsWorker(room.physics_changed, room.physics_moved)
     room.physics = physics
@@ -549,6 +568,52 @@ def create_app(
         if path is None:
             raise HTTPException(404, "That piece does not exist.")
         return FileResponse(path, media_type="model/gltf-binary")
+
+    @app.post("/api/hazards/jobs", status_code=202)
+    async def start_hazard(request: HazardRequest) -> dict[str, Any]:
+        """Make a hazard (#222): a picture, a video of the hazard, then its 3D animation."""
+        if not hazards.available:
+            raise HTTPException(503, "Making hazards isn't set up on this server.")
+        entity = request.target.entity
+        if entity is not None and not any(e.id == entity for e in room.entities):
+            raise HTTPException(422, f"There's no {entity} in the room.")
+        return hazards.start(request).model_dump()
+
+    @app.get("/api/hazards/jobs/{job_id}")
+    async def hazard_job(job_id: str) -> dict[str, Any]:
+        job = hazards.get(job_id)
+        if job is None:
+            raise HTTPException(404, "That hazard job does not exist.")
+        return job.model_dump()
+
+    @app.post("/api/hazards/jobs/{job_id}/cancel")
+    async def cancel_hazard(job_id: str) -> dict[str, Any]:
+        job = hazards.cancel(job_id)
+        if job is None:
+            raise HTTPException(404, "That hazard job does not exist.")
+        return job.model_dump()
+
+    @app.get("/api/hazards/jobs/{job_id}/image")
+    async def hazard_image(job_id: str) -> FileResponse:
+        path = hazards.file(job_id, "picture.png")
+        if path is None:
+            raise HTTPException(404, "That job has no picture yet.")
+        return FileResponse(path, media_type="image/png")
+
+    @app.get("/api/hazards/jobs/{job_id}/video")
+    async def hazard_video(job_id: str) -> FileResponse:
+        path = hazards.file(job_id, "video.mp4")
+        if path is None:
+            raise HTTPException(404, "That job has no video yet.")
+        return FileResponse(path, media_type="video/mp4")
+
+    @app.get("/api/hazards/{asset_id}/frames/{name}")
+    async def hazard_frame(asset_id: str, name: str) -> FileResponse:
+        found = re.fullmatch(r"(\d{1,4})\.ply", name)
+        path = hazards.frame(asset_id, int(found.group(1))) if found else None
+        if path is None:
+            raise HTTPException(404, "That hazard frame does not exist.")
+        return FileResponse(path, media_type="application/octet-stream")
 
     @app.get("/api/furniture/{name}")
     async def furniture_model(name: str) -> FileResponse:
