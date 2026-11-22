@@ -15,6 +15,7 @@ import re
 import threading
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -26,6 +27,7 @@ from backend.furniture_generation import (
     Generator,
     run_step,
 )
+from backend.hazard_placement import Box, Placement, place, true_size_box
 from backend.splat_frames import check, prune, read_frame, to_spz
 from backend.video_gate import gate, read_frames
 
@@ -64,6 +66,8 @@ class HazardRequest(BaseModel):
     target: HazardTarget
     # What happens to it, as the video is asked for: "catches fire".
     hazard: str = Field(min_length=3, max_length=120)
+    # Where on the floor (x, z) a new object stands; an object in the room stays where it is.
+    at: tuple[float, float] = (0.0, 0.0)
 
 
 class HazardAsset(BaseModel):
@@ -79,6 +83,11 @@ class HazardAsset(BaseModel):
     check: list[float] = Field(default_factory=lambda: [])
     # All its frames, as served (SPZ), in bytes.
     size_bytes: int = 0
+    # Where the frames go in the room, and the object they replace (#228).
+    placement: Placement | None = None
+    # How long it plays, and whether it starts again; a hazard plays once and holds its end.
+    seconds: float = 0.0
+    loops: bool = False
 
 
 class HazardJob(BaseModel):
@@ -92,6 +101,18 @@ class HazardJob(BaseModel):
     # The quality gate's measures for each video candidate, and which it chose (#225).
     video_check: dict[str, object] | None = None
     asset: HazardAsset | None = None
+    # Where a new object stands (from the request).
+    at: tuple[float, float] = (0.0, 0.0)
+
+
+@dataclass(frozen=True)
+class RoomPicture:
+    """An object in the room pictured (#223): the picture, the object's box, and the floor
+    direction from the object towards where the picture was taken from."""
+
+    png: bytes
+    box: Box
+    facing: tuple[float, float]
 
 
 # What every hazard video is also asked for (#224): the 4D step needs a still camera, the same
@@ -116,7 +137,7 @@ def video_candidates() -> int:
     return max(1, min(len(VIDEO_SEEDS), chosen))
 
 
-def no_room_picture(entity_id: str) -> bytes:
+def no_room_picture(entity_id: str) -> RoomPicture:
     """Until #223 cuts pictures from the room's splat, a room object has none."""
     raise GenerationError("room_picture")
 
@@ -128,7 +149,7 @@ class HazardGeneration:
         self,
         root: Path,
         generator: Generator | None,
-        room_picture: Callable[[str], bytes] = no_room_picture,
+        room_picture: Callable[[str], RoomPicture] = no_room_picture,
         object_name: Callable[[str], str] = lambda entity_id: entity_id.replace("_", " "),
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
@@ -150,7 +171,10 @@ class HazardGeneration:
 
     def start(self, request: HazardRequest) -> HazardJob:
         job = HazardJob(
-            id=uuid.uuid4().hex[:12], target=request.target, hazard=request.hazard.strip()
+            id=uuid.uuid4().hex[:12],
+            target=request.target,
+            hazard=request.hazard.strip(),
+            at=request.at,
         )
         with self.lock:
             self.jobs[job.id] = job
@@ -224,11 +248,13 @@ class HazardGeneration:
         try:
             if target.entity is not None:
                 entity = target.entity
-                picture = run_step(lambda: self.room_picture(entity), "room_picture", self.timeout)
+                pictured = run_step(lambda: self.room_picture(entity), "room_picture", self.timeout)
+                picture, box, facing, hide = pictured.png, pictured.box, pictured.facing, entity
                 name = self.object_name(entity)
             else:
                 description = target.description or ""
                 picture = run_step(lambda: generator.image(description), "image", self.timeout)
+                box, facing, hide = true_size_box(description, job.at), (0.0, 1.0), None
                 name = description
             (folder / "picture.png").write_bytes(picture)
             if not self._advance(
@@ -278,6 +304,7 @@ class HazardGeneration:
             except (ValueError, StopIteration) as exc:
                 raise GenerationError("animate") from exc
             scores = check(splats, read_frames(video))
+            placement = place(splats[0], box, facing, hide)
             frames = [to_spz(prune(splat)) for splat in splats]
             asset_id = f"hz_{uuid.uuid4().hex[:8]}"
             kept = self.root / "hazards" / asset_id
@@ -293,6 +320,8 @@ class HazardGeneration:
                 frame_url=f"/api/hazards/{asset_id}/frames/{{n}}.spz",
                 check=scores,
                 size_bytes=sum(len(frame) for frame in frames),
+                placement=placement,
+                seconds=round(len(frames) / FRAMES_PER_SECOND, 3),
             )
             (kept / "hazard.json").write_text(asset.model_dump_json(indent=2), encoding="utf-8")
             with self.lock:

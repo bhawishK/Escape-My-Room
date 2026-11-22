@@ -45,7 +45,8 @@ from backend.furniture_generation import (
     generator_from_environment,
     timeout_from_environment,
 )
-from backend.hazard_generation import HazardGeneration, HazardRequest
+from backend.hazard_generation import HazardGeneration, HazardRequest, RoomPicture
+from backend.hazard_placement import Box
 from backend.live_room import LiveRoomError, LiveRooms
 from backend.physics import PhysicsWorker
 from backend.preparation import (
@@ -263,10 +264,24 @@ def create_app(
         entity = next((e for e in room.entities if e.id == entity_id), None)
         return (entity.label if entity else entity_id.replace("_", " ")).lower()
 
-    def room_picture(entity_id: str) -> bytes:
-        """An object in the live room, cut from its own splat (#223), or why it can't be."""
+    def room_picture(entity_id: str) -> RoomPicture:
+        """An object in the live room, cut from its own splat (#223), or why it can't be; with
+        its box and the side it was pictured from, to place its hazard (#228)."""
         try:
-            return object_picture(live_rooms.directory, room.entities, entity_id).png
+            pictured = object_picture(live_rooms.directory, room.entities, entity_id)
+            entity = next(e for e in room.entities if e.id == entity_id)
+            eye, middle = pictured.view.position, pictured.view.look_at
+            across = (eye[0] - middle[0], eye[2] - middle[2])
+            length = math.hypot(*across) or 1.0
+            box = Box(
+                x=entity.position.x,
+                y=entity.position.y,
+                z=entity.position.z,
+                yaw=2 * math.atan2(entity.rotation.y, entity.rotation.w),
+                width=entity.size.width,
+                depth=entity.size.depth,
+            )
+            return RoomPicture(pictured.png, box, (across[0] / length, across[1] / length))
         except PictureRefused as exc:
             raise GenerationError("room_picture", str(exc)) from exc
         except RenderFailure as exc:
