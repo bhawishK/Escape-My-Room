@@ -122,11 +122,13 @@ def test_a_filmed_object_is_pictured_whole_on_white_from_its_open_side(tmp_path)
     assert image.shape == (768, 768, 3)
     red = (image[..., 0] > 140) & (image[..., 1] < 90) & (image[..., 2] < 90)
     white = (image > 245).all(axis=2)
-    # The block is in the picture, framed: neither lost nor filling it.
-    assert 0.03 < red.mean() < 0.6
-    assert white.mean() > 0.3
+    # The block fills the picture's width or height, with a margin, centred on white: drawn
+    # small, the video model zooms in and invents another object.
     ys, xs = np.nonzero(red)
-    assert abs(xs.mean() / 768 - 0.5) < 0.15 and abs(ys.mean() / 768 - 0.5) < 0.2
+    longer = max(np.ptp(xs), np.ptp(ys)) / 768
+    assert 0.6 < longer < 0.85
+    assert white.mean() > 0.1
+    assert abs(xs.mean() / 768 - 0.5) < 0.1 and abs(ys.mean() / 768 - 0.5) < 0.1
     # Seen from the room's side of it (+z), a little from above.
     eye = np.array(picture.view.position)
     assert eye[2] > BLOCK["z"] and eye[1] > BLOCK["height"] / 2

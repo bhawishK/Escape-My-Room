@@ -44,6 +44,11 @@ MIN_SPLATS = 100
 NEEDLE_RATIO = 10.0
 MAX_NEEDLE_SHARE = 0.5
 MIN_COVERAGE = 0.02
+# The picture is cut to the object, this much larger than its longer side, so it fills the frame:
+# drawn small, the video model zooms in and invents a new object (seen live on a wide bed).
+CROP_FRAMING = 1.3
+# Stray splats around the object are ignored when finding its edges: the outer 1% each way.
+CROP_QUANTILE = 0.01
 # Training packs splats onto what the video saw clearly. In room 10 the well-filmed bed was
 # 12.9 times as dense as the room's average, and the barely filmed bed, desk and chair 0.2 to 0.8
 # times, all streaks; an object must be at least this many times as dense to be pictured.
@@ -260,5 +265,19 @@ def object_picture(
             "Film it again with the coach."
         )
     out = io.BytesIO()
-    Image.fromarray(image).save(out, format="PNG")
+    cropped_to_object(image).save(out, format="PNG")
     return ObjectPicture(png=out.getvalue(), view=view, splats=count, coverage=round(coverage, 4))
+
+
+def cropped_to_object(image: np.ndarray) -> Image.Image:
+    """The picture cut to a square round the object, on white, at the picture's size."""
+    ys, xs = np.nonzero((image < 245).any(axis=2))
+    top, bottom = np.quantile(ys, [CROP_QUANTILE, 1 - CROP_QUANTILE])
+    left, right = np.quantile(xs, [CROP_QUANTILE, 1 - CROP_QUANTILE])
+    half = max(bottom - top, right - left) * CROP_FRAMING / 2
+    middle_y, middle_x = (top + bottom) / 2, (left + right) / 2
+    corner = (round(middle_x - half), round(middle_y - half))
+    side = max(1, round(2 * half))
+    canvas = Image.new("RGB", (side, side), (255, 255, 255))
+    canvas.paste(Image.fromarray(image), (-corner[0], -corner[1]))
+    return canvas.resize((PICTURE_SIDE, PICTURE_SIDE), Image.Resampling.LANCZOS)
