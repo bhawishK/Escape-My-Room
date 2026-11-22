@@ -35,7 +35,7 @@ function spzFrame(n: number): Buffer {
 }
 
 /** A finished hazard kept where the splat room's server keeps them, on its box. */
-function keepHazard(): void {
+function keepHazard(room: string | null = null): void {
   const kept = join(process.env.ESCAPE_ROOM_TEST_DATA!, '8774', 'hazards', 'hazards', ASSET);
   rmSync(kept, { recursive: true, force: true });
   mkdirSync(join(kept, 'frames'), { recursive: true });
@@ -52,6 +52,7 @@ function keepHazard(): void {
     placement: { position: [0, 0, 0], turn: 0.3, scale: 1.5, hide: 'box' },
     seconds: FRAMES / 16,
     loops: false,
+    room,
   }));
 }
 
@@ -127,13 +128,16 @@ test('the phone plays the headset\'s hazard in step, every other frame on a low-
 
   send({ type: 'add_hazard', room_version: 1, asset: ASSET });
   const id = await readyHazard(phone.locator('#scene'));
-  await expect(phone.locator('#scene')).toHaveAttribute('data-hazard-hidden', 'box');
+  // Loaded, but until it plays the phone keeps the real box and shows no fire (#234): the occupant
+  // only knows a drill is coming.
+  await expect(phone.locator('#scene')).toHaveAttribute('data-hazard-hidden', '');
   await expect(phone.getByTestId('drill-badge')).toBeVisible();
   await expect(phone.getByTestId('drill-badge')).toHaveText(/DRILL/);
   await expect(page.getByTestId('quest-scene')).toHaveAttribute('data-hazards', `${id}:ready:0`, { timeout: 30_000 });
 
   send({ type: 'start_hazard', room_version: 1, id });
   await expect(phone.locator('#scene')).toHaveAttribute('data-hazards', new RegExp(`^${id}:ready:[1-9]\\d?$`), { timeout: 5_000 });
+  await expect(phone.locator('#scene')).toHaveAttribute('data-hazard-hidden', 'box');
   // The same moment on both: the phone holds every other frame, so it shows half the headset's.
   for (let check = 0; check < 5; check++) {
     const [questFrame, phoneFrame] = await Promise.all([shownFrame(page, '[data-testid="quest-scene"]'), shownFrame(phone, '#scene')]);
@@ -144,6 +148,40 @@ test('the phone plays the headset\'s hazard in step, every other frame on a low-
   send({ type: 'remove_hazard', room_version: 1, id });
   await expect(phone.locator('#scene')).toHaveAttribute('data-hazards', '');
   await expect(phone.locator('#scene')).toHaveAttribute('data-hazard-hidden', '');
+  await expect(phone.getByTestId('drill-badge')).toBeHidden();
+  await phone.close();
+});
+
+test('the Drill panel prepares a fire on the chosen object, starts and stops it, and the phone sees it only once it runs', async ({ browser, page }) => {
+  test.setTimeout(120_000);
+  // A fire already made for the box in this room (#234): preparing finds it at once.
+  keepHazard('splat-room');
+  await headset(page);
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await phone.goto(`${ORIGIN}/`);
+  await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
+  await expect(phone.locator('#scene')).toHaveAttribute('data-splat', 'shown', { timeout: 30_000 });
+
+  const status = page.getByTestId('drill-status');
+  await expect(status).toHaveText('Choose an object for the drill');
+  await page.getByTestId('drill-object').selectOption('box');
+  await page.getByRole('button', { name: 'Prepare', exact: true }).click();
+  await expect(status).toHaveText(/^Box catches fire · ready, pinch Start$/i);
+  await expect(page.getByTestId('quest-scene')).toHaveAttribute('data-hazard-hidden', 'box', { timeout: 30_000 });
+  // The phone knows a drill is coming, not what: its box is still there.
+  await expect(phone.getByTestId('drill-badge')).toBeVisible();
+  await expect(phone.locator('#scene')).not.toHaveAttribute('data-hazard-hidden', 'box');
+
+  await page.getByRole('button', { name: 'Start', exact: true }).click();
+  await expect(status).toHaveText(/running, Stop to end$/);
+  await expect(phone.locator('#scene')).toHaveAttribute('data-hazard-hidden', 'box', { timeout: 30_000 });
+  await expect(phone.getByTestId('drill-badge')).toHaveText('DRILL · practice only, not a real fire');
+
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await expect(status).toHaveText(/ready, pinch Start$/i);
+  await page.getByRole('button', { name: 'Call off', exact: true }).click();
+  await expect(status).toHaveText('Choose an object for the drill');
+  await expect(page.getByTestId('quest-scene')).toHaveAttribute('data-hazards', '');
   await expect(phone.getByTestId('drill-badge')).toBeHidden();
   await phone.close();
 });

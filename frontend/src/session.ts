@@ -170,6 +170,24 @@ export class SessionClient {
     this.socket.send(JSON.stringify({ type: 'resize_furniture', room_version: roomVersion, id, scale, final }));
   }
 
+  /** Prepares a drill on a room object (#234): headset only. */
+  sendPrepareDrill(roomVersion: number, entity: string, hazard = 'catches fire'): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: 'prepare_drill', room_version: roomVersion, entity, hazard }));
+  }
+
+  /** Calls the drill off (#234). */
+  sendCancelDrill(roomVersion: number): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: 'cancel_drill', room_version: roomVersion }));
+  }
+
+  /** Starts, stops or takes away a hazard in the room (#229): headset only. */
+  sendHazardControl(action: 'start_hazard' | 'stop_hazard' | 'remove_hazard', roomVersion: number, id: string): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: action, room_version: roomVersion, id }));
+  }
+
   sendRemoveFurniture(roomVersion: number, id: string): void {
     if (this.socket?.readyState !== WebSocket.OPEN) return;
     this.socket.send(JSON.stringify({ type: 'remove_furniture', room_version: roomVersion, id }));

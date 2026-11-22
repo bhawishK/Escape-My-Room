@@ -46,7 +46,13 @@ from backend.furniture_generation import (
     generator_from_environment,
     timeout_from_environment,
 )
-from backend.hazard_generation import HazardGeneration, HazardRequest, RoomPicture
+from backend.hazard_generation import (
+    HazardGeneration,
+    HazardJob,
+    HazardRequest,
+    HazardTarget,
+    RoomPicture,
+)
 from backend.hazard_placement import Box
 from backend.live_room import LiveRoomError, LiveRooms
 from backend.physics import PhysicsWorker
@@ -68,6 +74,7 @@ from backend.protocol import (
     AddFurnitureMessage,
     AddHazardMessage,
     CalibrateMessage,
+    CancelDrillMessage,
     ClearAlignmentMessage,
     DesignerHandMessage,
     EntityTransformMessage,
@@ -75,6 +82,7 @@ from backend.protocol import (
     HazardControlMessage,
     MarkerState,
     PoseMessage,
+    PrepareDrillMessage,
     PresenceMessage,
     PresenceState,
     ReleaseMessage,
@@ -90,7 +98,7 @@ from backend.protocol import (
 )
 from backend.room_object_picture import PictureRefused, object_picture
 from backend.room_views import RenderFailure
-from backend.sessions import PrototypeRoom
+from backend.sessions import Drill, PrototypeRoom
 from backend.videos import (
     CompleteRequest,
     UploadRequest,
@@ -120,6 +128,8 @@ type Incoming = (
     | RemoveFurnitureMessage
     | AddHazardMessage
     | HazardControlMessage
+    | PrepareDrillMessage
+    | CancelDrillMessage
     | ResizeFurnitureMessage
     | DesignerHandMessage
 )
@@ -146,6 +156,8 @@ INCOMING: dict[str, type[Incoming]] = {
     "start_hazard": HazardControlMessage,
     "stop_hazard": HazardControlMessage,
     "remove_hazard": HazardControlMessage,
+    "prepare_drill": PrepareDrillMessage,
+    "cancel_drill": CancelDrillMessage,
     "resize_furniture": ResizeFurnitureMessage,
     "designer_hand": DesignerHandMessage,
 }
@@ -309,8 +321,33 @@ def create_app(
 
     # Hazards (#222, part of #221), each starting from a picture: an object in the room's own
     # (#223), or a new object's drawn from words.
+    def hazard_finished(job: HazardJob) -> None:
+        """A fire job ended (#234): if it was the drill's, its fire goes into the room."""
+        loop = running.get("loop")
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(lambda: room.track(drill_job_done(job)))
+
+    async def drill_job_done(job: HazardJob) -> None:
+        async with room.lock:
+            drill = room.drill
+            if drill is None or drill.job != job.id:
+                return
+            if job.state == "ready" and job.asset is not None:
+                room.drill_ready(job.asset)
+            else:
+                drill.state = "failed"
+                drill.error = job.error or "The fire couldn't be made."
+            room.revision += 1
+            await room.broadcast()
+
     hazards = HazardGeneration(
-        data / "hazards", generator, room_picture, object_name, timeout_from_environment()
+        data / "hazards",
+        generator,
+        room_picture,
+        object_name,
+        timeout_from_environment(),
+        room_name=lambda: live_rooms.directory.name,
+        on_finished=hazard_finished,
     )
     # The server's one physics simulation (#159), started and stopped with the server.
     physics = PhysicsWorker(room.physics_changed, room.physics_moved)
@@ -328,8 +365,9 @@ def create_app(
         room.map = loaded.map
         room.splat_placement = loaded.splat_placement
         room.load_error = None
-        # Hazards belong to the room they were placed in.
+        # Hazards and the drill belong to the room they were placed in.
         room.hazards = []
+        room.drill = None
         physics.load(loaded.room_version, room.entities)
         positioning.use(live_rooms.directory, loaded.splat_placement, loaded.room_version)
 
@@ -732,7 +770,7 @@ def create_app(
                     except (RuntimeError, OSError, TimeoutError):
                         pass
                 room.revision += 1
-                outbox.reply({"type": "welcome", "state": room.snapshot()})
+                outbox.reply({"type": "welcome", "state": room.for_role(room.snapshot(), role)})
                 await room.broadcast(exclude=socket)
             while True:
                 message = await socket.receive()
@@ -960,6 +998,50 @@ def create_app(
                         if result != "ok":
                             await reject(*FURNITURE_REFUSALS[result])
                             continue
+                        await room.broadcast()
+                    elif isinstance(incoming, (PrepareDrillMessage, CancelDrillMessage)):
+                        if role != "vr_solver":
+                            await reject("role_forbidden", "Only the headset runs drills.")
+                            continue
+                        if room.load_error is not None or room.room_version is None:
+                            await reject(
+                                "room_unavailable",
+                                room.load_error or "Prepared room is unavailable.",
+                            )
+                            continue
+                        if incoming.room_version != room.room_version:
+                            await reject(*ROOM_VERSION_MISMATCH)
+                            continue
+                        stopping = room.drop_drill()
+                        if stopping is not None:
+                            hazards.cancel(stopping)
+                        if isinstance(incoming, PrepareDrillMessage):
+                            if not any(e.id == incoming.entity for e in room.entities):
+                                await reject("unknown_entity", "That room object does not exist.")
+                                await room.broadcast()
+                                continue
+                            room.drill = Drill(
+                                entity=incoming.entity,
+                                hazard=incoming.hazard.strip(),
+                                state="preparing",
+                            )
+                            found = hazards.cached(
+                                live_rooms.directory.name, incoming.entity, incoming.hazard
+                            )
+                            if found is not None:
+                                room.drill_ready(found)
+                            elif not hazards.available:
+                                room.drill.state = "failed"
+                                room.drill.error = "This server can't make fires."
+                            else:
+                                made = hazards.start(
+                                    HazardRequest(
+                                        target=HazardTarget(entity=incoming.entity),
+                                        hazard=incoming.hazard,
+                                    )
+                                )
+                                room.drill.job = made.id
+                            room.revision += 1
                         await room.broadcast()
                     elif isinstance(incoming, (AddHazardMessage, HazardControlMessage)):
                         if role != "vr_solver":

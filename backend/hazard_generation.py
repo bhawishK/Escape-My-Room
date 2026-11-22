@@ -88,6 +88,8 @@ class HazardAsset(BaseModel):
     # How long it plays, and whether it starts again; a hazard plays once and holds its end.
     seconds: float = 0.0
     loops: bool = False
+    # The live room's folder it was made in (#234): a fire on a room object is reused only there.
+    room: str | None = None
 
 
 class HazardJob(BaseModel):
@@ -103,6 +105,8 @@ class HazardJob(BaseModel):
     asset: HazardAsset | None = None
     # Where a new object stands (from the request).
     at: tuple[float, float] = (0.0, 0.0)
+    # The live room's folder when the job started, for an object in the room.
+    room: str | None = None
 
 
 @dataclass(frozen=True)
@@ -152,9 +156,15 @@ class HazardGeneration:
         room_picture: Callable[[str], RoomPicture] = no_room_picture,
         object_name: Callable[[str], str] = lambda entity_id: entity_id.replace("_", " "),
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        room_name: Callable[[], str | None] = lambda: None,
+        on_finished: Callable[[HazardJob], None] = lambda job: None,
     ) -> None:
         self.root = root
         self.generator = generator
+        # The live room's folder, recorded with each fire made on one of its objects (#234).
+        self.room_name = room_name
+        # Called from the job's thread when a job ends: ready, failed or cancelled.
+        self.on_finished = on_finished
         # The picture of an object in the room, and its name for the video prompt.
         self.room_picture = room_picture
         self.object_name = object_name
@@ -175,6 +185,7 @@ class HazardGeneration:
             target=request.target,
             hazard=request.hazard.strip(),
             at=request.at,
+            room=self.room_name() if request.target.entity is not None else None,
         )
         with self.lock:
             self.jobs[job.id] = job
@@ -198,6 +209,20 @@ class HazardGeneration:
                 if job_id in self.pending:
                     self.pending.remove(job_id)
             return job.model_copy()
+
+    def cached(self, room: str, entity: str, hazard: str) -> HazardAsset | None:
+        """The newest fire already made for `entity` in `room` with this hazard, if any (#234)."""
+        found: list[tuple[float, HazardAsset]] = []
+        for path in (self.root / "hazards").glob("hz_*/hazard.json"):
+            try:
+                asset = HazardAsset.model_validate_json(path.read_text(encoding="utf-8"))
+                made = path.stat().st_mtime
+            except (OSError, ValueError):
+                continue
+            same = asset.room == room and asset.target.entity == entity
+            if same and asset.hazard == hazard.strip() and asset.placement is not None:
+                found.append((made, asset))
+        return max(found, key=lambda pair: pair[0])[1] if found else None
 
     def file(self, job_id: str, name: Literal["picture.png", "video.mp4"]) -> Path | None:
         if not JOB_ID.fullmatch(job_id):
@@ -231,6 +256,9 @@ class HazardGeneration:
                 self._make(job_id)
             except Exception:  # noqa: BLE001 - one bad job must never stop the ones after it
                 self._fail(job_id, "The hazard couldn't be made. Try again.")
+            finished = self.get(job_id)
+            if finished is not None and finished.state not in GOING:
+                self.on_finished(finished)
 
     def _still(self, job_id: str, state: HazardState) -> bool:
         with self.lock:
@@ -332,6 +360,7 @@ class HazardGeneration:
                 size_bytes=sum(len(frame) for frame in frames),
                 placement=placement,
                 seconds=round(len(frames) / FRAMES_PER_SECOND, 3),
+                room=job.room,
             )
             (kept / "hazard.json").write_text(asset.model_dump_json(indent=2), encoding="utf-8")
             with self.lock:

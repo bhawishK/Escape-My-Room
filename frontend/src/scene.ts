@@ -102,7 +102,8 @@ export class DiagnosticScene {
 
   constructor(container: HTMLElement) {
     this.container = container;
-    this.hazards = new HazardFrames(() => this.loadSpark(), container, lowEndDevice() ? 2 : 1);
+    // The phone shows a hazard only once it plays: before that, the occupant only knows a drill is coming (#234).
+    this.hazards = new HazardFrames(() => this.loadSpark(), container, lowEndDevice() ? 2 : 1, true);
     this.drillBadge.className = 'drill-badge';
     this.drillBadge.setAttribute('role', 'status');
     this.drillBadge.dataset.testid = 'drill-badge';
@@ -404,7 +405,12 @@ export class DiagnosticScene {
     const hazards = state.room?.hazards ?? [];
     if (this.hazardRoom) this.hazardRoom.entities = state.room.entities;
     this.hazards.sync(hazards, this.hazardRoom);
-    this.drillBadge.hidden = hazards.length === 0;
+    const drill = state.drill ?? null;
+    const playing = hazards.some(hazard => hazard.playing);
+    this.drillBadge.hidden = hazards.length === 0 && drill === null;
+    this.drillBadge.textContent = playing || !drill || drill.state !== 'preparing'
+      ? 'DRILL · practice only, not a real fire'
+      : 'DRILL · a drill is being prepared';
     return result;
   }
 

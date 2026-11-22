@@ -1,15 +1,15 @@
 /**
- * The wrist menu above the left hand (#204): a slider of four pages, Objects (the catalogue),
- * Make (a new piece from a spoken description), Edit (Move and Resize for the chosen piece) and
- * Exit. An open left palm shows it and a fist hides it. Positions are in the `local` space, laid
+ * The wrist menu above the left hand (#204): a slider of five pages, Objects (the catalogue),
+ * Make (a new piece from a spoken description), Drill (choose an object to set on fire, then Start
+ * and Stop, #234), Edit (Move and Resize for the chosen piece) and Exit. An open left palm shows it and a fist hides it. Positions are in the `local` space, laid
  * out across the person's view as the head faces.
  */
 import type { Position } from '../protocol';
 import type { HandPose } from './gestures';
 
-export const WRIST_PAGES = ['objects', 'make', 'edit', 'exit'] as const;
+export const WRIST_PAGES = ['objects', 'make', 'drill', 'edit', 'exit'] as const;
 export type WristPage = typeof WRIST_PAGES[number];
-export const PAGE_NAMES: Record<WristPage, string> = { objects: 'Objects', make: 'Make', edit: 'Edit', exit: 'Exit' };
+export const PAGE_NAMES: Record<WristPage, string> = { objects: 'Objects', make: 'Make', drill: 'Drill', edit: 'Edit', exit: 'Exit' };
 
 /** The slider's stops: this far above the hand, this far apart. */
 const TRACK_ABOVE = 0.22;
@@ -35,10 +35,10 @@ export interface WristMenu {
   line: Position;
   /** The catalogue's pieces, on the Objects page; else none. */
   pieces: Position[];
-  /** The page's buttons by name: speak and make, move and resize, or exit. */
+  /** The page's buttons by name: speak and make, pick and run, move and resize, or exit. */
   buttons: Partial<Record<WristButton, Position>>;
 }
-export type WristButton = 'speak' | 'make' | 'move' | 'resize' | 'exit';
+export type WristButton = 'speak' | 'make' | 'pick' | 'run' | 'move' | 'resize' | 'exit';
 
 /** What a pinch on the menu is on. */
 export type WristChoice =
@@ -58,9 +58,10 @@ export function wristMenu(hand: Position, headYaw: number, page: WristPage, piec
     Array.from({ length: count }, (_, index) => at((index - (count - 1) / 2) * apart, ROW_ABOVE));
   const stops = row(WRIST_PAGES.length, STOP_METRES).map(stop => ({ ...stop, y: hand.y + TRACK_ABOVE }));
   const buttons: WristMenu['buttons'] = {};
-  if (page === 'make' || page === 'edit') {
+  if (page === 'make' || page === 'drill' || page === 'edit') {
     const [left, rightButton] = row(2, PAIR_METRES);
     if (page === 'make') Object.assign(buttons, { speak: left, make: rightButton });
+    else if (page === 'drill') Object.assign(buttons, { pick: left, run: rightButton });
     else Object.assign(buttons, { move: left, resize: rightButton });
   }
   if (page === 'exit') buttons.exit = at(0, ROW_ABOVE);

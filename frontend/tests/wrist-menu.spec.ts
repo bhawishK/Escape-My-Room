@@ -16,14 +16,15 @@ const HAND = { x: 0, y: 1, z: -0.4 };
 
 test('the slider has a stop for each page in a row above the hand, Objects on the left', () => {
   const menu = wristMenu(HAND, 0, 'objects', 2);
-  expect(menu.stops).toHaveLength(4);
-  close(menu.stops[0], { x: -0.0975, y: 1.22, z: -0.4 });
-  close(menu.stops[3], { x: 0.0975, y: 1.22, z: -0.4 });
+  // Objects, Make, Drill (#234), Edit, Exit.
+  expect(menu.stops).toHaveLength(5);
+  close(menu.stops[0], { x: -0.13, y: 1.22, z: -0.4 });
+  close(menu.stops[4], { x: 0.13, y: 1.22, z: -0.4 });
   // Facing left (-x), the person's right is -z.
-  close(wristMenu(HAND, Math.PI / 2, 'objects', 2).stops[0], { x: 0, y: 1.22, z: -0.4 + 0.0975 });
+  close(wristMenu(HAND, Math.PI / 2, 'objects', 2).stops[0], { x: 0, y: 1.22, z: -0.4 + 0.13 });
 });
 
-test('each page shows only its own things: pieces, speak and make, move and resize, or exit', () => {
+test('each page shows only its own things: pieces, speak and make, pick and run, move and resize, or exit', () => {
   const objects = wristMenu(HAND, 0, 'objects', 3);
   expect(objects.pieces).toHaveLength(3);
   close(objects.pieces[0], { x: -0.06, y: 1.12, z: -0.4 });
@@ -33,6 +34,10 @@ test('each page shows only its own things: pieces, speak and make, move and resi
   expect(make.pieces).toEqual([]);
   close(make.buttons.speak, { x: -0.04, y: 1.12, z: -0.4 });
   close(make.buttons.make, { x: 0.04, y: 1.12, z: -0.4 });
+
+  const drill = wristMenu(HAND, 0, 'drill', 3);
+  close(drill.buttons.pick, { x: -0.04, y: 1.12, z: -0.4 });
+  close(drill.buttons.run, { x: 0.04, y: 1.12, z: -0.4 });
 
   const edit = wristMenu(HAND, 0, 'edit', 3);
   close(edit.buttons.move, { x: -0.04, y: 1.12, z: -0.4 });
@@ -54,9 +59,10 @@ test('a pinch chooses the piece or button it is on, the track, or nothing', () =
 
 test('sliding along the track goes to the page whose stop is nearest, and no further than its ends', () => {
   const menu = wristMenu(HAND, 0, 'objects', 0);
-  expect(pageAt(menu, { x: -0.09, y: 1.22, z: -0.4 })).toBe('objects');
-  expect(pageAt(menu, { x: -0.02, y: 1.22, z: -0.4 })).toBe('make');
-  expect(pageAt(menu, { x: 0.04, y: 1.22, z: -0.4 })).toBe('edit');
+  expect(pageAt(menu, { x: -0.12, y: 1.22, z: -0.4 })).toBe('objects');
+  expect(pageAt(menu, { x: -0.06, y: 1.22, z: -0.4 })).toBe('make');
+  expect(pageAt(menu, { x: 0.01, y: 1.22, z: -0.4 })).toBe('drill');
+  expect(pageAt(menu, { x: 0.06, y: 1.22, z: -0.4 })).toBe('edit');
   expect(pageAt(menu, { x: 0.5, y: 1.22, z: -0.4 })).toBe('exit');
   expect(pageAt(menu, { x: -0.5, y: 1.22, z: -0.4 })).toBe('objects');
 });

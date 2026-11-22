@@ -18,18 +18,20 @@ from backend.hazard_placement import Placement
 ASSET = "hz_0123abcd"
 
 
-def made_hazard(data: Path, asset_id: str = ASSET, frames: int = 4) -> HazardAsset:
-    """A finished hazard kept where hazard jobs keep theirs: on the prepared room's box."""
+def made_hazard(
+    data: Path, asset_id: str = ASSET, frames: int = 4, entity: str = "box"
+) -> HazardAsset:
+    """A finished hazard, kept where hazard jobs keep theirs, on a room object (default: box)."""
     asset = HazardAsset(
         id=asset_id,
-        target=HazardTarget(entity="box"),
+        target=HazardTarget(entity=entity),
         hazard="catches fire",
         frames=frames,
         frames_per_second=16.0,
         frame_url=f"/api/hazards/{asset_id}/frames/{{n}}.spz",
         check=[0.7, 0.7, 0.7],
         size_bytes=1000,
-        placement=Placement(position=(0.1, 0.0, -0.5), turn=0.5, scale=2.0, hide="box"),
+        placement=Placement(position=(0.1, 0.0, -0.5), turn=0.5, scale=2.0, hide=entity),
         seconds=frames / 16.0,
     )
     kept = data / "hazards" / "hazards" / asset_id
