@@ -46,7 +46,7 @@ The call asks us to label each technique as created, adapted or extended. Each i
 | # | Technique | Status | Builds on (cite) | What's ours |
 |---|---|---|---|---|
 | 1 | **Personal sand table:** a live, photoreal Gaussian-splat dollhouse of the occupant's own space, kept in step with the person inside it | Extended | WIM (Stoakley CHI 1995), Dollhouse VR (Ibayashi 2015), VirtualNexus (UIST 2024), GaussianNexus (UIST 2025) | The whole real home as a miniature, made from a phone video, linked live to someone standing in it |
-| 2 | **Touch-to-trigger in the miniature:** pinch a real object in the dollhouse to make it the hazard; it plays at once in both the miniature and the real room at 1:1, on one shared clock | Created | WIM manipulation (Stoakley), direct demonstration on virtual copies (Oda UIST 2015) | Editing the shared real space's *events*, not just its objects, across scales and devices. No AR–VR paper was found where the remote person both triggers events in the trainee's real space and guides them |
+| 2 | **Commanding a drill from the miniature:** from a wrist menu, the commander chooses a real object, prepares its hazard and starts it; it plays at once in the miniature and at 1:1 in the occupant's real room, on one shared clock, and the occupant only learns that a drill is coming until it starts | Created | WIM (Stoakley), Dollhouse VR's designer and occupant roles, trainer-controlled events in VR training | Editing the shared real space's *events*, not just its objects, across scales and devices. No AR–VR paper was found where the remote person both triggers events in the trainee's real space and guides them. (Touching objects in the dollhouse to choose them was tried and dropped after the Quest check: a menu was clearer.) |
 | 3 | **Giant hand + path:** the commander's hand in the miniature appears to the phone user as a giant hand in their room, with a ray or path to the exit | Adapted | Stafford et al. "god-like" hands (ISMAR 2006), Mini-Me (CHI 2018), Kim et al. hand vs pointer (CHI 2019), Le Chénéchal guiding arrows (2019) | Seen on a **phone** at 1:1; the literature says pair the hand with a pointer when the two viewpoints differ |
 | 4 | **Occupant awareness in the miniature:** the phone user's live position and view cone in the dollhouse | Adapted | On the Shoulder of the Giant (CHI 2019), view-frustum cues | Phone pose kept aligned in the shared splat frame |
 | 5 | **Cross-scale shared manipulation:** either person moves the same real-room objects; the phone carries at 1:1, the headset in the miniature or at life size, under one server-side physics | Extended | WIM manipulation, asymmetric VR (ShareVR CHI 2017), Grandi et al. handheld AR + HMD (IEEE VR 2019) | One Havok simulation shared by a phone and a headset at two scales |
@@ -88,7 +88,7 @@ The call asks us to label each technique as created, adapted or extended. Each i
 1. Title, names and affiliations; the equipment (Quest 3, an Android phone and an iPhone, a GPU server).
 2. Film the room with the phone, with the coach; the splat appears.
 3. The commander shrinks the room to a dollhouse and sees the occupant's marker.
-4. The commander pinches the bed and says "catches fire". Show the progress, or cut to the cached result.
+4. The commander chooses the bed on the Drill menu and pinches Prepare. Show the progress, or cut to the cached result.
 5. Split screen: the fire in the miniature, and the same fire on the phone at 1:1 over the real bed.
 6. The giant hand and path guide the occupant to the door; the occupant walks out.
 7. Cross-scale manipulation: the commander drops a box from the dollhouse, and the phone sees it fall.
@@ -129,7 +129,7 @@ Eight to twelve people, two parts:
 
 1. **#230:** hazards play on the Quest, also in the dollhouse. *Done, in review.*
 2. **#231:** phone playback over the real room, with the **DRILL** label.
-3. **#234, reduced:** pinch an object in the dollhouse to start its hazard. This is technique 2.
+3. **#234:** the Drill menu in VR (choose an object, Prepare, Start/Stop, Call off). This is technique 2. *Done; touch-to-choose was dropped after the Quest check.*
 4. **New:** a **path or ray from the giant hand** to where it points, seen on the phone (technique 3), and the **phone user's view cone** in the dollhouse (technique 4).
 5. **#235:** cache hazards for the demo.
 6. **#218:** floor touch, so things sit on the real floor in the headset.
