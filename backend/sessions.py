@@ -19,12 +19,13 @@ from backend.furniture import (
     overlapping,
 )
 from backend.grab import grab_offset, grabbed_point, normalize
+from backend.hazard_generation import HazardAsset
 from backend.physics import PhysicsWorker
 from backend.prepared_room import (
     FRAME,
-    EntitySize,
     QUATERNION_ORDER,
     UNITS,
+    EntitySize,
     RoomLandmark,
     RoomMap,
     Rotation,
@@ -48,6 +49,40 @@ PRESENCE_STALE_AFTER = 1.5
 
 # A room holds at most this many placed pieces (#181), so a stuck client can't fill it without end.
 MAX_FURNITURE = 24
+# Hazards in the room at once (#229), and how far ahead of the asking a start is set, so both
+# devices have the first frames before it plays.
+MAX_HAZARDS = 4
+HAZARD_START_LEAD_SECONDS = 1.0
+
+
+@dataclass
+class SessionHazard:
+    """A finished hazard in the room (#229): its frames, where they go and the object they hide,
+    and, while it plays, when it started (milliseconds on the server's clock)."""
+
+    id: str
+    asset: HazardAsset
+    started_at: float | None = None
+
+    def wire(self) -> dict[str, Any]:
+        asset = self.asset
+        placement = asset.placement
+        return {
+            "id": self.id,
+            "asset": asset.id,
+            "hazard": asset.hazard,
+            "frames": asset.frames,
+            "frames_per_second": asset.frames_per_second,
+            "frame_url": asset.frame_url,
+            "seconds": asset.seconds,
+            "loops": asset.loops,
+            "placement": placement.model_dump() if placement is not None else None,
+            "hide": placement.hide if placement is not None else None,
+            "playing": self.started_at is not None,
+            "started_at": self.started_at,
+        }
+
+
 # A placed piece is resized to between these times its catalogue size (#202).
 SMALLEST_SCALE = 0.25
 LARGEST_SCALE = 3.0
@@ -136,6 +171,9 @@ class PrototypeRoom:
     furniture_count: int = 0
     # Counts pieces added to the catalogue, so pages reload it when one is made (#187).
     catalogue_version: int = 0
+    # Hazards in the room (#229), numbered hazard_1, hazard_2, ... never reused.
+    hazards: list[SessionHazard] = field(default_factory=lambda: list[SessionHazard]())
+    hazard_count: int = 0
     alignment: dict[Role, Alignment] = field(
         default_factory=lambda: {
             "mobile_master": Alignment(),
@@ -175,6 +213,9 @@ class PrototypeRoom:
         available = self.load_error is None and self.room_version is not None
         return {
             "revision": self.revision,
+            # The server's clock when this state was made, for devices to set theirs against it
+            # (a hazard's start time is on it, #229).
+            "server_time_ms": round(time.time() * 1000),
             "mobile_connected": "mobile_master" in self.sockets,
             "catalogue_version": self.catalogue_version,
             "vr_connected": "vr_solver" in self.sockets,
@@ -216,6 +257,7 @@ class PrototypeRoom:
                 if available and self.splat_placement is not None
                 else None,
                 "loaded_by": dict(self.loaded_versions),
+                "hazards": [hazard.wire() for hazard in self.hazards] if available else [],
             },
         }
 
@@ -333,6 +375,47 @@ class PrototypeRoom:
         self.entities.remove(entity)
         if self.physics is not None:
             self.physics.remove(entity_id)
+        self.revision += 1
+        return "ok"
+
+    def add_hazard(self, room_version: int, asset: HazardAsset | None) -> str:
+        """Put a finished hazard into the room, stopped (#229)."""
+        if self.load_error is not None or self.room_version is None:
+            return "unavailable"
+        if room_version != self.room_version:
+            return "mismatch"
+        if asset is None or asset.placement is None:
+            return "unknown"
+        if len(self.hazards) >= MAX_HAZARDS:
+            return "too_many"
+        self.hazard_count += 1
+        self.hazards.append(SessionHazard(id=f"hazard_{self.hazard_count}", asset=asset))
+        self.revision += 1
+        return "ok"
+
+    def control_hazard(
+        self,
+        room_version: int,
+        hazard_id: str,
+        action: Literal["start_hazard", "stop_hazard", "remove_hazard"],
+        now_ms: float | None = None,
+    ) -> str:
+        """Start a hazard a moment ahead on the server's clock, the same for both devices; stop
+        it; or take it away (#229)."""
+        if self.load_error is not None or self.room_version is None:
+            return "unavailable"
+        if room_version != self.room_version:
+            return "mismatch"
+        hazard = next((hazard for hazard in self.hazards if hazard.id == hazard_id), None)
+        if hazard is None:
+            return "unknown"
+        if action == "start_hazard":
+            now = time.time() * 1000 if now_ms is None else now_ms
+            hazard.started_at = round(now + HAZARD_START_LEAD_SECONDS * 1000)
+        elif action == "stop_hazard":
+            hazard.started_at = None
+        else:
+            self.hazards.remove(hazard)
         self.revision += 1
         return "ok"
 
