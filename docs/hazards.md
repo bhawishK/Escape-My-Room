@@ -34,6 +34,13 @@ new object (words) ─► Z-Image picture ────────────�
   - puts the object alone on white, square, 512 px.
 - **4D** (#226): L4GM runs as two processes in its own env: ImageDream's views of the first frame, then the frames 8 at a time. It takes the GPU in turn with room reconstruction (`backend/gpu.py`).
   - Live on the desktop: about 40 frames in about 40 s.
+- **4D check and SPZ** (#227), in `backend/splat_frames.py`: the frames seen from the front must look like their video (median likeness at least 0.3), then are pruned and written as SPZ, about 176 KB a frame instead of 1.4 MB.
+- **Placement** (#228), in `backend/hazard_placement.py`: L4GM puts the picture's camera at +z, so the asset's +z front is turned to the side the object was pictured from.
+  - Its long side, measured on the first frame's solid splats, is scaled to the box's.
+  - It stands on the box's base, over its centre, and the real object is hidden (`hide`).
+  - A new object gets a box of its true size, from its description as furniture does, on the floor at the request's `at`.
+  - The asset records `placement`, `seconds`, and `loops` (false: a hazard plays once and holds its end).
+  - L4GM makes objects thicker than they are (the live bed about twice as tall), so a placed object can stand taller than the real one.
 
 ## Setting up the GPU desktop
 

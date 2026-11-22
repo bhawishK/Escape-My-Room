@@ -66,6 +66,12 @@ def test_a_new_object_becomes_a_picture_then_a_video_then_4d_frames(start_servic
         assert asset["frame_url"].endswith("/{n}.spz")
         assert len(asset["check"]) == 3 and min(asset["check"]) > 0
         assert asset["size_bytes"] > 0
+        # Placed true to size (#228): a space heater's usual size, on the floor, hiding nothing.
+        placement = asset["placement"]
+        assert placement["hide"] is None and placement["scale"] > 0
+        assert placement["turn"] == 0.0
+        assert asset["seconds"] == round(asset["frames"] / asset["frames_per_second"], 3)
+        assert asset["loops"] is False
         last = httpx.get(f"{url}{asset['frame_url'].format(n=asset['frames'] - 1)}", timeout=5)
         assert last.status_code == 200
         past = httpx.get(f"{url}{asset['frame_url'].format(n=asset['frames'])}", timeout=5)
@@ -89,6 +95,11 @@ def test_an_object_in_the_room_starts_from_its_own_picture_cut_from_the_splat(
         done = wait_for(url, response.json()["id"], {"ready", "failed"}, timeout=60)
         assert done["state"] == "ready", done
         assert done["asset"]["target"] == {"entity": "block"}
+        # Placed in the block's box (#228): the block is hidden, the front turned to the side it
+        # was pictured from, and the frames stand on the floor.
+        placement = done["asset"]["placement"]
+        assert placement["hide"] == "block"
+        assert placement["scale"] > 0
         picture = httpx.get(f"{url}{done['image_url']}", timeout=5)
         image = Image.open(io.BytesIO(picture.content))
         assert image.size == (768, 768)
