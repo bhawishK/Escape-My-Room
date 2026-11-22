@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import math
 import os
 import re
@@ -122,6 +123,8 @@ type Incoming = (
     | ResizeFurnitureMessage
     | DesignerHandMessage
 )
+LOG = logging.getLogger(__name__)
+
 # The message model for each incoming `type`.
 INCOMING: dict[str, type[Incoming]] = {
     "pose": PoseMessage,
@@ -301,6 +304,7 @@ def create_app(
         except PictureRefused as exc:
             raise GenerationError("room_picture", str(exc)) from exc
         except RenderFailure as exc:
+            LOG.warning("Picturing %s from the room's splat failed: %s", entity_id, exc)
             raise GenerationError("room_picture") from exc
 
     # Hazards (#222, part of #221), each starting from a picture: an object in the room's own
