@@ -52,6 +52,12 @@ FAILURES = {
         "The generator is out of GPU time for today. Set HF_TOKEN on the server for more, "
         "or try again later."
     ),
+    # Hazards (#222): a video of the hazard, then its 3D animation.
+    "video": "The generator couldn't make a video of that. Try again.",
+    "animate": "The video couldn't be turned into a 3D animation. Try again.",
+    "video_unset": "Making hazard videos isn't set up on this server yet.",
+    "animate_unset": "Turning videos into 3D animations isn't set up on this server yet.",
+    "room_picture": "Pictures of objects in the room aren't available on this server yet.",
 }
 
 
@@ -70,6 +76,14 @@ class Generator(Protocol):
 
     def model(self, picture: bytes) -> bytes:
         """A textured GLB of what the PNG picture shows."""
+        ...
+
+    def video(self, picture: bytes, prompt: str) -> bytes:
+        """An MP4 of the PNG picture coming to life as `prompt` says: a hazard (#222, #224)."""
+        ...
+
+    def animate(self, video: bytes) -> list[bytes]:
+        """The MP4's object as 3D Gaussian splats, one PLY per frame (#222, #226)."""
         ...
 
 
@@ -120,6 +134,14 @@ class HuggingFaceGenerator:
             # The textured mesh, as the original reads it.
             return Path(result[1]["value"]).read_bytes()  # pyright: ignore
 
+    def video(self, picture: bytes, prompt: str) -> bytes:
+        # The Wan 2.2 step comes with #224.
+        raise GenerationError("video_unset")
+
+    def animate(self, video: bytes) -> list[bytes]:
+        # The L4GM step comes with #226.
+        raise GenerationError("animate_unset")
+
 
 class FixtureGenerator:
     """A generator for tests and offline development: a small picture, then a box 4 m wide, 2 m
@@ -154,6 +176,45 @@ class FixtureGenerator:
             # 1 m across and a tenth of a millimetre tall.
             return fixture_box((2.0, 1.0001, 2.0))
         return fixture_box()
+
+    def room_picture(self, entity_id: str) -> bytes:
+        """The picture of an object in the room (#223 cuts it from the room's splat)."""
+        out = io.BytesIO()
+        Image.new("RGB", (64, 64), (180, 120, 90)).save(out, format="PNG")
+        return out.getvalue()
+
+    def video(self, picture: bytes, prompt: str) -> bytes:
+        time.sleep(self.seconds)
+        if self.fail == "video":
+            raise RuntimeError("The fixture generator failed to film on purpose.")
+        # An MP4's opening `ftyp` box, then a note of what it shows.
+        return MP4_START + prompt.encode()
+
+    def animate(self, video: bytes) -> list[bytes]:
+        time.sleep(self.seconds)
+        if self.fail == "animate":
+            raise RuntimeError("The fixture generator failed to animate on purpose.")
+        return [fixture_splat(frame) for frame in range(FIXTURE_FRAMES)]
+
+
+FIXTURE_FRAMES = 4
+# The 20-byte start of an MP4 file: its `ftyp` box.
+MP4_START = b"\x00\x00\x00\x14ftypisom\x00\x00\x02\x00isom"
+
+
+def fixture_splat(frame: int) -> bytes:
+    """A 3D Gaussian splat PLY of three splats, rising a little each frame."""
+    import struct
+
+    names = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity"]
+    names += [f"scale_{i}" for i in range(3)] + [f"rot_{i}" for i in range(4)]
+    header = "ply\nformat binary_little_endian 1.0\nelement vertex 3\n"
+    header += "".join(f"property float {name}\n" for name in names) + "end_header\n"
+    rows = b""
+    for index in range(3):
+        values = [index * 0.1, 0.1 * frame, 0.0, 1.5, 0.5, -1.0, 2.0, -3.0, -3.0, -3.0, 1, 0, 0, 0]
+        rows += struct.pack("<14f", *values)
+    return header.encode() + rows
 
 
 def fixture_box(high: tuple[float, float, float] = (5.0, 3.0, 2.0)) -> bytes:
@@ -488,29 +549,7 @@ class FurnitureGeneration:
                 self._fail(job_id, "The piece couldn't be made. Try again.")
 
     def _step(self, action: Callable[[], bytes], reason: str) -> bytes:
-        """Run one generator step on a thread of its own, giving up on it after the timeout. A
-        step given up on finishes on its own, and never holds up the next one."""
-        result: list[bytes] = []
-        failure: list[BaseException] = []
-
-        def run() -> None:
-            try:
-                result.append(action())
-            except BaseException as exc:  # noqa: BLE001 - reported to the job below
-                failure.append(exc)
-
-        thread = threading.Thread(target=run, daemon=True, name="furniture-step")
-        thread.start()
-        thread.join(self.timeout)
-        if thread.is_alive():
-            raise GenerationError("timeout")
-        if failure:
-            exc = failure[0]
-            if isinstance(exc, GenerationError):
-                raise exc
-            # Spaces on shared GPUs refuse once the day's GPU time is used up.
-            raise GenerationError("quota" if "quota" in str(exc).lower() else reason) from exc
-        return result[0]
+        return run_step(action, reason, self.timeout)
 
     def _still(self, job_id: str, state: JobState) -> bool:
         with self.lock:
@@ -578,6 +617,33 @@ class FurnitureGeneration:
             if current.state in ("queued", "image_ready"):
                 current.state = "failed"
                 current.error = message
+
+
+def run_step[T](action: Callable[[], T], reason: str, timeout: float) -> T:
+    """Run one generator step on a thread of its own, giving up on it after `timeout` seconds. A
+    step given up on finishes on its own, and never holds up the next one. A failure becomes a
+    GenerationError: `reason`, or `quota` when a Space's GPU time is used up."""
+    result: list[T] = []
+    failure: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            result.append(action())
+        except BaseException as exc:  # noqa: BLE001 - reported to the job below
+            failure.append(exc)
+
+    thread = threading.Thread(target=run, daemon=True, name="generation-step")
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        raise GenerationError("timeout")
+    if failure:
+        exc = failure[0]
+        if isinstance(exc, GenerationError):
+            raise exc
+        # Spaces on shared GPUs refuse once the day's GPU time is used up.
+        raise GenerationError("quota" if "quota" in str(exc).lower() else reason) from exc
+    return result[0]
 
 
 def timeout_from_environment() -> float:
