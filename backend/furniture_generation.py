@@ -202,8 +202,10 @@ class HuggingFaceGenerator:
             return Path(cast(str, made)).read_bytes()
 
     def animate(self, video: bytes) -> list[bytes]:
-        # The L4GM step comes with #226.
-        raise GenerationError("animate_unset")
+        """L4GM on this machine's GPU (#226), not a Space: see backend.animation."""
+        from backend.animation import animate_video
+
+        return animate_video(video)
 
 
 class FixtureGenerator:
