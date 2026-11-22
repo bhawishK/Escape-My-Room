@@ -1,0 +1,92 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>4D fire in the room</title>
+<!-- Served by fire4d_video.mjs: /three/ and /spark/ from frontend/node_modules, /room/ the room, /fire/ the frames. -->
+<script type="importmap">
+{ "imports": {
+  "three": "/three/build/three.module.js",
+  "three/addons/": "/three/examples/jsm/",
+  "@sparkjsdev/spark": "/spark/dist/spark.module.js"
+} }
+</script>
+<style>body { margin: 0; background: #000; }</style>
+</head>
+<body>
+<script type="module">
+// A fire generated as a 4D splat (#220): one splat per frame from L4GM, shown one at a time in
+// the room's splat, as the devices draw it. Spark sorts the fire's splats with the room's.
+import * as THREE from 'three';
+import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark';
+
+const renderer = new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+document.body.append(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+const spark = new SparkRenderer({ renderer });
+scene.add(spark);
+const camera = new THREE.PerspectiveCamera(70, 4 / 3, 0.01, 100);
+const nextFrame = () => new Promise(resolve => requestAnimationFrame(() => resolve()));
+
+async function splat(url) {
+  const bytes = await (await fetch(url)).arrayBuffer();
+  const mesh = new SplatMesh({ fileBytes: bytes, fileName: url.split('/').pop(), raycastable: false });
+  await mesh.initialized;
+  return mesh;
+}
+
+async function settle() {
+  let settled = 0;
+  const started = performance.now();
+  while (settled < 3 && performance.now() - started < 20000) {
+    renderer.render(scene, camera);
+    await nextFrame();
+    settled = spark.sorting || spark.sortDirty ? 0 : settled + 1;
+  }
+}
+
+window.drawFire = async request => {
+  const manifest = await (await fetch('/room/manifest.json')).json();
+  const room = await splat(`/room/${manifest.splat.asset}`);
+  const { position: p, rotation: q, scale } = manifest.splat;
+  room.position.set(p.x, p.y, p.z);
+  room.quaternion.set(q.x, q.y, q.z, q.w);
+  room.scale.setScalar(scale);
+  scene.add(room);
+
+  // Each frame: L4GM's object, +y up, scaled to its true size, its base on the surface.
+  const frames = [];
+  for (const url of request.frames) {
+    const mesh = await splat(url);
+    mesh.scale.setScalar(request.fire.scale);
+    mesh.rotation.y = request.fire.turn;
+    const [x, y, z] = request.fire.at;
+    mesh.position.set(x, y - request.fire.base * request.fire.scale, z);
+    mesh.visible = false;
+    scene.add(mesh);
+    frames.push(mesh);
+  }
+  renderer.setSize(request.width, request.height, false);
+  camera.aspect = request.width / request.height;
+  const shots = {};
+  for (const view of request.views) {
+    camera.position.set(...view.eye);
+    camera.lookAt(...view.at);
+    camera.fov = view.fov;
+    camera.updateProjectionMatrix();
+    shots[view.name] = [];
+    for (const [index, mesh] of frames.entries()) {
+      frames.forEach((other, i) => { other.visible = i === index; });
+      await settle();
+      renderer.render(scene, camera);
+      shots[view.name].push(renderer.domElement.toDataURL('image/png'));
+    }
+  }
+  return shots;
+};
+window.ready = true;
+</script>
+</body>
+</html>
