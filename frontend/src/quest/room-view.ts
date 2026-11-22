@@ -2,12 +2,14 @@ import type { SplatMesh } from '@sparkjsdev/spark';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { STANDING_EYE_HEIGHT } from '../alignment';
+import { ServerClock } from '../hazard-playback';
 import type { AlignmentState, CatalogueItem, Position, PresenceState, RoomEntity, SessionState } from '../protocol';
 import { RAY_REACH_METERS } from '../grab';
 import { LateEntities, ModelCopies, applyPlacement, placeEntities, roomOwn } from '../room';
 import {
   FIGURE_METRES, LIFE_SIZE, residentFigure, scaleLabel, type DollhouseView,
 } from './dollhouse';
+import { HazardFrames, type HazardRoom } from './hazard-frames';
 import { PAGE_NAMES, WRIST_PAGES, type WristButton, type WristMenu } from './wrist-menu';
 
 /** A ray drawn from a controller, a hand or a fingertip, in the `local` reference space. */
@@ -107,12 +109,17 @@ export class QuestRoom {
   /** An object the phone holds glides to each placement Python sends, over about this long. */
   private readonly glideMs = 120;
   private gliding: { id: string; target: THREE.Vector3 } | null = null;
+  /** Hazards in the room (#230), played on the server's clock, which each state sets this one by. */
+  private readonly hazards: HazardFrames;
+  private readonly clock = new ServerClock();
+  private hazardRoom: HazardRoom | null = null;
 
   constructor(
     private readonly scene: THREE.Scene,
     private readonly renderer: THREE.WebGLRenderer,
     private readonly container: HTMLElement,
   ) {
+    this.hazards = new HazardFrames(() => this.loadSpark(), container);
     this.anchor.name = 'room-anchor';
     this.dollhouse.name = 'dollhouse';
     this.dollhouse.add(this.anchor);
@@ -464,6 +471,7 @@ export class QuestRoom {
 
   /** Moves the glide on by `ms` milliseconds. */
   tick(ms: number): void {
+    this.hazards.tick(this.clock.now(Date.now()));
     const root = this.gliding ? this.entityRoots.get(this.gliding.id) : undefined;
     if (!this.gliding || !root) return;
     root.position.lerp(this.gliding.target, 1 - Math.exp(-ms / this.glideMs));
@@ -474,6 +482,14 @@ export class QuestRoom {
    * and whether it was just loaded, so the page tells Python once.
    */
   async sync(state: SessionState): Promise<{ version: number; loaded: boolean } | null> {
+    if (state.server_time_ms !== undefined) this.clock.sample(state.server_time_ms, Date.now());
+    const result = await this.syncRoom(state);
+    if (this.hazardRoom) this.hazardRoom.entities = state.room.entities;
+    this.hazards.sync(state.room.hazards ?? [], this.hazardRoom);
+    return result;
+  }
+
+  private async syncRoom(state: SessionState): Promise<{ version: number; loaded: boolean } | null> {
     const room = state.room;
     if (!room.available || room.room_version === null) {
       this.clear();
@@ -559,6 +575,7 @@ export class QuestRoom {
     this.roomGroup = group;
     this.splat = splat;
     this.entityRoots = roots;
+    this.hazardRoom = { group, splat, entities: room.entities, roots };
     this.container.dataset.roomVersion = String(room.room_version);
     // Shown only once the splat is really in this scene: a second copy of three.js would refuse it.
     this.container.dataset.splat = splat && splat.parent === group ? 'shown' : '';
@@ -568,6 +585,8 @@ export class QuestRoom {
     this.loadToken += 1;
     this.loadedVersion = null;
     this.loadingVersion = null;
+    this.hazards.clear();
+    this.hazardRoom = null;
     this.roomGroup?.removeFromParent();
     this.roomGroup = null;
     this.splat?.dispose();
@@ -581,15 +600,20 @@ export class QuestRoom {
     this.container.dataset.splat = '';
   }
 
-  /** Downloads a room splat, loading Spark the first time one is needed. */
-  private async loadSplat(url: string): Promise<SplatMesh> {
-    const failed = new Error(`The prepared room splat ${fileName(url)} could not be loaded.`);
+  /** Spark, loaded the first time it is needed, with its renderer added to the scene. */
+  private loadSpark(): Promise<typeof import('@sparkjsdev/spark')> {
     this.sparkReady ??= import('@sparkjsdev/spark').then(spark => {
       this.scene.add(new spark.SparkRenderer({ renderer: this.renderer }));
       return spark;
     });
+    return this.sparkReady;
+  }
+
+  /** Downloads a room splat, loading Spark the first time one is needed. */
+  private async loadSplat(url: string): Promise<SplatMesh> {
+    const failed = new Error(`The prepared room splat ${fileName(url)} could not be loaded.`);
     try {
-      const [spark, response] = await Promise.all([this.sparkReady, fetch(url)]);
+      const [spark, response] = await Promise.all([this.loadSpark(), fetch(url)]);
       if (!response.ok) throw failed;
       const mesh = new spark.SplatMesh({
         fileBytes: await response.arrayBuffer(),
