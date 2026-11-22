@@ -57,16 +57,18 @@ FAILURES = {
     "animate": "The video couldn't be turned into a 3D animation. Try again.",
     "video_unset": "Making hazard videos isn't set up on this server yet.",
     "animate_unset": "Turning videos into 3D animations isn't set up on this server yet.",
-    "room_picture": "Pictures of objects in the room aren't available on this server yet.",
+    "room_picture": "The object couldn't be pictured from the room's splat. Try again.",
 }
 
 
 class GenerationError(Exception):
-    """A generator step failed; `reason` is a key of FAILURES."""
+    """A generator step failed; `reason` is a key of FAILURES. `message`, when given, says it
+    more exactly, such as why an object in the room can't be pictured (#223)."""
 
-    def __init__(self, reason: str) -> None:
+    def __init__(self, reason: str, message: str | None = None) -> None:
         super().__init__(reason)
         self.reason = reason
+        self.message = message or FAILURES[reason]
 
 
 class Generator(Protocol):
@@ -176,12 +178,6 @@ class FixtureGenerator:
             # 1 m across and a tenth of a millimetre tall.
             return fixture_box((2.0, 1.0001, 2.0))
         return fixture_box()
-
-    def room_picture(self, entity_id: str) -> bytes:
-        """The picture of an object in the room (#223 cuts it from the room's splat)."""
-        out = io.BytesIO()
-        Image.new("RGB", (64, 64), (180, 120, 90)).save(out, format="PNG")
-        return out.getvalue()
 
     def video(self, picture: bytes, prompt: str) -> bytes:
         time.sleep(self.seconds)

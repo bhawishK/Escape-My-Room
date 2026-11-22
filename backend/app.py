@@ -39,13 +39,13 @@ from backend.errors import Refusal
 from backend.filming_check import CheckRequest, FilmingChecks
 from backend.furniture import Catalogue
 from backend.furniture_generation import (
-    FixtureGenerator,
     FurnitureGeneration,
+    GenerationError,
     GenerationRequest,
     generator_from_environment,
     timeout_from_environment,
 )
-from backend.hazard_generation import HazardGeneration, HazardRequest, no_room_picture
+from backend.hazard_generation import HazardGeneration, HazardRequest
 from backend.live_room import LiveRoomError, LiveRooms
 from backend.physics import PhysicsWorker
 from backend.preparation import (
@@ -84,6 +84,8 @@ from backend.protocol import (
     VoiceSignalMessage,
     WireModel,
 )
+from backend.room_object_picture import PictureRefused, object_picture
+from backend.room_views import RenderFailure
 from backend.sessions import PrototypeRoom
 from backend.videos import (
     CompleteRequest,
@@ -261,14 +263,19 @@ def create_app(
         entity = next((e for e in room.entities if e.id == entity_id), None)
         return (entity.label if entity else entity_id.replace("_", " ")).lower()
 
-    # Hazards (#222, part of #221). Until #223 cuts pictures from the room's splat, only the
-    # fixture generator can picture an object already in the room.
+    def room_picture(entity_id: str) -> bytes:
+        """An object in the live room, cut from its own splat (#223), or why it can't be."""
+        try:
+            return object_picture(live_rooms.directory, room.entities, entity_id).png
+        except PictureRefused as exc:
+            raise GenerationError("room_picture", str(exc)) from exc
+        except RenderFailure as exc:
+            raise GenerationError("room_picture") from exc
+
+    # Hazards (#222, part of #221), each starting from a picture: an object in the room's own
+    # (#223), or a new object's drawn from words.
     hazards = HazardGeneration(
-        data / "hazards",
-        generator,
-        generator.room_picture if isinstance(generator, FixtureGenerator) else no_room_picture,
-        object_name,
-        timeout_from_environment(),
+        data / "hazards", generator, room_picture, object_name, timeout_from_environment()
     )
     # The server's one physics simulation (#159), started and stopped with the server.
     physics = PhysicsWorker(room.physics_changed, room.physics_moved)

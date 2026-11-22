@@ -21,7 +21,6 @@ from pydantic import BaseModel, Field, model_serializer, model_validator
 
 from backend.furniture_generation import (
     DEFAULT_TIMEOUT_SECONDS,
-    FAILURES,
     GenerationError,
     Generator,
     run_step,
@@ -237,7 +236,7 @@ class HazardGeneration:
                 current.state = "ready"
                 current.asset = asset
         except GenerationError as exc:
-            self._fail(job_id, FAILURES[exc.reason])
+            self._fail(job_id, exc.message)
         except OSError:
             self._fail(job_id, "The hazard couldn't be saved on the server.")
 

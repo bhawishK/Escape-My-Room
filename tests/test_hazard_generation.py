@@ -5,11 +5,14 @@ new one (its picture drawn from words, as furniture is). The picture becomes a s
 hazard (#224), and the video a sequence of 3D splat frames (#226). Through a spawned service with
 the fixture generator, which fakes each step."""
 
+import io
 import time
 from typing import Any
 
 import httpx
 import pytest
+from PIL import Image
+from test_room_object_picture import BLOCK, entity, room_with
 
 GENERATOR = {"ESCAPE_ROOM_FURNITURE_GENERATOR": "fixture"}
 
@@ -65,13 +68,35 @@ def test_a_new_object_becomes_a_picture_then_a_video_then_4d_frames(start_servic
         assert past.status_code == 404
 
 
-def test_an_object_in_the_room_starts_from_its_own_picture(start_service, tmp_path):
-    with start_service(tmp_path, **GENERATOR) as url:
-        response = start(url, {"entity": "box"})
+def splat_room(tmp_path):
+    """The splat test room with its red block as an object (#223 pictures it from the splat)."""
+    block = entity("block", BLOCK["x"], BLOCK["z"], BLOCK["width"], BLOCK["depth"], BLOCK["height"])
+    block["asset"] = "block.glb"
+    return room_with(tmp_path, block)
+
+
+def test_an_object_in_the_room_starts_from_its_own_picture_cut_from_the_splat(
+    start_service, tmp_path
+):
+    room = splat_room(tmp_path)
+    with start_service(tmp_path / "data", **GENERATOR, ESCAPE_ROOM_PREPARED_DIR=str(room)) as url:
+        response = start(url, {"entity": "block"})
         assert response.status_code == 202, response.text
-        done = wait_for(url, response.json()["id"], {"ready", "failed"})
+        done = wait_for(url, response.json()["id"], {"ready", "failed"}, timeout=60)
         assert done["state"] == "ready", done
-        assert done["asset"]["target"] == {"entity": "box"}
+        assert done["asset"]["target"] == {"entity": "block"}
+        picture = httpx.get(f"{url}{done['image_url']}", timeout=5)
+        image = Image.open(io.BytesIO(picture.content))
+        assert image.size == (768, 768)
+
+
+def test_an_object_the_video_barely_showed_is_refused_with_the_reason(start_service, tmp_path):
+    room = splat_room(tmp_path)
+    with start_service(tmp_path / "data", **GENERATOR, ESCAPE_ROOM_PREPARED_DIR=str(room)) as url:
+        response = start(url, {"entity": "box"})
+        failed = wait_for(url, response.json()["id"], {"ready", "failed"}, timeout=60)
+        assert failed["state"] == "failed"
+        assert failed["error"].startswith("Too little of the room's video shows the box")
 
 
 def test_an_object_not_in_the_room_is_refused(start_service, tmp_path):
