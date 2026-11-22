@@ -11,6 +11,7 @@ to the catalogue, so it survives a restart and is placed like a built-in piece.
 """
 
 import io
+import logging
 import math
 import os
 import re
@@ -37,6 +38,13 @@ PIECE_NODE = "piece"
 DEFAULT_TIMEOUT_SECONDS = 600.0
 # A generated model larger than this is refused: phones would have to download it.
 MAX_MODEL_BYTES = 50 * 1024 * 1024
+# The Space making hazards' videos: Wan 2.2 image-to-video (#224). A setting can name another.
+WAN_SPACE = (
+    os.environ.get("ESCAPE_ROOM_HAZARD_VIDEO_SPACE") or "zerogpu-aoti/wan2-2-fp8da-aoti-faster"
+)
+# A Space call whose upload times out is tried this many times in all.
+VIDEO_TRIES = 3
+LOG = logging.getLogger(__name__)
 # A size asked for or guessed is kept between these, in metres.
 SMALLEST_METRES = 0.05
 LARGEST_METRES = 10.0
@@ -80,8 +88,9 @@ class Generator(Protocol):
         """A textured GLB of what the PNG picture shows."""
         ...
 
-    def video(self, picture: bytes, prompt: str) -> bytes:
-        """An MP4 of the PNG picture coming to life as `prompt` says: a hazard (#222, #224)."""
+    def video(self, picture: bytes, prompt: str, seed: int = 7) -> bytes:
+        """An MP4 of the PNG picture coming to life as `prompt` says: a hazard (#222, #224).
+        The same seed gives the same video."""
         ...
 
     def animate(self, video: bytes) -> list[bytes]:
@@ -90,10 +99,25 @@ class Generator(Protocol):
 
 
 class HuggingFaceGenerator:
-    """The Hugging Face Spaces VR-Image-3D-Object-Generator uses, with its settings."""
+    """The Hugging Face Spaces VR-Image-3D-Object-Generator uses, with its settings, and Wan 2.2
+    for hazards' videos (#224). `client` makes a gradio_client Client for a Space; tests fake it."""
 
-    def __init__(self, token: str | None) -> None:
+    def __init__(
+        self,
+        token: str | None,
+        client: Callable[[str], Any] | None = None,
+        video_space: str = WAN_SPACE,
+    ) -> None:
         self.token = token
+        self.client = client or self._client
+        self.video_space = video_space
+        # Seconds before trying a timed-out upload again, times the attempt.
+        self.retry_seconds = 5.0
+
+    def _client(self, space: str) -> Any:
+        from gradio_client import Client  # pyright: ignore
+
+        return Client(space, token=self.token, verbose=False)  # pyright: ignore
 
     def image(self, description: str) -> bytes:
         from gradio_client import Client  # pyright: ignore
@@ -136,9 +160,45 @@ class HuggingFaceGenerator:
             # The textured mesh, as the original reads it.
             return Path(result[1]["value"]).read_bytes()  # pyright: ignore
 
-    def video(self, picture: bytes, prompt: str) -> bytes:
-        # The Wan 2.2 step comes with #224.
-        raise GenerationError("video_unset")
+    def video(self, picture: bytes, prompt: str, seed: int = 7) -> bytes:
+        """Wan 2.2 image-to-video, 3 s at 16 fps, with spike #220's settings. The Space's own
+        negative prompt is kept: it is what made the spike's videos."""
+        from gradio_client import handle_file  # pyright: ignore
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "picture.png"
+            path.write_bytes(picture)
+            video: Any = None
+            for attempt in range(1, VIDEO_TRIES + 1):
+                try:
+                    video, _seed = self.client(self.video_space).predict(
+                        input_image=handle_file(str(path)),  # pyright: ignore[reportUnknownArgumentType]
+                        prompt=prompt,
+                        steps=6,
+                        duration_seconds=3.0,
+                        guidance_scale=1,
+                        guidance_scale_2=1,
+                        seed=seed,
+                        randomize_seed=False,
+                        api_name="/generate_video",
+                    )
+                    break
+                except Exception as exc:  # noqa: BLE001 - a Space fails in many ways; each is reported
+                    LOG.warning(
+                        "Wan video attempt %d failed: %s: %s", attempt, type(exc).__name__, exc
+                    )
+                    # The upload of the picture times out now and then on a slow line: try again.
+                    if (
+                        attempt < VIDEO_TRIES
+                        and "timeout" in f"{type(exc).__name__} {exc}".lower().replace(" ", "")
+                    ):
+                        time.sleep(self.retry_seconds * attempt)
+                        continue
+                    raise video_failure(exc) from exc
+            if video is None:
+                raise GenerationError("video")
+            made: Any = cast(dict[str, Any], video)["video"] if isinstance(video, dict) else video
+            return Path(cast(str, made)).read_bytes()
 
     def animate(self, video: bytes) -> list[bytes]:
         # The L4GM step comes with #226.
@@ -179,12 +239,12 @@ class FixtureGenerator:
             return fixture_box((2.0, 1.0001, 2.0))
         return fixture_box()
 
-    def video(self, picture: bytes, prompt: str) -> bytes:
+    def video(self, picture: bytes, prompt: str, seed: int = 7) -> bytes:
         time.sleep(self.seconds)
         if self.fail == "video":
             raise RuntimeError("The fixture generator failed to film on purpose.")
         # An MP4's opening `ftyp` box, then a note of what it shows.
-        return MP4_START + prompt.encode()
+        return MP4_START + f"{prompt} | seed {seed}".encode()
 
     def animate(self, video: bytes) -> list[bytes]:
         time.sleep(self.seconds)
@@ -613,6 +673,22 @@ class FurnitureGeneration:
             if current.state in ("queued", "image_ready"):
                 current.state = "failed"
                 current.error = message
+
+
+def video_failure(exc: BaseException) -> GenerationError:
+    """A Space's failure as the user is told it: how long to wait when the day's GPU time is used
+    up ("Try again in 18:19:24"), else that the video failed."""
+    text = str(exc)
+    if "quota" not in text.lower():
+        return GenerationError("video")
+    wait = re.search(r"try again in (\d+):(\d+):(\d+)", text, re.IGNORECASE)
+    if wait is None:
+        return GenerationError("quota", "The video generator is out of GPU time for today.")
+    hours, minutes = int(wait.group(1)), int(wait.group(2))
+    return GenerationError(
+        "quota",
+        f"The video generator is out of GPU time for today: try again in {hours} h {minutes} min.",
+    )
 
 
 def run_step[T](action: Callable[[], T], reason: str, timeout: float) -> T:
