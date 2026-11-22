@@ -2,6 +2,8 @@ import type { SplatMesh } from '@sparkjsdev/spark';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { STANDING_EYE_HEIGHT } from './alignment';
+import { HazardFrames, type HazardRoom } from './hazard-frames';
+import { ServerClock, lowEndDevice } from './hazard-playback';
 import type { RoomPose } from './phone-view';
 import type { SplatDrawn } from './tracking-stats';
 import type {
@@ -58,6 +60,12 @@ export class DiagnosticScene {
   private readonly statusTexture: THREE.CanvasTexture;
   private readonly statusLabel: THREE.Sprite;
   private statusText = '';
+  /** Hazards in the room (#231), played on the server's clock, which each state sets this one by. */
+  private readonly hazards: HazardFrames;
+  private readonly clock = new ServerClock();
+  private hazardRoom: HazardRoom | null = null;
+  /** Says plainly, while a hazard is in the room, that it is a drill and not a real fire. */
+  private readonly drillBadge = document.createElement('p');
   /** A message in front of the headset, instead of Press A or Aligned, until cleared. */
   private notice: string | null = null;
   private readonly raycaster = new THREE.Raycaster();
@@ -94,6 +102,13 @@ export class DiagnosticScene {
 
   constructor(container: HTMLElement) {
     this.container = container;
+    this.hazards = new HazardFrames(() => this.loadSpark(), container, lowEndDevice() ? 2 : 1);
+    this.drillBadge.className = 'drill-badge';
+    this.drillBadge.setAttribute('role', 'status');
+    this.drillBadge.dataset.testid = 'drill-badge';
+    this.drillBadge.textContent = 'DRILL · practice only, not a real fire';
+    this.drillBadge.hidden = true;
+    container.append(this.drillBadge);
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.xr.enabled = true;
@@ -297,8 +312,9 @@ export class DiagnosticScene {
     if (id && root) this.smoothed = { id, target: root.position.clone() };
   }
 
-  /** Moves any glide on by `ms` milliseconds of drawing. */
+  /** Moves any glide on by `ms` milliseconds of drawing, and hazards on to this moment. */
   tick(ms: number): void {
+    if (this.hazards.tick(this.clock.now(Date.now()))) this.changedAt = performance.now();
     const root = this.smoothed ? this.entityRoots.get(this.smoothed.id) : undefined;
     if (!this.smoothed || !root) return;
     this.changedAt = performance.now();
@@ -383,6 +399,16 @@ export class DiagnosticScene {
   }
 
   async syncRoom(state: SessionState): Promise<{ version: number; acknowledge: boolean } | null> {
+    if (state.server_time_ms !== undefined) this.clock.sample(state.server_time_ms, Date.now());
+    const result = await this.syncRoomOnly(state);
+    const hazards = state.room?.hazards ?? [];
+    if (this.hazardRoom) this.hazardRoom.entities = state.room.entities;
+    this.hazards.sync(hazards, this.hazardRoom);
+    this.drillBadge.hidden = hazards.length === 0;
+    return result;
+  }
+
+  private async syncRoomOnly(state: SessionState): Promise<{ version: number; acknowledge: boolean } | null> {
     const room = state.room ?? emptyRoom();
     if (!room.available || room.room_version === null) {
       this.clearRoom();
@@ -494,6 +520,9 @@ export class DiagnosticScene {
     this.loadToken += 1;
     this.loadedVersion = null;
     this.loadingVersion = null;
+    this.hazards.clear();
+    this.hazardRoom = null;
+    this.drillBadge.hidden = true;
     this.roomGroup?.removeFromParent();
     this.roomGroup = null;
     this.splat?.dispose();
@@ -581,14 +610,18 @@ export class DiagnosticScene {
   }
 
   /** Downloads and prepares a room splat, loading Spark the first time one is needed. */
-  private async loadSplat(url: string): Promise<SplatMesh> {
-    const failed = new Error(`The prepared room splat ${url.split('/').pop()} could not be loaded.`);
+  private loadSpark(): Promise<typeof import('@sparkjsdev/spark')> {
     this.sparkReady ??= import('@sparkjsdev/spark').then(spark => {
       this.scene.add(new spark.SparkRenderer({ renderer: this.renderer }));
       return spark;
     });
+    return this.sparkReady;
+  }
+
+  private async loadSplat(url: string): Promise<SplatMesh> {
+    const failed = new Error(`The prepared room splat ${url.split('/').pop()} could not be loaded.`);
     try {
-      const [spark, response] = await Promise.all([this.sparkReady, fetch(url)]);
+      const [spark, response] = await Promise.all([this.loadSpark(), fetch(url)]);
       if (!response.ok) throw failed;
       const mesh = new spark.SplatMesh({
         fileBytes: await response.arrayBuffer(),
@@ -626,6 +659,7 @@ export class DiagnosticScene {
     this.container.dataset.splat = splat ? 'shown' : '';
     this.roomGroup = group;
     this.entityRoots = roots;
+    this.hazardRoom = { group, splat, entities, roots };
     this.roomAnchor.add(group);
     this.grid.visible = false;
     // A splat room changes where the overview looks from.

@@ -9,7 +9,7 @@ import { LateEntities, ModelCopies, applyPlacement, placeEntities, roomOwn } fro
 import {
   FIGURE_METRES, LIFE_SIZE, residentFigure, scaleLabel, type DollhouseView,
 } from './dollhouse';
-import { HazardFrames, type HazardRoom } from './hazard-frames';
+import { HazardFrames, type HazardRoom } from '../hazard-frames';
 import { PAGE_NAMES, WRIST_PAGES, type WristButton, type WristMenu } from './wrist-menu';
 
 /** A ray drawn from a controller, a hand or a fingertip, in the `local` reference space. */
