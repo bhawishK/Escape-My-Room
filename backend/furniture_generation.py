@@ -66,6 +66,7 @@ FAILURES = {
     "video_unset": "Making hazard videos isn't set up on this server yet.",
     "animate_unset": "Turning videos into 3D animations isn't set up on this server yet.",
     "room_picture": "The object couldn't be pictured from the room's splat. Try again.",
+    "video_gate": "The generated videos couldn't be used for 3D. Try again.",
 }
 
 
@@ -243,8 +244,7 @@ class FixtureGenerator:
         time.sleep(self.seconds)
         if self.fail == "video":
             raise RuntimeError("The fixture generator failed to film on purpose.")
-        # An MP4's opening `ftyp` box, then a note of what it shows.
-        return MP4_START + f"{prompt} | seed {seed}".encode()
+        return fixture_video(seed)
 
     def animate(self, video: bytes) -> list[bytes]:
         time.sleep(self.seconds)
@@ -256,6 +256,23 @@ class FixtureGenerator:
 FIXTURE_FRAMES = 4
 # The 20-byte start of an MP4 file: its `ftyp` box.
 MP4_START = b"\x00\x00\x00\x14ftypisom\x00\x00\x02\x00isom"
+
+
+def fixture_video(seed: int) -> bytes:
+    """A real little MP4, 16 frames at 16 fps: a grey block on white with an orange flame on it
+    that flickers, still camera, the flame's flicker set by `seed`."""
+    import numpy as np
+
+    from backend.video_gate import write_video
+
+    frames: list[np.ndarray] = []
+    for number in range(16):
+        frame = np.full((128, 128, 3), 245, np.uint8)
+        frame[84:104, 34:94] = (120, 120, 120)
+        height = 20 + (number * 7 + seed) % 12
+        frame[84 - height : 84, 52:76] = (255, 140, 30)
+        frames.append(frame)
+    return write_video(frames, 16)
 
 
 def fixture_splat(frame: int) -> bytes:
