@@ -278,18 +278,29 @@ def fixture_video(seed: int) -> bytes:
 
 
 def fixture_splat(frame: int) -> bytes:
-    """A 3D Gaussian splat PLY of three splats, rising a little each frame."""
+    """A 3D Gaussian splat PLY of what the fixture video shows (#227 checks one against the
+    other): a grey block with an orange flame on it, the flame a little taller each frame. In the
+    video's terms, a pixel (x, y) of its 128 is the point ((x - 64) / 128, (64 - y) / 128, 0)."""
     import struct
 
+    import numpy as np
+
+    flame = 20 + (frame * 7) % 12
+    parts = [((34, 94, 84, 104), (120, 120, 120)), ((52, 76, 84 - flame, 84), (255, 140, 30))]
+    rows: list[list[float]] = []
+    for (left, right, top, bottom), colour in parts:
+        dc = [(channel / 255 - 0.5) / 0.28209479177387814 for channel in colour]
+        for x in np.arange(left, right, 2.0):
+            for y in np.arange(top, bottom, 2.0):
+                rows.append(
+                    [(x - 64) / 128, (64 - y) / 128, 0.0, *dc, 4.0, -5.0, -5.0, -5.0, 1, 0, 0, 0]
+                )
     names = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity"]
     names += [f"scale_{i}" for i in range(3)] + [f"rot_{i}" for i in range(4)]
-    header = "ply\nformat binary_little_endian 1.0\nelement vertex 3\n"
+    header = f"ply\nformat binary_little_endian 1.0\nelement vertex {len(rows)}\n"
     header += "".join(f"property float {name}\n" for name in names) + "end_header\n"
-    rows = b""
-    for index in range(3):
-        values = [index * 0.1, 0.1 * frame, 0.0, 1.5, 0.5, -1.0, 2.0, -3.0, -3.0, -3.0, 1, 0, 0, 0]
-        rows += struct.pack("<14f", *values)
-    return header.encode() + rows
+    body = b"".join(struct.pack("<14f", *row) for row in rows)
+    return header.encode() + body
 
 
 def fixture_box(high: tuple[float, float, float] = (5.0, 3.0, 2.0)) -> bytes:

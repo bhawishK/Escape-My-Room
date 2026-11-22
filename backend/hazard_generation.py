@@ -26,7 +26,8 @@ from backend.furniture_generation import (
     Generator,
     run_step,
 )
-from backend.video_gate import gate
+from backend.splat_frames import check, prune, read_frame, to_spz
+from backend.video_gate import gate, read_frames
 
 HazardState = Literal["queued", "image_ready", "video_ready", "ready", "failed", "cancelled"]
 # States a job can still be cancelled in.
@@ -74,6 +75,10 @@ class HazardAsset(BaseModel):
     frames: int
     frames_per_second: float
     frame_url: str
+    # How like its video the 4D result looked, at its start, middle and end (#227).
+    check: list[float] = Field(default_factory=lambda: [])
+    # All its frames, as served (SPZ), in bytes.
+    size_bytes: int = 0
 
 
 class HazardJob(BaseModel):
@@ -179,7 +184,7 @@ class HazardGeneration:
     def frame(self, asset_id: str, number: int) -> Path | None:
         if not ASSET_ID.fullmatch(asset_id) or number < 0:
             return None
-        path = self.root / "hazards" / asset_id / "frames" / f"{number:03d}.ply"
+        path = self.root / "hazards" / asset_id / "frames" / f"{number:03d}.spz"
         return path if path.is_file() else None
 
     def _run(self) -> None:
@@ -267,18 +272,27 @@ class HazardGeneration:
             frames = run_step(lambda: generator.animate(video), "animate", self.timeout)
             if len(frames) < 2:
                 raise GenerationError("animate")
+            # Checked against its video, then made light for phones (#227).
+            try:
+                splats = [read_frame(frame) for frame in frames]
+            except (ValueError, StopIteration) as exc:
+                raise GenerationError("animate") from exc
+            scores = check(splats, read_frames(video))
+            frames = [to_spz(prune(splat)) for splat in splats]
             asset_id = f"hz_{uuid.uuid4().hex[:8]}"
             kept = self.root / "hazards" / asset_id
             (kept / "frames").mkdir(parents=True, exist_ok=True)
             for number, frame in enumerate(frames):
-                (kept / "frames" / f"{number:03d}.ply").write_bytes(frame)
+                (kept / "frames" / f"{number:03d}.spz").write_bytes(frame)
             asset = HazardAsset(
                 id=asset_id,
                 target=target,
                 hazard=job.hazard,
                 frames=len(frames),
                 frames_per_second=FRAMES_PER_SECOND,
-                frame_url=f"/api/hazards/{asset_id}/frames/{{n}}.ply",
+                frame_url=f"/api/hazards/{asset_id}/frames/{{n}}.spz",
+                check=scores,
+                size_bytes=sum(len(frame) for frame in frames),
             )
             (kept / "hazard.json").write_text(asset.model_dump_json(indent=2), encoding="utf-8")
             with self.lock:

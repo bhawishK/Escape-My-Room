@@ -616,7 +616,7 @@ def create_app(
 
     @app.get("/api/hazards/{asset_id}/frames/{name}")
     async def hazard_frame(asset_id: str, name: str) -> FileResponse:
-        found = re.fullmatch(r"(\d{1,4})\.ply", name)
+        found = re.fullmatch(r"(\d{1,4})\.spz", name)
         path = hazards.frame(asset_id, int(found.group(1))) if found else None
         if path is None:
             raise HTTPException(404, "That hazard frame does not exist.")
