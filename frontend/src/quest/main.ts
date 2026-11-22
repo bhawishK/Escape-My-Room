@@ -24,7 +24,7 @@ import {
   throwInRoom, yawOf, orientationFromDollhouse, scaleLabel, velocityFromDollhouse,
 } from './dollhouse';
 import { Dictation } from './dictation';
-import { drillLine, drillPlaying, objectAt, type DrillState } from './drill';
+import { drillLine, drillObjects, drillPlaying, type DrillState } from './drill';
 import { Dwell, FIST_COOLDOWN_MS, FIST_HOLD_MS, GestureGate, HeadNods, fistHeldUp, unmuteHint } from './gestures';
 import { readFrame, type FrameSample, type InputSample, type Pose, type Ray } from './hands';
 import { Hud } from './hud';
@@ -342,8 +342,8 @@ function applyState(next: SessionState): void {
 const placedList = element('placed-list');
 let placedShown = '';
 // The drill (#234): choosing its object by touch, its fire being made, then Start and Stop.
-/** Whether the next touch on a room object chooses it for the drill. */
-let picking = false;
+/** The object chosen on the Drill menu in VR, as on the Drill card's list (#234). */
+let drillChosen: string | null = null;
 /** The step the drill's fire job has reached, polled while it is being made. */
 let drillJob: { id: string; state: string } | null = null;
 const drillForm = element<HTMLFormElement>('drill-form');
@@ -360,15 +360,23 @@ function currentDrill(): DrillState | null {
 }
 
 function drillText(): string {
-  return drillLine(currentDrill(), entities(), state?.room.hazards ?? [], picking, drillJob?.state ?? null);
+  return drillLine(currentDrill(), entities(), state?.room.hazards ?? [], drillChosen, drillJob?.state ?? null);
+}
+
+/** The object the Drill menu has chosen: the one picked, else the drill's, else the first. */
+function chosenObject(): string | null {
+  const objects = drillObjects(entities());
+  if (drillChosen && objects.some(object => object.id === drillChosen)) return drillChosen;
+  return currentDrill()?.entity ?? objects[0]?.id ?? null;
 }
 
 /** Prepares a drill on a room object: the server finds or makes its fire. */
 function prepareDrill(entity: string): void {
   const version = state?.room.room_version;
   if (version === null || version === undefined) return;
-  picking = false;
   drillJob = null;
+  drillChosen = entity;
+  drillObject.value = entity;
   client.sendPrepareDrill(version, entity);
 }
 
@@ -382,7 +390,7 @@ function runDrill(): void {
 }
 
 function showDrill(next: SessionState): void {
-  const objects = next.room.entities.filter(entity => !/^(floor|wall|ceiling)/.test(entity.id));
+  const objects = drillObjects(next.room.entities);
   const choices = objects.map(entity => entity.id + ":" + entity.label).join(',');
   if (choices !== drillChoices) {
     drillChoices = choices;
@@ -396,7 +404,9 @@ function showDrill(next: SessionState): void {
   drillRun.textContent = running ? 'Stop' : 'Start';
   drillCancel.disabled = drill === null;
   if (drill?.state !== 'preparing') drillJob = null;
-  drillStatus.textContent = drillLine(drill, next.room.entities, next.room.hazards ?? [], false, drillJob?.state ?? null);
+  // The same line as in VR, where buttons are pinched; on the page they are pressed.
+  drillStatus.textContent = drillLine(drill, next.room.entities, next.room.hazards ?? [], null, drillJob?.state ?? null)
+    .replace('pinch ', 'press ');
 }
 
 drillForm.addEventListener('submit', event => {
@@ -404,10 +414,13 @@ drillForm.addEventListener('submit', event => {
   if (drillObject.value) prepareDrill(drillObject.value);
 });
 drillRun.addEventListener('click', runDrill);
-drillCancel.addEventListener('click', () => {
+drillCancel.addEventListener('click', cancelDrill);
+
+/** Calls the drill off: its fire leaves the room. */
+function cancelDrill(): void {
   const version = state?.room.room_version;
   if (version !== null && version !== undefined) client.sendCancelDrill(version);
-});
+}
 
 // While the drill's fire is being made, its steps are read every two seconds.
 window.setInterval(() => {
@@ -989,12 +1002,12 @@ function frame(xrFrame: XRFrame, time: number): void {
   // pinches, or two hands scale the room or resize a piece.
   const paletteAt = leftHand?.grip?.position ?? leftHand?.pinchAt ?? null;
   const menu: WristMenu | null = wristOpen && !leftHand?.holding && !scaling.scaling && !resize.piece && head && paletteAt
-    ? wristMenu(paletteAt, yawOf(head.orientation), wristPage, catalogueItems.length) : null;
+    ? wristMenu(paletteAt, yawOf(head.orientation), wristPage, catalogueItems.length, drillObjects(entities()).length) : null;
   showChosen(time);
   room?.showWristMenu(catalogueItems, menu, wristLine(), {
     speaking: speaking !== null, making: making !== null,
-    picking, running: drillPlaying(currentDrill(), state?.room.hazards ?? []),
-  });
+    running: drillPlaying(currentDrill(), state?.room.hazards ?? []),
+  }, drillObjects(entities()), chosenObject());
 
   // Holding: a press of the grip or a pinch takes hold; letting go puts the object down.
   for (const input of sample.inputs) {
@@ -1016,6 +1029,10 @@ function frame(xrFrame: XRFrame, time: number): void {
         wristPage = pageAt(menu, input.pinchAt);
         continue;
       }
+      if (choice?.kind === 'object') {
+        drillChosen = drillObjects(entities())[choice.index]?.id ?? null;
+        continue;
+      }
       if (choice?.kind === 'piece') {
         taking = { item: catalogueItems[choice.index], source: input.source, last: null };
         continue;
@@ -1032,26 +1049,18 @@ function frame(xrFrame: XRFrame, time: number): void {
         } else if (choice.button === 'make') {
           if (making) cancelButton.click();
           else makeForm.requestSubmit();
-        } else if (choice.button === 'pick') {
-          picking = !picking;
+        } else if (choice.button === 'prepare') {
+          const chosen = chosenObject();
+          if (chosen) prepareDrill(chosen);
         } else if (choice.button === 'run') {
           runDrill();
+        } else if (choice.button === 'cancel') {
+          cancelDrill();
         } else {
           editChosen(input, choice.button, time);
         }
         continue;
       }
-    }
-    // Choosing the drill's object (#234): a pinch with the fingertip on a room object, in the
-    // dollhouse or at life size, chooses it; elsewhere it does nothing, and choosing goes on.
-    if (picking && input.holding && !before && input.pinchAt && alignment && !holder) {
-      const touched = objectAt(entities(), inRoom(alignment, input.pinchAt));
-      if (touched) {
-        prepareDrill(touched.id);
-        gesture(touched.label + " chosen for the drill", time);
-      }
-      pressedAt.delete(input.source);
-      continue;
     }
     // A pinch sliding the menu follows the hand along it; one holding Hold to speak listens until
     // it lets go.

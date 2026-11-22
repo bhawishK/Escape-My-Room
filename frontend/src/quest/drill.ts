@@ -1,10 +1,11 @@
 /**
  * Preparing and running a drill from the headset (#234, part of #221). The commander chooses a
- * room object by touching it, in the dollhouse or at life size; the server finds or makes a fire
- * for it; then Start and Stop run it. What a touch is on, and what the menu says, live here.
+ * room object from the Drill menu, as on the headset page's Drill card; the server finds or makes
+ * a fire for it; then Start and Stop run it. Which objects are offered, and what the menu says,
+ * live here.
  */
 import type { SessionHazard } from '../hazard-playback';
-import type { Position, RoomEntity } from '../protocol';
+import type { RoomEntity } from '../protocol';
 
 /** The drill as the headset is told it: on which object, and how far along. */
 export interface DrillState {
@@ -16,37 +17,12 @@ export interface DrillState {
   error: string | null;
 }
 
-/** A fingertip this far outside an object's box (room metres) still touches it. */
-export const TOUCH_MARGIN = 0.05;
-
 /** What isn't an object to set on fire: the floor, the walls. */
 const SURFACES = /^(floor|wall|ceiling)/;
 
-/**
- * The room object whose box holds `point` (room metres), give or take `margin`; the smallest when
- * several do, so a lamp on a desk is the lamp. Null on nothing, or on the floor and walls.
- */
-export function objectAt(entities: readonly RoomEntity[], point: Position, margin = TOUCH_MARGIN): RoomEntity | null {
-  let best: RoomEntity | null = null;
-  let smallest = Infinity;
-  for (const entity of entities) {
-    if (SURFACES.test(entity.id)) continue;
-    const { position, rotation, size } = entity;
-    // The point in the object's own frame: turned back by its yaw about its centre.
-    const yaw = 2 * Math.atan2(rotation.y, rotation.w);
-    const dx = point.x - position.x;
-    const dz = point.z - position.z;
-    const cosine = Math.cos(-yaw);
-    const sine = Math.sin(-yaw);
-    const x = cosine * dx + sine * dz;
-    const z = -sine * dx + cosine * dz;
-    const y = point.y - position.y;
-    const inside = Math.abs(x) <= size.width / 2 + margin && Math.abs(z) <= size.depth / 2 + margin &&
-      y >= -margin && y <= size.height + margin;
-    const volume = size.width * size.height * size.depth;
-    if (inside && volume < smallest) [best, smallest] = [entity, volume];
-  }
-  return best;
+/** The room objects a drill can be on: all but the floor and the walls, in the room's order. */
+export function drillObjects(entities: readonly RoomEntity[]): RoomEntity[] {
+  return entities.filter(entity => !SURFACES.test(entity.id));
 }
 
 /** How a fire job's steps read, from the job's state. */
@@ -61,12 +37,14 @@ export function drillLine(
   drill: DrillState | null,
   entities: readonly RoomEntity[],
   hazards: readonly SessionHazard[],
-  picking: boolean,
+  chosen: string | null,
   jobState: string | null,
 ): string {
-  if (picking) return 'Touch an object to set it on fire';
-  if (!drill) return 'Choose an object for the drill';
-  const name = entities.find(entity => entity.id === drill.entity)?.label ?? drill.entity.replace(/_/g, ' ');
+  const label = (id: string) => entities.find(entity => entity.id === id)?.label ?? id.replace(/_/g, ' ');
+  // Another object chosen than the drill's: Prepare would make a drill on it instead.
+  if (chosen && chosen !== drill?.entity) return `${label(chosen)} · pinch Prepare`;
+  if (!drill) return 'Choose an object, then pinch Prepare';
+  const name = label(drill.entity);
   const plan = `${name} ${drill.hazard}`;
   if (drill.state === 'failed') return `Couldn't prepare: ${drill.error ?? 'try again'}`;
   if (drill.state === 'preparing') return `${plan} · ${STEPS[jobState ?? 'queued'] ?? 'making it'}…`;

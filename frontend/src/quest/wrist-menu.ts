@@ -1,7 +1,8 @@
 /**
  * The wrist menu above the left hand (#204): a slider of five pages, Objects (the catalogue),
- * Make (a new piece from a spoken description), Drill (choose an object to set on fire, then Start
- * and Stop, #234), Edit (Move and Resize for the chosen piece) and Exit. An open left palm shows it and a fist hides it. Positions are in the `local` space, laid
+ * Make (a new piece from a spoken description), Drill (the headset page's Drill card: the room's
+ * objects to choose from, then Prepare, Start or Stop, and Call off, #234), Edit (Move and Resize
+ * for the chosen piece) and Exit. An open left palm shows it and a fist hides it. Positions are in the `local` space, laid
  * out across the person's view as the head faces.
  */
 import type { Position } from '../protocol';
@@ -20,6 +21,9 @@ const ROW_ABOVE = 0.12;
 /** The catalogue's pieces this far apart; Make's and Edit's two buttons this far apart. */
 const SLOT_METRES = 0.06;
 const PAIR_METRES = 0.08;
+/** The Drill page's objects this far apart, and its row of Prepare, Start and Call off this far below them. */
+const OBJECT_METRES = 0.075;
+const CONTROLS_BELOW = 0.045;
 /** A pinch this near a button or piece chooses it; this near the slider's track takes hold of it. */
 const REACH = 0.035;
 const TRACK_REACH = 0.03;
@@ -35,20 +39,23 @@ export interface WristMenu {
   line: Position;
   /** The catalogue's pieces, on the Objects page; else none. */
   pieces: Position[];
-  /** The page's buttons by name: speak and make, pick and run, move and resize, or exit. */
+  /** The room's objects to choose from, on the Drill page; else none. */
+  objects: Position[];
+  /** The page's buttons by name: speak and make, prepare, run and cancel, move and resize, or exit. */
   buttons: Partial<Record<WristButton, Position>>;
 }
-export type WristButton = 'speak' | 'make' | 'pick' | 'run' | 'move' | 'resize' | 'exit';
+export type WristButton = 'speak' | 'make' | 'prepare' | 'run' | 'cancel' | 'move' | 'resize' | 'exit';
 
 /** What a pinch on the menu is on. */
 export type WristChoice =
   | { kind: 'piece'; index: number }
+  | { kind: 'object'; index: number }
   | { kind: 'button'; button: WristButton }
   | { kind: 'track' }
   | null;
 
-/** The menu above `hand`, on `page`, with `pieces` in the catalogue. */
-export function wristMenu(hand: Position, headYaw: number, page: WristPage, pieces: number): WristMenu {
+/** The menu above `hand`, on `page`, with `pieces` in the catalogue and `objects` in the room. */
+export function wristMenu(hand: Position, headYaw: number, page: WristPage, pieces: number, objects = 0): WristMenu {
   // The person's right, as three.js turns +x by the head's yaw.
   const right = { x: Math.cos(headYaw), z: -Math.sin(headYaw) };
   const at = (along: number, above: number): Position => ({
@@ -58,14 +65,22 @@ export function wristMenu(hand: Position, headYaw: number, page: WristPage, piec
     Array.from({ length: count }, (_, index) => at((index - (count - 1) / 2) * apart, ROW_ABOVE));
   const stops = row(WRIST_PAGES.length, STOP_METRES).map(stop => ({ ...stop, y: hand.y + TRACK_ABOVE }));
   const buttons: WristMenu['buttons'] = {};
-  if (page === 'make' || page === 'drill' || page === 'edit') {
+  if (page === 'make' || page === 'edit') {
     const [left, rightButton] = row(2, PAIR_METRES);
     if (page === 'make') Object.assign(buttons, { speak: left, make: rightButton });
-    else if (page === 'drill') Object.assign(buttons, { pick: left, run: rightButton });
     else Object.assign(buttons, { move: left, resize: rightButton });
   }
+  if (page === 'drill') {
+    const [prepare, run, cancel] = row(3, PAIR_METRES).map(at => ({ ...at, y: at.y - CONTROLS_BELOW }));
+    Object.assign(buttons, { prepare, run, cancel });
+  }
   if (page === 'exit') buttons.exit = at(0, ROW_ABOVE);
-  return { page, stops, line: at(0, LINE_ABOVE), pieces: page === 'objects' ? row(pieces, SLOT_METRES) : [], buttons };
+  return {
+    page, stops, line: at(0, LINE_ABOVE),
+    pieces: page === 'objects' ? row(pieces, SLOT_METRES) : [],
+    objects: page === 'drill' ? row(objects, OBJECT_METRES) : [],
+    buttons,
+  };
 }
 
 /** What a pinch at `point` is on: a piece, a button, the slider's track, or nothing. */
@@ -76,6 +91,10 @@ export function wristChoice(menu: WristMenu, point: Position): WristChoice {
   menu.pieces.forEach((piece, index) => {
     const away = distance(piece, point);
     if (away <= nearest) [best, nearest] = [{ kind: 'piece', index }, away];
+  });
+  menu.objects.forEach((object, index) => {
+    const away = distance(object, point);
+    if (away <= nearest) [best, nearest] = [{ kind: 'object', index }, away];
   });
   for (const [button, at] of Object.entries(menu.buttons) as [WristButton, Position][]) {
     const away = distance(at, point);

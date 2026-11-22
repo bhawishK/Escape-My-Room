@@ -163,10 +163,10 @@ test('the Drill panel prepares a fire on the chosen object, starts and stops it,
   await expect(phone.locator('#scene')).toHaveAttribute('data-splat', 'shown', { timeout: 30_000 });
 
   const status = page.getByTestId('drill-status');
-  await expect(status).toHaveText('Choose an object for the drill');
+  await expect(status).toHaveText('Choose an object, then press Prepare');
   await page.getByTestId('drill-object').selectOption('box');
   await page.getByRole('button', { name: 'Prepare', exact: true }).click();
-  await expect(status).toHaveText(/^Box catches fire · ready, pinch Start$/i);
+  await expect(status).toHaveText(/^Box catches fire · ready, press Start$/i);
   await expect(page.getByTestId('quest-scene')).toHaveAttribute('data-hazard-hidden', 'box', { timeout: 30_000 });
   // The phone knows a drill is coming, not what: its box is still there.
   await expect(phone.getByTestId('drill-badge')).toBeVisible();
@@ -178,9 +178,9 @@ test('the Drill panel prepares a fire on the chosen object, starts and stops it,
   await expect(phone.getByTestId('drill-badge')).toHaveText('DRILL · practice only, not a real fire');
 
   await page.getByRole('button', { name: 'Stop', exact: true }).click();
-  await expect(status).toHaveText(/ready, pinch Start$/i);
+  await expect(status).toHaveText(/ready, press Start$/i);
   await page.getByRole('button', { name: 'Call off', exact: true }).click();
-  await expect(status).toHaveText('Choose an object for the drill');
+  await expect(status).toHaveText('Choose an object, then press Prepare');
   await expect(page.getByTestId('quest-scene')).toHaveAttribute('data-hazards', '');
   await expect(phone.getByTestId('drill-badge')).toBeHidden();
   await phone.close();

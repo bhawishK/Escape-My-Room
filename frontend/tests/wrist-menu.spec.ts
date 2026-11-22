@@ -24,7 +24,7 @@ test('the slider has a stop for each page in a row above the hand, Objects on th
   close(wristMenu(HAND, Math.PI / 2, 'objects', 2).stops[0], { x: 0, y: 1.22, z: -0.4 + 0.13 });
 });
 
-test('each page shows only its own things: pieces, speak and make, pick and run, move and resize, or exit', () => {
+test('each page shows only its own things: pieces, speak and make, objects and Prepare, Start and Call off, move and resize, or exit', () => {
   const objects = wristMenu(HAND, 0, 'objects', 3);
   expect(objects.pieces).toHaveLength(3);
   close(objects.pieces[0], { x: -0.06, y: 1.12, z: -0.4 });
@@ -35,9 +35,16 @@ test('each page shows only its own things: pieces, speak and make, pick and run,
   close(make.buttons.speak, { x: -0.04, y: 1.12, z: -0.4 });
   close(make.buttons.make, { x: 0.04, y: 1.12, z: -0.4 });
 
-  const drill = wristMenu(HAND, 0, 'drill', 3);
-  close(drill.buttons.pick, { x: -0.04, y: 1.12, z: -0.4 });
-  close(drill.buttons.run, { x: 0.04, y: 1.12, z: -0.4 });
+  // Drill (#234): the room's objects in a row, and Prepare, Start and Call off below them.
+  const drill = wristMenu(HAND, 0, 'drill', 3, 2);
+  expect(drill.pieces).toEqual([]);
+  expect(drill.objects).toHaveLength(2);
+  close(drill.objects[0], { x: -0.0375, y: 1.12, z: -0.4 });
+  close(drill.buttons.prepare, { x: -0.08, y: 1.075, z: -0.4 });
+  close(drill.buttons.run, { x: 0, y: 1.075, z: -0.4 });
+  close(drill.buttons.cancel, { x: 0.08, y: 1.075, z: -0.4 });
+  expect(wristChoice(drill, { x: 0.035, y: 1.12, z: -0.4 })).toEqual({ kind: 'object', index: 1 });
+  expect(wristChoice(drill, { x: 0.075, y: 1.075, z: -0.4 })).toEqual({ kind: 'button', button: 'cancel' });
 
   const edit = wristMenu(HAND, 0, 'edit', 3);
   close(edit.buttons.move, { x: -0.04, y: 1.12, z: -0.4 });

@@ -80,20 +80,20 @@ export class QuestRoom {
       idle: buttonSprite('Make it', '#2f6fc6', 'wrist:make', WRIST_BUTTON_METRES),
       busy: buttonSprite('Stop', '#c62f2f', 'wrist:make:busy', WRIST_BUTTON_METRES),
     },
-    pick: {
-      idle: buttonSprite('Choose object', '#2f6fc6', 'wrist:pick', WRIST_BUTTON_METRES),
-      busy: buttonSprite('Touch one…', '#c68a2f', 'wrist:pick:busy', WRIST_BUTTON_METRES),
-    },
+    prepare: { idle: buttonSprite('Prepare', '#2f6fc6', 'wrist:prepare', WRIST_BUTTON_METRES), busy: null },
     run: {
       idle: buttonSprite('Start', '#2f8f5f', 'wrist:run', WRIST_BUTTON_METRES),
       busy: buttonSprite('Stop', '#c62f2f', 'wrist:run:busy', WRIST_BUTTON_METRES),
     },
+    cancel: { idle: buttonSprite('Call off', '#5b6472', 'wrist:cancel', WRIST_BUTTON_METRES), busy: null },
     move: { idle: buttonSprite('Move', '#2f6fc6', 'wrist:move', WRIST_BUTTON_METRES), busy: null },
     resize: { idle: buttonSprite('Resize', '#2f8f5f', 'wrist:resize', WRIST_BUTTON_METRES), busy: null },
     exit: { idle: buttonSprite('Exit VR', '#c62f2f', 'wrist:exit', WRIST_BUTTON_METRES), busy: null },
   };
   private readonly wristLine = textSprite('');
   private wristText = '';
+  /** The Drill page's object buttons, chosen and not, by object id (#234). */
+  private readonly objectButtons = new Map<string, { label: string; on: THREE.Sprite; off: THREE.Sprite }>();
   /** The piece being resized, drawn at its new scale until Python says so, and its size label. */
   private resizing: { id: string; scale: number } | null = null;
   private readonly resizeLabel = textSprite('');
@@ -260,7 +260,10 @@ export class QuestRoom {
     items: readonly CatalogueItem[],
     menu: WristMenu | null,
     line = '',
-    busy: { speaking: boolean; making: boolean; picking?: boolean; running?: boolean } = { speaking: false, making: false },
+    busy: { speaking: boolean; making: boolean; running?: boolean } = { speaking: false, making: false },
+    /** The Drill page's objects to choose from, and the one chosen (#234). */
+    objects: readonly { id: string; label: string }[] = [],
+    chosen: string | null = null,
   ): void {
     this.palette.visible = menu !== null;
     this.container.dataset.palette = menu ? menu.page : '';
@@ -282,7 +285,7 @@ export class QuestRoom {
     for (const [name, { idle, busy: other }] of Object.entries(this.wristButtons) as [WristButton, { idle: THREE.Sprite; busy: THREE.Sprite | null }][]) {
       const at = menu.buttons[name];
       const busyFor: Partial<Record<WristButton, boolean | undefined>> = {
-        speak: busy.speaking, make: busy.making, pick: busy.picking, run: busy.running,
+        speak: busy.speaking, make: busy.making, run: busy.running,
       };
       const showBusy = other !== null && !!busyFor[name];
       idle.visible = at !== undefined && !showBusy;
@@ -292,6 +295,7 @@ export class QuestRoom {
         other?.position.set(at.x, at.y, at.z);
       }
     }
+    this.showDrillObjects(menu, objects, chosen);
     const slots = menu.pieces;
     // A piece no longer in the catalogue leaves the palette.
     const listed = new Set(items.map(item => item.id));
@@ -322,6 +326,39 @@ export class QuestRoom {
       preview.visible = slot !== undefined;
       if (slot) preview.position.set(slot.x, slot.y, slot.z);
     });
+  }
+
+  /** The Drill page's objects as buttons, the chosen one blue and the others grey (#234). */
+  private showDrillObjects(menu: WristMenu, objects: readonly { id: string; label: string }[], chosen: string | null): void {
+    const wanted = new Set(objects.map(object => object.id));
+    for (const [id, faces] of this.objectButtons) {
+      if (wanted.has(id)) continue;
+      faces.on.removeFromParent();
+      faces.off.removeFromParent();
+      this.objectButtons.delete(id);
+    }
+    objects.forEach((object, index) => {
+      let faces = this.objectButtons.get(object.id);
+      if (!faces || faces.label !== object.label) {
+        faces?.on.removeFromParent();
+        faces?.off.removeFromParent();
+        faces = {
+          label: object.label,
+          on: buttonSprite(object.label, '#2f6fc6', `wrist:object:${object.id}`, WRIST_BUTTON_METRES),
+          off: buttonSprite(object.label, '#5b6472', `wrist:object:${object.id}:off`, WRIST_BUTTON_METRES),
+        };
+        this.palette.add(faces.on, faces.off);
+        this.objectButtons.set(object.id, faces);
+      }
+      const at = menu.objects[index];
+      faces.on.visible = at !== undefined && object.id === chosen;
+      faces.off.visible = at !== undefined && object.id !== chosen;
+      if (at) {
+        faces.on.position.set(at.x, at.y, at.z);
+        faces.off.position.set(at.x, at.y, at.z);
+      }
+    });
+    this.container.dataset.drillChosen = menu.page === 'drill' ? chosen ?? '' : '';
   }
 
   /**
