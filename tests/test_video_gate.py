@@ -14,6 +14,7 @@ import pytest
 from backend.furniture_generation import GenerationError
 from backend.video_gate import (
     OUTPUT_SIDE,
+    flames_seen,
     footing_drift,
     gate,
     read_frames,
@@ -97,3 +98,44 @@ def test_when_every_candidate_moves_the_camera_the_hazard_fails_with_why():
         gate([panned(video("strip-fire")), panned(video("strip-fire"), step=4)], picture("strip"))
     assert failed.value.reason == "video_gate"
     assert "camera" in failed.value.message
+
+
+def test_a_video_where_the_bed_never_burns_is_refused_and_the_burning_one_kept():
+    # Live, room 10's bed 2 (2026-11-23): Wan made one video of a tidy bed that never caught
+    # fire, which looked most like the picture, and one of the bed burning.
+    candidates = [video("bed2-no-fire"), video("bed2-fire")]
+    result = gate(candidates, picture("bed2"), "catches fire")
+    assert result.chosen == 1
+    unburnt, burning = result.candidates
+    assert unburnt["passed"] is False and unburnt["reason"] == "no fire was seen"
+    assert burning["passed"] is True and burning["flames"] >= 0.015
+    assert unburnt["flames"] < 0.015
+
+
+def test_when_no_candidate_shows_the_fire_the_hazard_fails_with_why():
+    with pytest.raises(GenerationError) as failed:
+        gate([video("bed2-no-fire")], picture("bed2"), "catches fire")
+    assert failed.value.reason == "video_gate"
+    assert "didn't show" in failed.value.message
+
+
+def test_every_fire_seen_so_far_shows_enough_flames():
+    # Not the power strip: its picture, drawn from words in spike #220, already shows the flames,
+    # so its video adds none. The pipeline's pictures are of the object before the hazard.
+    for name, pictured in [("bed-fire", "bed"), ("bed2-fire", "bed2")]:
+        result = gate([video(name)], picture(pictured), "catches fire")
+        assert result.candidates[0]["flames"] >= 0.015, name
+
+
+def test_a_picture_already_on_fire_gives_no_new_flames():
+    assert flames_seen(read_frames(video("strip-fire")), 0, decoded(picture("strip"))) < 0.015
+
+
+def decoded(data: bytes):
+    return cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)[..., ::-1]
+
+
+def test_a_hazard_that_is_not_fire_is_not_looked_for_as_flames():
+    result = gate([video("bed2-no-fire")], picture("bed2"), "is flooded")
+    assert result.candidates[0]["passed"] is True
+    assert result.candidates[0]["flames"] is None

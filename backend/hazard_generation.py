@@ -346,7 +346,9 @@ class HazardGeneration:
             if not videos:
                 raise first_failure or GenerationError("video")
             # The quality gate (#225) keeps the best candidate, trimmed and on white.
-            checked = run_step(lambda: gate(videos, picture), "video_gate", self.timeout)
+            checked = run_step(
+                lambda: gate(videos, picture, job.hazard), "video_gate", self.timeout
+            )
             video = checked.video
             (folder / "video.mp4").write_bytes(video)
             with self.lock:
