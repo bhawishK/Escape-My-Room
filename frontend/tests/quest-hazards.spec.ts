@@ -194,3 +194,11 @@ test('the Drill card lists the room\'s fires already made, and says when the ser
   await page.getByRole('button', { name: 'Make fires in advance', exact: true }).click();
   await expect(page.getByTestId('drill-library')).toHaveText("This server can't make fires.");
 });
+
+test('a drill typed on the Drill card is worked out by the server, which says when it cannot', async ({ page }) => {
+  // This test server has no OpenRouter key (#232): the card says so rather than failing quietly.
+  await headset(page);
+  await page.getByLabel('Or say what happens').fill('the box catches fire');
+  await page.getByRole('button', { name: 'Plan it', exact: true }).click();
+  await expect(page.getByTestId('drill-status')).toHaveText("Understanding spoken drills isn't set up on this server.");
+});

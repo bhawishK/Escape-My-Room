@@ -58,6 +58,12 @@
           <button id="drill-run" type="button" disabled>Start</button>
           <button id="drill-cancel" class="secondary" type="button" disabled>Call off</button>
         </form>
+        <form id="drill-say-form" class="furniture-make" data-testid="drill-say-form">
+          <label for="drill-say">Or say what happens</label>
+          <input id="drill-say" name="said" type="text" minlength="3" maxlength="300" placeholder="The bed by the wall catches fire" autocomplete="off">
+          <button id="drill-dictate" class="secondary" type="button" aria-pressed="false">Hold to say it</button>
+          <button id="drill-plan" type="submit">Plan it</button>
+        </form>
         <p id="drill-status" class="hint" data-testid="drill-status">Choose an object, then press Prepare</p>
         <p id="drill-library" class="hint" data-testid="drill-library">No fires made in this room yet</p>
         <button id="drill-in-advance" class="secondary" type="button">Make fires in advance</button>

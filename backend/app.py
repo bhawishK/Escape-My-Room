@@ -35,6 +35,7 @@ from backend.captures import (
     Upload,
 )
 from backend.delivery import Outbox
+from backend.drill_prompt import DrillPrompts, NotUnderstood
 from backend.env_file import load_env_file
 from backend.errors import Refusal
 from backend.filming_check import CheckRequest, FilmingChecks
@@ -55,6 +56,7 @@ from backend.hazard_generation import (
 )
 from backend.hazard_placement import Box
 from backend.live_room import LiveRoomError, LiveRooms
+from backend.openrouter import ProviderFailure
 from backend.physics import PhysicsWorker
 from backend.preparation import (
     RECONSTRUCTION_FOLDER,
@@ -201,6 +203,12 @@ FURNITURE_REFUSALS = {
 
 # What a drill can't be on: the room's floor and walls (#234, #235).
 SURFACES = re.compile(r"^(floor|wall|ceiling)")
+
+
+class DrillPlanRequest(BaseModel):
+    """What the commander said, for Qwen to turn into a drill (#232)."""
+
+    prompt: str = Field(min_length=3, max_length=300)
 
 
 class InAdvanceRequest(BaseModel):
@@ -718,6 +726,22 @@ def create_app(
         if not hazards.delete(asset_id):
             raise HTTPException(404, "That fire does not exist.")
         return Response(status_code=204)
+
+    drill_prompts = DrillPrompts.from_environment()
+
+    @app.post("/api/drill/plan")
+    async def drill_plan(request: DrillPlanRequest) -> dict[str, Any]:
+        """Which object and what happens to it, from what the commander said (#232)."""
+        if drill_prompts is None:
+            raise HTTPException(503, "Understanding spoken drills isn't set up on this server.")
+        entities = list(room.entities)
+        try:
+            found = await asyncio.to_thread(drill_prompts.plan, request.prompt, entities)
+        except NotUnderstood as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except ProviderFailure as exc:
+            raise HTTPException(502, str(exc)) from exc
+        return found.model_dump()
 
     @app.post("/api/hazards/in-advance", status_code=202)
     async def fires_in_advance(request: InAdvanceRequest) -> dict[str, Any]:

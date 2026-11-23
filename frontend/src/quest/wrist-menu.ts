@@ -73,8 +73,8 @@ export function wristMenu(hand: Position, headYaw: number, page: WristPage, piec
     if (page === 'edit') buttons.floor = { ...at(0, ROW_ABOVE), y: hand.y + ROW_ABOVE - CONTROLS_BELOW };
   }
   if (page === 'drill') {
-    const [prepare, run, cancel] = row(3, PAIR_METRES).map(at => ({ ...at, y: at.y - CONTROLS_BELOW }));
-    Object.assign(buttons, { prepare, run, cancel });
+    const [speak, prepare, run, cancel] = row(4, PAIR_METRES).map(at => ({ ...at, y: at.y - CONTROLS_BELOW }));
+    Object.assign(buttons, { speak, prepare, run, cancel });
   }
   if (page === 'exit') buttons.exit = at(0, ROW_ABOVE);
   return {
