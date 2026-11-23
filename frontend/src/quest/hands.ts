@@ -30,6 +30,8 @@ export interface InputSample {
   fingerRay: Ray | null;
   /** A hand's wrist, to tell a fist held up from a hand at rest (#177). */
   wrist: Position | null;
+  /** Every joint of a hand seen this frame, for touching the floor (#218); none for a controller. */
+  joints: Position[];
 }
 
 export interface FrameSample {
@@ -84,7 +86,7 @@ export function readFrame(frame: XRFrame, reference: XRReferenceSpace, pinching:
       grip: grip && !grip.emulatedPosition ? poseOf(grip.transform) : null,
       ray: rayOf(frame, source.targetRaySpace, reference),
       pinchAt: null,
-      pose: 'none', fingerRay: null, wrist: null,
+      pose: 'none', fingerRay: null, wrist: null, joints: [],
     };
     if (source.hand) {
       const joints: HandJoints = {};
@@ -93,6 +95,7 @@ export function readFrame(frame: XRFrame, reference: XRReferenceSpace, pinching:
         const joint = space && frame.getJointPose?.(space, reference);
         if (joint) joints[name] = poseOf(joint.transform).position;
       }
+      sample.joints = Object.values(joints).filter((joint): joint is Position => joint !== undefined);
       sample.pose = handPose(joints);
       sample.wrist = joints.wrist ?? null;
       sample.pinchAt = pinchPoint(joints);

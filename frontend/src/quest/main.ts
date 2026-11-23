@@ -24,6 +24,7 @@ import {
   throwInRoom, yawOf, orientationFromDollhouse, scaleLabel, velocityFromDollhouse,
 } from './dollhouse';
 import { floorSpot } from '../guide';
+import { FloorTouch, refloored, saveFloor, savedFloor, withFloor } from './floor-touch';
 import { Dictation } from './dictation';
 import { drillLine, drillObjects, drillPlaying, type DrillState } from './drill';
 import { Dwell, FIST_COOLDOWN_MS, FIST_HOLD_MS, GestureGate, HeadNods, fistHeldUp, unmuteHint } from './gestures';
@@ -80,6 +81,15 @@ let calibrationNow: CalibrationInput | null = null;
  * the room's floor is then put on it. Else `local`, and the eyes are taken as 1.5 m up.
  */
 let onFloor = false;
+/**
+ * The real floor's height in the `local-floor` space, as touched with a palm (#218), kept from
+ * session to session; used only when the headset has a floor space. And whether a touch is awaited.
+ */
+let touchedFloor: number | null = savedFloor();
+let touchingFloor = false;
+const floorTouch = new FloorTouch();
+/** The floor this session's alignments use: the touched one, when the headset has a floor space. */
+const floorNow = () => (onFloor ? touchedFloor : null);
 let head: Pose | null = null;
 let tracking: FrameSample['tracking'] = 'lost';
 /** The hands whose pinch the session has selected. */
@@ -197,7 +207,9 @@ function report(): void {
     room_version: state?.room.room_version ?? null,
     splat: sceneElement.dataset.splat === 'shown',
     room_scale: scaleLabel(scaling.view.scale),
-    floor: xrActive ? (onFloor ? 'real (local-floor)' : 'assumed: eyes 1.5 m up (local)') : 'not-tested',
+    floor: xrActive
+      ? (onFloor ? (touchedFloor === null ? 'real (local-floor)' : `touched: ${(touchedFloor * 100).toFixed(1)} cm from local-floor`) : 'assumed: eyes 1.5 m up (local)')
+      : 'not-tested',
     gestures: gestureLog.slice(-20),
     voice: voice.report(),
     user_agent: navigator.userAgent,
@@ -416,6 +428,24 @@ drillForm.addEventListener('submit', event => {
 });
 drillRun.addEventListener('click', runDrill);
 drillCancel.addEventListener('click', cancelDrill);
+
+/**
+ * The floor touched at `height` (#218): kept, the room stood on it, and an alignment already made
+ * moved up or down to it, so the server and the phone agree.
+ */
+function floorTouched(height: number, time: number): void {
+  const before = floorNow();
+  touchedFloor = height;
+  touchingFloor = false;
+  saveFloor(height);
+  room?.setFloor(floorNow());
+  const lined = state?.alignment.vr_solver;
+  if (onFloor && lined?.status === 'aligned') {
+    client.sendCalibration(refloored({ yaw: lined.yaw, origin: lined.origin }, before, floorNow()));
+  }
+  gesture(`Floor set ${Math.abs(height * 100).toFixed(1)} cm ${height < 0 ? 'below' : 'above'} where the headset had it`, time);
+  report();
+}
 
 /** Calls the drill off: its fire leaves the room. */
 function cancelDrill(): void {
@@ -870,6 +900,7 @@ function wristLine(): string {
     return said ? `${said} · pinch Make it` : 'Hold to speak, and say the piece to make';
   }
   if (wristPage === 'drill') return drillText();
+  if (wristPage === 'edit' && touchingFloor) return 'Rest a hand flat on the floor for a second';
   if (wristPage === 'edit') {
     const piece = entities().find(entity => entity.id === offer?.id);
     return piece ? `${piece.label} · Move, or Resize with two hands` : 'Tap a placed piece to choose it';
@@ -961,7 +992,7 @@ function frame(xrFrame: XRFrame, time: number): void {
     if (tracking !== 'tracked') pause('lost');
   }
   head = sample.head;
-  if (head) calibrationNow = alignmentFromPose(head.position, head.orientation, onFloor);
+  if (head) calibrationNow = withFloor(alignmentFromPose(head.position, head.orientation, onFloor), floorNow());
   const alignment = aligned();
 
   // The wrist menu opens on an open left palm and closes on a fist (#204); with a controller, it
@@ -1008,7 +1039,17 @@ function frame(xrFrame: XRFrame, time: number): void {
   room?.showWristMenu(catalogueItems, menu, wristLine(), {
     speaking: speaking !== null, making: making !== null,
     running: drillPlaying(currentDrill(), state?.room.hazards ?? []),
+    flooring: touchingFloor,
   }, drillObjects(entities()), chosenObject());
+
+  // Touching the floor (#218): a hand resting flat on the real floor sets the room's floor there.
+  if (touchingFloor) {
+    for (const input of sample.inputs) {
+      if (input.kind !== 'hand' || input.holding) continue;
+      const height = floorTouch.add(input.joints, time);
+      if (height !== null) floorTouched(height, time);
+    }
+  }
 
   // Holding: a press of the grip or a pinch takes hold; letting go puts the object down.
   for (const input of sample.inputs) {
@@ -1057,6 +1098,9 @@ function frame(xrFrame: XRFrame, time: number): void {
           runDrill();
         } else if (choice.button === 'cancel') {
           cancelDrill();
+        } else if (choice.button === 'floor') {
+          touchingFloor = !touchingFloor;
+          floorTouch.reset();
         } else {
           editChosen(input, choice.button, time);
         }
@@ -1352,6 +1396,7 @@ async function start(): Promise<void> {
     void session?.requestReferenceSpace('local-floor').then(() => {
       onFloor = true;
       room?.setPresenting(xrActive, true);
+      room?.setFloor(floorNow());
       report();
     }, () => undefined);
     session?.addEventListener('selectstart', event => { if (event.inputSource.hand) pinching.add(event.inputSource); });
