@@ -1,0 +1,8 @@
+{
+  "source": "hand-written for tests (#269): walls round the splat room's floor, a door on +x",
+  "walls": {"x": [-1.34, 1.30], "z": [-1.34, 1.30], "height": 2.4},
+  "openings": [
+    {"id": "door_0", "kind": "door", "wall": "wall_1", "centre": [1.30, 1.0, 0.0], "width": 0.9, "height": 2.0}
+  ],
+  "furniture": []
+}

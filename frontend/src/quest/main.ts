@@ -1389,6 +1389,13 @@ function frame(xrFrame: XRFrame, time: number): void {
     ? handInDollhouse(scaling.view, alignment, handPoints(sample.inputs), floor()) : null;
   publishHand(reaching, time);
   publishGuide(pointedSpot, time);
+  // The dollhouse's walls are cut away where they would stand between the viewer and the room (#269).
+  if (alignment && head) {
+    const at = inRoom(alignment, head.position);
+    room?.cutWalls([at.x, at.z]);
+  } else {
+    room?.cutWalls(null);
+  }
   publishPresence(time);
   showHud(time, drawn.some(ray => ray.look === 'blocked'));
   if (performance.now() - lastReport >= REPORT_MS) report();

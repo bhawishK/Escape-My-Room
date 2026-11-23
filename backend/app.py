@@ -453,6 +453,7 @@ def create_app(
         room.splat_url = loaded.splat_url
         room.splat_phone_url = loaded.splat_phone_url
         room.landmarks = list(loaded.landmarks)
+        room.walls = list(loaded.walls)
         room.map = loaded.map
         room.splat_placement = loaded.splat_placement
         room.load_error = None

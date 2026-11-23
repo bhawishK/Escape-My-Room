@@ -74,6 +74,8 @@ export interface RoomState {
   loaded_by: { mobile_master: number | null; vr_solver: number | null };
   /** Hazards in the room (#229): their frames, placement, the object hidden, and when they started. */
   hazards?: SessionHazard[];
+  /** The walls from the room's layout, drawn in the dollhouse (#269); none without a layout. */
+  walls?: { start: [number, number]; end: [number, number]; height: number; thickness: number }[];
 }
 
 export interface AlignmentState {
