@@ -14,6 +14,7 @@ python -m backend.reconstruction VIDEO OUT [--quick] [--max-frames N] [--exhaust
 | `report.json` | Settings, each stage's report and time, and where each frame was filmed from. `build_room.py` reads the cameras. |
 | `previews/` | Up to four held-out frames next to the splat's render of the same view |
 | `vps/` | The positioning map for #133 (below) |
+| `layout.txt` | SpatialLM's layout: walls, doors, windows and furniture boxes (#270; below), when SpatialLM is installed |
 | `work/` | Frames, the COLMAP database and models, and one marker per finished stage |
 
 Then build the room as before: `python assets/splat-room/build_room.py OUT data/splat-room`.
@@ -26,6 +27,7 @@ Then build the room as before: `python assets/splat-room/build_room.py OUT data/
 4. **`splat`:** gsplat MCMC training, at most 400,000 splats at degree-1 colour, within a GPU memory budget (below).
 5. **`vps_map`:** the positioning map (below).
 6. **`package`:** writes `report.json`.
+7. **`layout`:** SpatialLM's layout of the room (#270): its walls, doors, windows and furniture, as `layout.txt` (below). Skipped, with the reason, when SpatialLM isn't installed.
 
 Each stage prints progress as one JSON line per event, for example `{"stage": "splat", "state": "step", "step": 4001, "total": 20000, "message": "312,000 splats, loss 0.0410", "seconds": 812.4}`. The states are `started`, `step`, `done`, `skipped` and `failed`. The exit code is 0 when done, 3 when training ran out of GPU memory twice, and 1 for any other failure, with the traceback on stderr. With `--watch-stdin`, the run stops when its standard input closes; the web server starts it that way, so it never outlives the server.
 
@@ -68,6 +70,26 @@ A changed frame or matching setting reruns frames or COLMAP and everything after
 - **Licence:** SuperPoint's weights are for non-commercial use only, which suits the contest. ALIKED is a BSD-licensed alternative if that changes.
 
 The phone's frames must be described with the same two models; `map.json` names them. Matching them (LightGlue) belongs to #133, so it isn't installed here.
+
+## The room's layout (#270)
+
+The `layout` stage gives each new room its furniture and walls; before, the #206 experiment scripts did it by hand.
+
+1. **The points:** the splat's visible points (opacity over 0.1) are placed in metres exactly as `build_room.py` will place them. They're written as SpatialLM's point cloud: z up, walls along x and y, with strays outside the 1st–99th percentile (plus 0.5 m) cut off.
+2. **SpatialLM:** `SpatialLM1.1-Qwen-0.5B` runs in its own env (`~/spatiallm`, or `ESCAPE_ROOM_SPATIALLM_DIR`), offline, with a fixed seed. It writes `layout.txt`, one wall, door, window or box per line.
+3. **When the room is built** (made live), the layout is applied (`backend/room_layout.py`):
+   - solid furniture (beds, desks, chairs, sofas, …) becomes static entities, with each top lowered to the splat's densest flat layer when the box is clearly taller;
+   - the floor becomes the rectangle the walls enclose;
+   - the movable box goes to the freest floor;
+   - `layout.json` keeps the walls and openings, which give the dollhouse its walls with a doorway (#269).
+
+   Soft or flat things (carpets, curtains) are left out.
+
+**A layout is used only if it is plausible.** Its walls must be 2.2–3.2 m high, start within 15 cm of the floor, and fit inside the floor the room builder found (give or take 0.5 m). Otherwise the room is built as before, and the reason is logged.
+
+This matters because SpatialLM reads a phone video's splat, floaters and all. On room 10's raw splat it saw a room 6.45 × 4.55 m with 3.46 m walls starting 0.9 m under the floor, plus sofas instead of beds; the room is 3.95 × 2.83 m with 2.52 m walls. Room 10's good layout came from a hand-cleaned splat (#206). So **expect most new rooms' layouts to be rejected** until SpatialLM gets cleaner points or the walls are set by hand.
+
+Settings: `ESCAPE_ROOM_SPATIALLM_DIR` (default `~/spatiallm`) and `ESCAPE_ROOM_SPATIALLM_PYTHON` (default `<dir>/.venv/bin/python`).
 
 ## Installing on the GPU desktop
 
