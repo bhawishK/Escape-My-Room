@@ -17,6 +17,7 @@ whitened by hand; this does it from measures set on real Wan videos:
   object (flames and smoke included); the rest becomes pure white, the object centred in a square.
 """
 
+import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,6 +42,15 @@ MAX_FOOTING_DRIFT = 0.12
 OBJECT_DIFFERENCE = 60
 # The square round the object, this much larger than it.
 FRAMING = 1.25
+# A fire must be seen (#251): flame-coloured pixels (orange to yellow, saturated enough, bright)
+# over the video's last third, less those already in the picture, as a share of the frame.
+# Measured live: a bed that never burnt 0.007; real fires 0.036 (pale flames on a power strip) to
+# 0.11. The picture is taken off so an orange object doesn't pass as a fire.
+MIN_FLAMES = 0.015
+FIRE_WORDS = re.compile(r"fire|flame|burn|blaz|ignit|alight", re.IGNORECASE)
+FLAME_HUE = (3, 30)
+FLAME_SATURATION = 70
+FLAME_VALUE = 200
 
 
 @dataclass
@@ -228,9 +238,31 @@ def on_white(frames: list[np.ndarray]) -> list[np.ndarray]:
     return out
 
 
-def gate(candidates: list[bytes], picture: bytes) -> GateResult:
+def flame_share(frame: np.ndarray) -> float:
+    """How much of the frame is flame-coloured."""
+    hsv = cv2.cvtColor(
+        cv2.resize(frame, (128, 128), interpolation=cv2.INTER_AREA), cv2.COLOR_RGB2HSV
+    )
+    hue, saturation, value = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    flames = (
+        (hue >= FLAME_HUE[0])
+        & (hue <= FLAME_HUE[1])
+        & (saturation >= FLAME_SATURATION)
+        & (value >= FLAME_VALUE)
+    )
+    return float(flames.mean())
+
+
+def flames_seen(frames: list[np.ndarray], start: int, picture: np.ndarray) -> float:
+    """The flames over the video's last third, beyond what the picture already had."""
+    late = frames[start + (len(frames) - start) * 2 // 3 :] or frames[-1:]
+    return float(np.mean([flame_share(frame) for frame in late])) - flame_share(picture)
+
+
+def gate(candidates: list[bytes], picture: bytes, hazard: str = "") -> GateResult:
     """The best candidate, trimmed and on white, with each candidate's measures; GenerationError
-    `video_gate` with the reason when none will do."""
+    `video_gate` with the reason when none will do. A fire must be seen in it (#251)."""
+    fire = bool(FIRE_WORDS.search(hazard))
     source = cv2.imdecode(np.frombuffer(picture, np.uint8), cv2.IMREAD_COLOR)
     if source is None:
         raise GenerationError("video_gate", "The hazard's picture couldn't be read.")
@@ -245,18 +277,30 @@ def gate(candidates: list[bytes], picture: bytes) -> GateResult:
             continue
         start = trim_point(frames)
         drift = footing_drift(frames, start)
+        flames = round(flames_seen(frames, start, source), 4) if fire else None
+        reason = None
+        if drift > MAX_FOOTING_DRIFT:
+            reason = "the camera moved"
+        elif flames is not None and flames < MIN_FLAMES:
+            reason = "no fire was seen"
         measured.append(
             {
                 "frames": len(frames),
                 "trimmed": start,
                 "drift": round(float(drift), 4),
                 "likeness": round(float(likeness(frames[start], source)), 4),
-                "passed": bool(drift <= MAX_FOOTING_DRIFT),
-                "reason": None if drift <= MAX_FOOTING_DRIFT else "the camera moved",
+                "flames": flames,
+                "passed": reason is None,
+                "reason": reason,
             }
         )
     passing = [number for number, found in enumerate(measured) if found["passed"]]
     if not passing:
+        if any(found.get("reason") == "no fire was seen" for found in measured):
+            raise GenerationError(
+                "video_gate",
+                f"The generated videos didn't show the object {hazard.strip()}. Try again.",
+            )
         raise GenerationError(
             "video_gate",
             "The generated videos moved the camera too much to turn into 3D. Try again.",
