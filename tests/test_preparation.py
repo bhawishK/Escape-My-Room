@@ -10,6 +10,9 @@ import httpx
 from websockets.sync.client import connect
 
 PHOTOS = Path(__file__).resolve().parents[1] / "frontend" / "tests" / "fixtures" / "photos"
+# Stage times come from wall-clock timestamps, which Windows advances about every 15.6 ms: a stage
+# slept for 0.1 s can measure 0.094 s. Checks allow one tick (#241).
+CLOCK_TICK = 0.016
 FIXTURE_WORKER = {
     "ESCAPE_ROOM_PREPARATION_WORKER": "fixture",
     "ESCAPE_ROOM_FIXTURE_STAGE_SECONDS": "0.1",
@@ -61,7 +64,7 @@ def test_a_saved_capture_becomes_a_reviewable_fixture_candidate(start_service, t
     assert room_after == room_before
     assert job["state"] == "awaiting_review"
     assert job["finished_at"] is not None
-    assert job["elapsed_seconds"] >= 0.4
+    assert job["elapsed_seconds"] >= 0.4 - CLOCK_TICK
     assert job["error"] is None
     assert job["input"]["capture_id"] == capture["id"]
     assert job["input"]["overview_image_id"] == capture["images"][0]["id"]
@@ -72,7 +75,7 @@ def test_a_saved_capture_becomes_a_reviewable_fixture_candidate(start_service, t
     assert [stage["name"] for stage in job["stages"]] == STAGES
     for stage in job["stages"]:
         assert stage["status"] == "done"
-        assert stage["elapsed_seconds"] >= 0.1
+        assert stage["elapsed_seconds"] >= 0.1 - CLOCK_TICK
         assert stage["artifacts"], stage["name"]
     candidate = job["candidate"]
     assert candidate["source"] == "fixture"
@@ -131,7 +134,7 @@ def test_a_failed_stage_stays_inspectable_and_leaves_the_room_alone(start_servic
         ("stabilization", "pending"),
         ("export", "pending"),
     ]
-    assert job["stages"][1]["elapsed_seconds"] >= 0.1
+    assert job["stages"][1]["elapsed_seconds"] >= 0.1 - CLOCK_TICK
     assert job["candidate"] is None
     assert listed == [job]
     assert room_after == room_before

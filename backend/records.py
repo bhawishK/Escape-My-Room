@@ -56,12 +56,26 @@ class RecordFolder[T: StoredRecord]:
         return self.root / record_id / f"{self.name}.json"
 
     def read(self, record_id: str) -> T | None:
+        """The record, or None if there's none. On Windows, opening a record at the moment its
+        writer replaces it is refused (a sharing violation, not a missing file): that is tried
+        again, as the writer does, so a busy job is never reported as not existing (#241)."""
         if not self.id_pattern.match(record_id):
             return None
-        try:
-            return self.model.model_validate_json(self.path(record_id).read_text(encoding="utf-8"))
-        except (OSError, ValidationError):
-            return None
+        for attempt in range(REPLACE_TRIES):
+            try:
+                text = self.path(record_id).read_text(encoding="utf-8")
+            except PermissionError:
+                if attempt == REPLACE_TRIES - 1:
+                    return None
+                time.sleep(REPLACE_WAIT_SECONDS)
+                continue
+            except OSError:
+                return None
+            try:
+                return self.model.model_validate_json(text)
+            except ValidationError:
+                return None
+        return None
 
     def save(self, record: T) -> None:
         write_json(self.path(record.id), record)
