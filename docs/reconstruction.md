@@ -85,6 +85,10 @@ The `layout` stage gives each new room its furniture and walls; before, the #206
 
    Soft or flat things (carpets, curtains) are left out.
 
+**A layout is used only if it is plausible.** Its walls must be 2.2–3.2 m high, start within 15 cm of the floor, and fit inside the floor the room builder found (give or take 0.5 m). Otherwise the room is built as before, and the reason is logged.
+
+This matters because SpatialLM reads a phone video's splat, floaters and all. On room 10's raw splat it saw a room 6.45 × 4.55 m with 3.46 m walls starting 0.9 m under the floor, plus sofas instead of beds; the room is 3.95 × 2.83 m with 2.52 m walls. Room 10's good layout came from a hand-cleaned splat (#206). So **expect most new rooms' layouts to be rejected** until SpatialLM gets cleaner points or the walls are set by hand.
+
 Settings: `ESCAPE_ROOM_SPATIALLM_DIR` (default `~/spatiallm`) and `ESCAPE_ROOM_SPATIALLM_PYTHON` (default `<dir>/.venv/bin/python`).
 
 ## Installing on the GPU desktop

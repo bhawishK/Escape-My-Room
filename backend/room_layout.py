@@ -34,6 +34,13 @@ SOLID = {
 LINE = re.compile(r"^(\w+)=(\w+)\((.*)\)$")
 MIN_OPACITY = 0.1
 MARGIN = 0.5
+# A layout is used only if it is plausible (#270): SpatialLM reads a phone video's splat, floaters
+# and all, and can see a room twice the size, or walls starting a metre under the floor (seen on
+# room 10's raw splat). Its walls must be this high, start this near the floor, and fit inside the
+# floor the room builder found, give or take this much.
+WALL_HEIGHTS = (2.2, 3.2)
+WALL_BASE = 0.15
+FLOOR_SLACK = 0.5
 
 
 class LayoutUnavailable(Exception):
@@ -207,6 +214,35 @@ def free_spot(
     return best
 
 
+def implausible(
+    outline: tuple[float, float, float, float],
+    height: float,
+    base: float,
+    floor: dict[str, Any] | None,
+) -> str | None:
+    """Why SpatialLM's walls can't be this room's, or None if they can (#270)."""
+    if not WALL_HEIGHTS[0] <= height <= WALL_HEIGHTS[1]:
+        return f"its walls are {height:.2f} m high, not {WALL_HEIGHTS[0]}–{WALL_HEIGHTS[1]} m"
+    if abs(base) > WALL_BASE:
+        return f"its walls start {base:+.2f} m from the floor"
+    if floor is not None:
+        x0, x1, z0, z1 = outline
+        half_w, half_d = floor["size"]["width"] / 2, floor["size"]["depth"] / 2
+        fx, fz = floor["position"]["x"], floor["position"]["z"]
+        inside = (
+            x0 >= fx - half_w - FLOOR_SLACK
+            and x1 <= fx + half_w + FLOOR_SLACK
+            and z0 >= fz - half_d - FLOOR_SLACK
+            and z1 <= fz + half_d + FLOOR_SLACK
+        )
+        if not inside:
+            return (
+                f"its walls ({x1 - x0:.2f} x {z1 - z0:.2f} m) reach past the filmed floor "
+                f"({2 * half_w:.2f} x {2 * half_d:.2f} m)"
+            )
+    return None
+
+
 def apply_layout(
     room: Path,
     layout_text: str,
@@ -216,17 +252,21 @@ def apply_layout(
     """The room in `room` laid out by SpatialLM's `layout_text`: its manifest, box models and
     `layout.json` rewritten in place. `points` are the splat's visible points in room metres;
     `write_box(folder, name, size, colour)` writes a box model. Returns `layout.json`. A layout
-    without walls changes nothing and returns {}."""
+    that isn't plausible changes nothing and returns {"rejected": why}."""
     items = parse(layout_text)
     walls = [[float(v) for v in args] for _, kind, args in items if kind == "Wall"]
     if not walls:
-        return {}
+        return {"rejected": "SpatialLM found no walls"}
     corners = [to_room(*wall[0:3]) for wall in walls] + [to_room(*wall[3:6]) for wall in walls]
     xs, zs = [corner[0] for corner in corners], [corner[2] for corner in corners]
     x0, x1, z0, z1 = min(xs), max(xs), min(zs), max(zs)
     height = max(wall[6] for wall in walls)
 
     manifest = json.loads((room / "manifest.json").read_text(encoding="utf-8"))
+    floor = next((e for e in manifest["entities"] if e["id"] == "floor"), None)
+    why = implausible((x0, x1, z0, z1), height, min(wall[2] for wall in walls), floor)
+    if why is not None:
+        return {"rejected": why}
     entities: list[dict[str, Any]] = []
     for entity in manifest["entities"]:
         if entity["id"].startswith(("wall_", "layout_")):

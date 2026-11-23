@@ -135,3 +135,39 @@ def test_a_built_room_with_a_layout_still_loads_as_a_prepared_room(tmp_path):
     _, folder = rooms.build("job_ef", reconstruction(tmp_path), 9)
     again = load_prepared_room(folder)
     assert again.room_version == 9 and len(again.walls) == 5
+
+
+@pytest.mark.parametrize(
+    ("change", "why"),
+    [
+        # Walls 3.46 m high, starting 0.9 m under the floor: as SpatialLM read room 10's raw splat.
+        (lambda text: text.replace(",2.4,0.0)", ",3.46,0.0)"), "high"),
+        (lambda text: text.replace(",0.0,", ",-0.9,").replace("(-0.9", "(0.0"), "from the floor"),
+        # A room far bigger than the filmed floor.
+        (
+            lambda text: text.replace("1.2,", "4.2,").replace("-1.2", "-4.2"),
+            "past the filmed floor",
+        ),
+        (
+            lambda text: "\n".join(line for line in text.splitlines() if "Wall" not in line),
+            "no walls",
+        ),
+    ],
+)
+def test_an_implausible_layout_is_not_used_and_the_room_is_built_as_before(tmp_path, change, why):
+    rooms = LiveRooms(tmp_path / "data", SPLAT_ROOM)
+    loaded, folder = rooms.build("job_gh", reconstruction(tmp_path, layout=change(LAYOUT)), 10)
+    assert not any(entity.id.startswith("layout_") for entity in loaded.entities)
+    assert loaded.walls == [] and not (folder / "layout.json").exists()
+
+
+def test_an_implausible_layout_says_why():
+    from backend.room_layout import implausible
+
+    floor = {"size": {"width": 6.0, "depth": 4.0}, "position": {"x": 0.7, "z": -0.1}}
+    # Room 10's raw splat as SpatialLM read it: 6.45 x 4.55 m, walls 3.46 m from 0.9 m under.
+    assert "3.46 m high" in implausible((-2.26, 4.14, -2.28, 2.22), 3.46, -0.9, floor)
+    assert "-0.90 m from the floor" in implausible((-2.26, 4.14, -2.28, 2.22), 2.5, -0.9, floor)
+    assert "past the filmed floor" in implausible((-3.5, 4.14, -2.28, 2.22), 2.5, 0.0, floor)
+    # Room 10 as it is: 3.95 x 2.83 m, 2.52 m high, inside its filmed floor.
+    assert implausible((-1.39, 2.56, -1.17, 1.66), 2.52, 0.0, floor) is None

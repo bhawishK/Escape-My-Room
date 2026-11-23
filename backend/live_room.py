@@ -12,6 +12,7 @@ are changed.
 
 import importlib.util
 import json
+import logging
 import shutil
 from pathlib import Path
 from types import ModuleType
@@ -178,6 +179,9 @@ def json_object(path: Path) -> dict[str, Any]:
     return cast(dict[str, Any], found) if isinstance(found, dict) else {}
 
 
+LOG = logging.getLogger(__name__)
+
+
 def lay_out(room: Path, layout_text: str) -> None:
     """The room in `room` laid out by SpatialLM's layout, its box models made as the builder's."""
     module = build_room()
@@ -186,7 +190,9 @@ def lay_out(room: Path, layout_text: str) -> None:
     def write_box(folder: Path, name: str, size: tuple[float, float, float], colour: str) -> None:
         boxes.write_glb(folder / f"{name}.glb", name, [boxes.part(f"{name}_slab", size, colour)])
 
-    apply_layout(room, layout_text, room_points(room), write_box)
+    applied = apply_layout(room, layout_text, room_points(room), write_box)
+    if "rejected" in applied:
+        LOG.warning("SpatialLM's layout of %s wasn't used: %s", room.name, applied["rejected"])
 
 
 def build_room() -> ModuleType:
