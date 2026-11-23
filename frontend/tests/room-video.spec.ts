@@ -126,7 +126,8 @@ test('reconstructing a saved video shows each stage, the live training steps, th
   await expect(stages).toHaveText([
     /^Frames · /, /^COLMAP · /, /^Levelling · /, /^Depth · /, /^Splat training · /, /^Positioning map · /, /^Package · /,
   ]);
-  await expect(stages.nth(4)).toContainText(/step [123] of 3 · [123],000 splats/);
+  // Training shows its steps for a moment between polls; give it as long as the job (#241).
+  await expect(stages.nth(4)).toContainText(/step [123] of 3 · [123],000 splats/, { timeout: 15_000 });
   await expect(video.getByTestId('reconstruction-state')).toHaveText('Awaiting review', { timeout: 15_000 });
   await expect(stages.nth(0)).toHaveText(/^Frames · done in \d+\.\d s$/);
   await expect(video.getByTestId('reconstruction-summary')).toHaveText(
