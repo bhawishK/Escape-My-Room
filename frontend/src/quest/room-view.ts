@@ -89,6 +89,10 @@ export class QuestRoom {
     },
     cancel: { idle: buttonSprite('Call off', '#5b6472', 'wrist:cancel', WRIST_BUTTON_METRES), busy: null },
     move: { idle: buttonSprite('Move', '#2f6fc6', 'wrist:move', WRIST_BUTTON_METRES), busy: null },
+    floor: {
+      idle: buttonSprite('Floor', '#5b6472', 'wrist:floor', WRIST_BUTTON_METRES),
+      busy: buttonSprite('Touch floor…', '#c68a2f', 'wrist:floor:busy', WRIST_BUTTON_METRES),
+    },
     resize: { idle: buttonSprite('Resize', '#2f8f5f', 'wrist:resize', WRIST_BUTTON_METRES), busy: null },
     exit: { idle: buttonSprite('Exit VR', '#c62f2f', 'wrist:exit', WRIST_BUTTON_METRES), busy: null },
   };
@@ -114,6 +118,8 @@ export class QuestRoom {
   private presenting = false;
   /** Whether the VR reference space's y = 0 is the real floor (#207). */
   private onFloor = false;
+  /** Where the real floor is in that space, as touched (#218). */
+  private floorHeight = 0;
   private alignment: AlignmentState = { status: 'not_aligned', yaw: 0, origin: { x: 0, y: 0, z: 0 } };
   private predicted: { id: string; position: THREE.Vector3 } | null = null;
   /** An object the phone holds glides to each placement Python sends, over about this long. */
@@ -211,6 +217,15 @@ export class QuestRoom {
     this.align(this.alignment);
   }
 
+  /**
+   * Where the real floor is in the `local-floor` space, as touched (#218); null for its own y = 0.
+   * Lined up, the alignment carries it; before that, the room stands on it.
+   */
+  setFloor(height: number | null): void {
+    this.floorHeight = height ?? 0;
+    this.align(this.alignment);
+  }
+
   align(alignment: AlignmentState): void {
     this.alignment = alignment;
     if (this.presenting && alignment.status === 'aligned') {
@@ -225,7 +240,7 @@ export class QuestRoom {
       // The `local` space starts at the eyes, so in VR the room's floor is standing eye height
       // below; `local-floor` has the real floor at y = 0 (#207). On the page the preview camera
       // stands on the room's own floor.
-      this.anchor.position.set(0, this.presenting && !this.onFloor ? -STANDING_EYE_HEIGHT : 0, 0);
+      this.anchor.position.set(0, this.presenting && !this.onFloor ? -STANDING_EYE_HEIGHT : this.presenting ? this.floorHeight : 0, 0);
     }
     this.container.dataset.view = alignment.status === 'aligned' ? 'calibrated' : 'overview';
     this.drawPhone();
@@ -273,7 +288,7 @@ export class QuestRoom {
     items: readonly CatalogueItem[],
     menu: WristMenu | null,
     line = '',
-    busy: { speaking: boolean; making: boolean; running?: boolean } = { speaking: false, making: false },
+    busy: { speaking: boolean; making: boolean; running?: boolean; flooring?: boolean } = { speaking: false, making: false },
     /** The Drill page's objects to choose from, and the one chosen (#234). */
     objects: readonly { id: string; label: string }[] = [],
     chosen: string | null = null,
@@ -298,7 +313,7 @@ export class QuestRoom {
     for (const [name, { idle, busy: other }] of Object.entries(this.wristButtons) as [WristButton, { idle: THREE.Sprite; busy: THREE.Sprite | null }][]) {
       const at = menu.buttons[name];
       const busyFor: Partial<Record<WristButton, boolean | undefined>> = {
-        speak: busy.speaking, make: busy.making, run: busy.running,
+        speak: busy.speaking, make: busy.making, run: busy.running, floor: busy.flooring,
       };
       const showBusy = other !== null && !!busyFor[name];
       idle.visible = at !== undefined && !showBusy;

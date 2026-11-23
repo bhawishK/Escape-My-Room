@@ -44,7 +44,7 @@ export interface WristMenu {
   /** The page's buttons by name: speak and make, prepare, run and cancel, move and resize, or exit. */
   buttons: Partial<Record<WristButton, Position>>;
 }
-export type WristButton = 'speak' | 'make' | 'prepare' | 'run' | 'cancel' | 'move' | 'resize' | 'exit';
+export type WristButton = 'speak' | 'make' | 'prepare' | 'run' | 'cancel' | 'move' | 'resize' | 'floor' | 'exit';
 
 /** What a pinch on the menu is on. */
 export type WristChoice =
@@ -69,6 +69,8 @@ export function wristMenu(hand: Position, headYaw: number, page: WristPage, piec
     const [left, rightButton] = row(2, PAIR_METRES);
     if (page === 'make') Object.assign(buttons, { speak: left, make: rightButton });
     else Object.assign(buttons, { move: left, resize: rightButton });
+    // Touch the floor (#218), on its own row so Move and Resize stay where they are.
+    if (page === 'edit') buttons.floor = { ...at(0, ROW_ABOVE), y: hand.y + ROW_ABOVE - CONTROLS_BELOW };
   }
   if (page === 'drill') {
     const [prepare, run, cancel] = row(3, PAIR_METRES).map(at => ({ ...at, y: at.y - CONTROLS_BELOW }));

@@ -49,6 +49,8 @@ test('each page shows only its own things: pieces, speak and make, objects and P
   const edit = wristMenu(HAND, 0, 'edit', 3);
   close(edit.buttons.move, { x: -0.04, y: 1.12, z: -0.4 });
   close(edit.buttons.resize, { x: 0.04, y: 1.12, z: -0.4 });
+  // Touch the floor (#218), on its own row below them.
+  close(edit.buttons.floor, { x: 0, y: 1.075, z: -0.4 });
 
   expect(Object.keys(wristMenu(HAND, 0, 'exit', 3).buttons)).toEqual(['exit']);
 });
