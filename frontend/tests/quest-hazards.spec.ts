@@ -185,3 +185,12 @@ test('the Drill panel prepares a fire on the chosen object, starts and stops it,
   await expect(phone.getByTestId('drill-badge')).toBeHidden();
   await phone.close();
 });
+
+test('the Drill card lists the room\'s fires already made, and says when the server can\'t make more', async ({ page }) => {
+  // A fire kept for the splat room's box (#235); this server has no generator.
+  keepHazard('splat-room');
+  await headset(page);
+  await expect(page.getByTestId('drill-library')).toHaveText('Fires ready: Box', { timeout: 10_000 });
+  await page.getByRole('button', { name: 'Make fires in advance', exact: true }).click();
+  await expect(page.getByTestId('drill-library')).toHaveText("This server can't make fires.");
+});

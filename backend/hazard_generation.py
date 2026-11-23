@@ -12,6 +12,7 @@ frames are kept with the server's data.
 
 import os
 import re
+import shutil
 import threading
 import uuid
 from collections.abc import Callable
@@ -130,6 +131,12 @@ VIDEO_TEMPLATE = (
 VIDEO_SEEDS = (7, 11, 23, 41)
 
 
+def normalised_hazard(hazard: str) -> str:
+    """The hazard's wording as fires are found again by (#235): lower case, single spaces, no
+    final punctuation, so "Catches fire." and "catches  fire" are the same fire."""
+    return re.sub(r"\s+", " ", hazard).strip().rstrip(".!?;:,").strip().lower()
+
+
 def video_prompt(name: str, hazard: str) -> str:
     """What the video is asked to show: the hazard, then the fixed wording the quality needs."""
     return VIDEO_TEMPLATE.format(name=name, hazard=hazard.strip().rstrip(".;,"))
@@ -211,18 +218,36 @@ class HazardGeneration:
             return job.model_copy()
 
     def cached(self, room: str, entity: str, hazard: str) -> HazardAsset | None:
-        """The newest fire already made for `entity` in `room` with this hazard, if any (#234)."""
-        found: list[tuple[float, HazardAsset]] = []
+        """The newest fire already made for `entity` in `room` with this hazard, if any (#234):
+        the room is the live room's folder, which a rebuild changes and a restore keeps."""
+        wording = normalised_hazard(hazard)
+        for asset, _ in self.library(room):
+            if asset.target.entity == entity and normalised_hazard(asset.hazard) == wording:
+                return asset
+        return None
+
+    def library(self, room: str) -> list[tuple[HazardAsset, float]]:
+        """The fires made on objects in `room`, newest first, with when each was made (#235)."""
+        found: list[tuple[HazardAsset, float]] = []
         for path in (self.root / "hazards").glob("hz_*/hazard.json"):
             try:
                 asset = HazardAsset.model_validate_json(path.read_text(encoding="utf-8"))
                 made = path.stat().st_mtime
             except (OSError, ValueError):
                 continue
-            same = asset.room == room and asset.target.entity == entity
-            if same and asset.hazard == hazard.strip() and asset.placement is not None:
-                found.append((made, asset))
-        return max(found, key=lambda pair: pair[0])[1] if found else None
+            if asset.room == room and asset.target.entity is not None and asset.placement:
+                found.append((asset, made))
+        return sorted(found, key=lambda pair: pair[1], reverse=True)
+
+    def delete(self, asset_id: str) -> bool:
+        """Deletes a fire and its frames; False if there is none by that id."""
+        if not ASSET_ID.fullmatch(asset_id):
+            return False
+        folder = self.root / "hazards" / asset_id
+        if not (folder / "hazard.json").is_file():
+            return False
+        shutil.rmtree(folder, ignore_errors=True)
+        return True
 
     def file(self, job_id: str, name: Literal["picture.png", "video.mp4"]) -> Path | None:
         if not JOB_ID.fullmatch(job_id):

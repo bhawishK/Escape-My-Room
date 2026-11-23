@@ -364,6 +364,10 @@ const drillObject = element<HTMLSelectElement>('drill-object');
 const drillRun = element<HTMLButtonElement>('drill-run');
 const drillCancel = element<HTMLButtonElement>('drill-cancel');
 const drillStatus = element('drill-status');
+const drillLibrary = element('drill-library');
+const drillInAdvance = element<HTMLButtonElement>('drill-in-advance');
+/** The room objects with a fire already made, so a drill on them starts at once (#235). */
+let readyFires = new Set<string>();
 let drillChoices = '';
 
 /** The drill as the headset is told it, or none. */
@@ -374,6 +378,50 @@ function currentDrill(): DrillState | null {
 
 function drillText(): string {
   return drillLine(currentDrill(), entities(), state?.room.hazards ?? [], drillChosen, drillJob?.state ?? null);
+}
+
+/** The room's fires already made (#235), shown on the Drill card and as ticks on the Drill menu. */
+async function showLibrary(): Promise<void> {
+  try {
+    const response = await fetch('/api/hazards');
+    if (!response.ok) return;
+    const found = (await response.json()) as { fires: { object: string }[] };
+    readyFires = new Set(found.fires.map(fire => fire.object));
+  } catch {
+    return;
+  }
+  const names = drillObjects(entities()).filter(object => readyFires.has(object.id)).map(object => object.label);
+  drillLibrary.textContent = names.length ? 'Fires ready: ' + names.join(', ') : 'No fires made in this room yet';
+}
+
+drillInAdvance.addEventListener('click', () => {
+  drillLibrary.textContent = 'Asking for fires on every object…';
+  void fetch('/api/hazards/in-advance', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+    .then(async response => {
+      if (response.status === 503) {
+        drillLibrary.textContent = "This server can't make fires.";
+        return;
+      }
+      if (!response.ok) {
+        drillLibrary.textContent = "Fires couldn't be asked for.";
+        return;
+      }
+      const asked = (await response.json()) as { jobs: unknown[]; already: string[] };
+      drillLibrary.textContent = asked.jobs.length
+        ? 'Making ' + asked.jobs.length + ' fire' + (asked.jobs.length === 1 ? '' : 's') + ' in advance, one at a time…'
+        : 'Every object already has a fire';
+    })
+    .catch(() => { drillLibrary.textContent = "Fires couldn't be asked for."; });
+});
+// The library is read now and then: fires made in advance arrive one by one.
+void showLibrary();
+window.setInterval(() => { void showLibrary(); }, 5000);
+
+/** The Drill menu's objects, a tick on those with a fire ready. */
+function drillMenuObjects(): { id: string; label: string }[] {
+  return drillObjects(entities()).map(object => ({
+    id: object.id, label: readyFires.has(object.id) ? object.label + ' ✓' : object.label,
+  }));
 }
 
 /** The object the Drill menu has chosen: the one picked, else the drill's, else the first. */
@@ -1040,7 +1088,7 @@ function frame(xrFrame: XRFrame, time: number): void {
     speaking: speaking !== null, making: making !== null,
     running: drillPlaying(currentDrill(), state?.room.hazards ?? []),
     flooring: touchingFloor,
-  }, drillObjects(entities()), chosenObject());
+  }, drillMenuObjects(), chosenObject());
 
   // Touching the floor (#218): a hand resting flat on the real floor sets the room's floor there.
   if (touchingFloor) {

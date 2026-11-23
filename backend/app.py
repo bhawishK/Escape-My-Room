@@ -22,9 +22,9 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from backend.alignment import Alignment
 from backend.captures import (
@@ -197,6 +197,17 @@ FURNITURE_REFUSALS = {
     "not_furniture": ("not_furniture", "Only placed furniture can be taken away or resized."),
     "controlled_by_other": ("controlled_by_other", "The other person is holding that piece."),
 }
+
+
+# What a drill can't be on: the room's floor and walls (#234, #235).
+SURFACES = re.compile(r"^(floor|wall|ceiling)")
+
+
+class InAdvanceRequest(BaseModel):
+    """Objects to make fires for in advance (#235); none named means every object."""
+
+    objects: list[str] | None = Field(default=None, max_length=50)
+    hazard: str = Field(default="catches fire", min_length=3, max_length=120)
 
 
 # Why a hazard message was refused (#229).
@@ -684,6 +695,49 @@ def create_app(
         if entity is not None and not any(e.id == entity for e in room.entities):
             raise HTTPException(422, f"There's no {entity} in the room.")
         return hazards.start(request).model_dump()
+
+    @app.get("/api/hazards")
+    async def fire_library() -> dict[str, Any]:
+        """The fires made on objects in the live room (#235), newest first."""
+        return {
+            "fires": [
+                {
+                    "id": asset.id,
+                    "object": asset.target.entity,
+                    "hazard": asset.hazard,
+                    "frames": asset.frames,
+                    "size_bytes": asset.size_bytes,
+                    "made_at": datetime.fromtimestamp(made, UTC).isoformat(),
+                }
+                for asset, made in hazards.library(live_rooms.directory.name)
+            ]
+        }
+
+    @app.delete("/api/hazards/{asset_id}", status_code=204)
+    async def delete_fire(asset_id: str) -> Response:
+        if not hazards.delete(asset_id):
+            raise HTTPException(404, "That fire does not exist.")
+        return Response(status_code=204)
+
+    @app.post("/api/hazards/in-advance", status_code=202)
+    async def fires_in_advance(request: InAdvanceRequest) -> dict[str, Any]:
+        """Fires made in advance (#235), so a drill on these objects never waits: each object
+        named, else every object but the floor and walls. Those already made are skipped."""
+        if not hazards.available:
+            raise HTTPException(503, "Making hazards isn't set up on this server.")
+        known = [e.id for e in room.entities if not SURFACES.match(e.id)]
+        wanted = request.objects if request.objects is not None else known
+        unknown = [entity for entity in wanted if entity not in known]
+        if unknown:
+            raise HTTPException(422, f"There's no {unknown[0]} in the room.")
+        folder = live_rooms.directory.name
+        already = [e for e in wanted if hazards.cached(folder, e, request.hazard) is not None]
+        jobs = [
+            hazards.start(HazardRequest(target=HazardTarget(entity=e), hazard=request.hazard))
+            for e in wanted
+            if e not in already
+        ]
+        return {"jobs": [job.model_dump() for job in jobs], "already": already}
 
     @app.get("/api/hazards/jobs/{job_id}")
     async def hazard_job(job_id: str) -> dict[str, Any]:
