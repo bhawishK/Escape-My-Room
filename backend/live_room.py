@@ -23,6 +23,7 @@ from backend.errors import Refusal
 from backend.prepared_room import LoadedRoom, PreparedRoomError, load_prepared_room
 from backend.protocol import WireModel
 from backend.records import now, write_json
+from backend.room_layout import apply_layout, room_points
 
 
 class LiveRoomError(Refusal):
@@ -102,6 +103,10 @@ class LiveRooms:
             if (reconstruction / "vps").is_dir():
                 # The positioning map (#133), in the splat's frame like the splat itself.
                 shutil.copytree(reconstruction / "vps", out / "vps")
+            if (reconstruction / "layout.txt").is_file():
+                # SpatialLM's layout (#270): furniture, the floor to the walls, and the walls
+                # and doors the dollhouse draws (#269).
+                lay_out(out, (reconstruction / "layout.txt").read_text(encoding="utf-8"))
             return load_prepared_room(out), out
         except (PreparedRoomError, SystemExit, OSError, ValueError) as exc:
             shutil.rmtree(out, ignore_errors=True)
@@ -171,6 +176,17 @@ class LiveRooms:
 def json_object(path: Path) -> dict[str, Any]:
     found = json.loads(path.read_text(encoding="utf-8"))
     return cast(dict[str, Any], found) if isinstance(found, dict) else {}
+
+
+def lay_out(room: Path, layout_text: str) -> None:
+    """The room in `room` laid out by SpatialLM's layout, its box models made as the builder's."""
+    module = build_room()
+    boxes = module.multi_asset
+
+    def write_box(folder: Path, name: str, size: tuple[float, float, float], colour: str) -> None:
+        boxes.write_glb(folder / f"{name}.glb", name, [boxes.part(f"{name}_slab", size, colour)])
+
+    apply_layout(room, layout_text, room_points(room), write_box)
 
 
 def build_room() -> ModuleType:

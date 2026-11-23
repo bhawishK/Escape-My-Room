@@ -129,6 +129,37 @@ def video_to_room(video: Path, out: Path) -> list[Stage]:
         (out / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
         return {"report": "report.json", "ply_mb": report["ply_mb"]}
 
+    def layout(context: StageContext) -> Report:
+        """The room's layout from SpatialLM (#270): walls, doors, windows and furniture boxes,
+        in metres as the room builder will place the splat. Skipped where it isn't installed."""
+        from backend.live_room import build_room
+        from backend.reconstruction.splat import read_ply
+        from backend.room_layout import (
+            LayoutUnavailable,
+            run_spatiallm,
+            visible_points,
+            write_points,
+        )
+
+        report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+        place = build_room().placement(out / "room.ply", report.get("cameras", []))
+        points, colours = visible_points(
+            read_ply(out / "room.ply"), place["rotation"], place["scale"], (0.0, place["lift"], 0.0)
+        )
+        cloud = context.work / "layout-points.ply"
+        count = write_points(cloud, points, colours)
+        try:
+            run_spatiallm(cloud, out / "layout.txt")
+        except LayoutUnavailable as exc:
+            return {"skipped": str(exc)}
+        lines = (out / "layout.txt").read_text(encoding="utf-8").splitlines()
+        return {
+            "layout": "layout.txt",
+            "points": count,
+            "walls": sum("=Wall(" in line for line in lines),
+            "objects": sum("=Bbox(" in line for line in lines),
+        }
+
     return [
         Stage(
             "frames",
@@ -168,6 +199,7 @@ def video_to_room(video: Path, out: Path) -> list[Stage]:
         ),
         Stage("vps_map", vps_map, outputs=(out / "vps" / "map.json",)),
         Stage("package", package, outputs=(out / "report.json",)),
+        Stage("layout", layout),
     ]
 
 
