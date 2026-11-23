@@ -60,12 +60,17 @@ class Drill:
     """The drill being prepared or ready (#234): on which object, what happens to it, the job
     making its fire (if one is being made) and its hazard in the room once there."""
 
-    entity: str
+    # A room object's id; or, for a new object (#233), its description and where it stands.
+    entity: str | None
     hazard: str
     state: Literal["preparing", "ready", "failed"]
     job: str | None = None
     hazard_id: str | None = None
     error: str | None = None
+    description: str | None = None
+    at: tuple[float, float] | None = None
+    # A new object's body, placed as furniture under its fire (#233).
+    body_entity: str | None = None
 
     def wire(self, role: Role) -> dict[str, Any]:
         # The phone learns that a drill is coming, never what it will be.
@@ -73,6 +78,7 @@ class Drill:
             return {"state": self.state}
         return {
             "entity": self.entity,
+            "description": self.description,
             "hazard": self.hazard,
             "state": self.state,
             "job": self.job,
@@ -89,10 +95,21 @@ class SessionHazard:
     id: str
     asset: HazardAsset
     started_at: float | None = None
+    # A new object's fire is made at the room's origin and moved to where its body stands (#233),
+    # hiding that body while it plays.
+    offset: tuple[float, float] = (0.0, 0.0)
+    hide: str | None = None
 
     def wire(self) -> dict[str, Any]:
         asset = self.asset
         placement = asset.placement
+        if placement is not None and self.offset != (0.0, 0.0):
+            x, y, z = placement.position
+            placement = placement.model_copy(
+                update={"position": (x + self.offset[0], y, z + self.offset[1]), "hide": self.hide}
+            )
+        elif placement is not None and self.hide is not None:
+            placement = placement.model_copy(update={"hide": self.hide})
         return {
             "id": self.id,
             "asset": asset.id,
@@ -406,12 +423,14 @@ class PrototypeRoom:
         self.revision += 1
         return "ok"
 
-    def drill_ready(self, asset: HazardAsset) -> str:
+    def drill_ready(
+        self, asset: HazardAsset, offset: tuple[float, float] = (0.0, 0.0), hide: str | None = None
+    ) -> str:
         """The drill's fire is made or found: it goes into the room, stopped."""
         drill = self.drill
         if drill is None or self.room_version is None:
             return "unknown"
-        result = self.add_hazard(self.room_version, asset)
+        result = self.add_hazard(self.room_version, asset, offset, hide)
         if result != "ok":
             drill.state, drill.error = "failed", "The fire couldn't be put into the room."
             return result
@@ -424,11 +443,23 @@ class PrototypeRoom:
         if drill is None:
             return None
         self.hazards = [hazard for hazard in self.hazards if hazard.id != drill.hazard_id]
+        # A new object's body goes with it (#233).
+        body = next((e for e in self.entities if e.id == drill.body_entity), None)
+        if body is not None:
+            self.entities.remove(body)
+            if self.physics is not None:
+                self.physics.remove(body.id)
         self.drill = None
         self.revision += 1
         return drill.job if drill.state == "preparing" else None
 
-    def add_hazard(self, room_version: int, asset: HazardAsset | None) -> str:
+    def add_hazard(
+        self,
+        room_version: int,
+        asset: HazardAsset | None,
+        offset: tuple[float, float] = (0.0, 0.0),
+        hide: str | None = None,
+    ) -> str:
         """Put a finished hazard into the room, stopped (#229)."""
         if self.load_error is not None or self.room_version is None:
             return "unavailable"
@@ -439,7 +470,9 @@ class PrototypeRoom:
         if len(self.hazards) >= MAX_HAZARDS:
             return "too_many"
         self.hazard_count += 1
-        self.hazards.append(SessionHazard(id=f"hazard_{self.hazard_count}", asset=asset))
+        self.hazards.append(
+            SessionHazard(id=f"hazard_{self.hazard_count}", asset=asset, offset=offset, hide=hide)
+        )
         self.revision += 1
         return "ok"
 

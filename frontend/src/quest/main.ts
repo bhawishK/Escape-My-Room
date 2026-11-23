@@ -372,8 +372,9 @@ let drillChoices = '';
 
 /** The drill as the headset is told it, or none. */
 function currentDrill(): DrillState | null {
+  // The headset is told what the drill is; the phone only its state.
   const drill = state?.drill;
-  return drill?.entity ? (drill as DrillState) : null;
+  return drill?.hazard !== undefined ? (drill as DrillState) : null;
 }
 
 function drillText(): string {
@@ -438,7 +439,7 @@ function prepareDrill(entity: string): void {
   drillJob = null;
   drillChosen = entity;
   drillObject.value = entity;
-  client.sendPrepareDrill(version, entity);
+  client.sendPrepareDrill(version, { entity });
 }
 
 /** Starts the drill's fire, or stops it while it runs. */
@@ -491,13 +492,20 @@ async function planDrill(said: string): Promise<void> {
       drillStatus.textContent = await errorMessage(response, "That couldn't be made a drill.");
       return;
     }
-    const plan = (await response.json()) as { kind: string; entity: string | null; label: string | null; description: string | null; hazard: string };
+    const plan = (await response.json()) as {
+      kind: string; entity: string | null; label: string | null; description: string | null; hazard: string; near: string | null;
+    };
+    const version = state?.room.room_version;
     if (plan.kind === 'room_object' && plan.entity) {
       drillObject.value = plan.entity;
       prepareDrill(plan.entity);
       drillStatus.textContent = (plan.label ?? plan.entity) + ' ' + plan.hazard + ' · preparing';
-    } else {
-      drillStatus.textContent = (plan.description ?? 'That') + " isn't in the room: drills on new objects come later.";
+    } else if (plan.description && version !== null && version !== undefined) {
+      // Not in the room (#233): it is drawn, given a body and set on fire where it's asked for.
+      drillChosen = null;
+      drillJob = null;
+      client.sendPrepareDrill(version, { description: plan.description, near: plan.near });
+      drillStatus.textContent = plan.description + ' ' + plan.hazard + ' · making it, a few minutes';
     }
   } catch {
     drillStatus.textContent = 'The server could not be reached. Try again.';

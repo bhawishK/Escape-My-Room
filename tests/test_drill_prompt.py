@@ -53,6 +53,7 @@ def test_the_bed_by_the_wall_catching_fire_is_the_room_s_bed(service: str, fake:
         "label": "Bed",
         "description": None,
         "hazard": "catches fire",
+        "near": None,
     }
     # Qwen was told the room's objects and what was said.
     (asked,) = fake.received
@@ -62,11 +63,26 @@ def test_the_bed_by_the_wall_catching_fire_is_the_room_s_bed(service: str, fake:
 
 def test_something_not_in_the_room_is_a_new_object(service: str, fake: FakeOpenRouter):
     fake.answer(
-        json.dumps({"kind": "new_object", "description": "a space heater", "hazard": "fire"})
+        json.dumps(
+            {
+                "kind": "new_object",
+                "description": "a space heater",
+                "near": "layout_desk_1",
+                "hazard": "fire",
+            }
+        )
     )
     body = plan(service, "a space heater next to the desk catches fire").json()
     assert body["kind"] == "new_object" and body["entity"] is None
     assert body["description"] == "a space heater" and body["hazard"] == "catches fire"
+    # It stands by the desk (#233); a place that isn't in the room is left out.
+    assert body["near"] == "layout_desk_1"
+    fake.answer(
+        json.dumps(
+            {"kind": "new_object", "description": "a candle", "near": "the_moon", "hazard": "fire"}
+        )
+    )
+    assert plan(service, "a candle on the moon catches fire").json()["near"] is None
 
 
 def test_a_nonsense_answer_is_asked_again_and_then_used(service: str, fake: FakeOpenRouter):

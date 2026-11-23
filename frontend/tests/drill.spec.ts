@@ -49,3 +49,12 @@ test('the drill is playing only while its own fire plays', () => {
   expect(drillPlaying(ready, [{ ...HAZARD, id: 'hazard_9', playing: true }])).toBe(false);
   expect(drillPlaying(null, [{ ...HAZARD, playing: true }])).toBe(false);
 });
+
+test('a new object\'s drill is named by its description, and says when only its shape stands', () => {
+  const heater = drill('preparing', { entity: null, description: 'a space heater', job: 'j2' });
+  expect(drillLine(heater, ROOM, [], null, 'queued')).toBe('A space heater catches fire · starting…');
+  const shapeOnly = drill('ready', { entity: null, description: 'a space heater', error: 'Only its shape is shown: the 3D animation failed' });
+  expect(drillLine(shapeOnly, ROOM, [], null, null)).toBe('A space heater · Only its shape is shown: the 3D animation failed');
+  // Choosing a room object while a new object's drill is up offers Prepare for it.
+  expect(drillLine(heater, ROOM, [], 'layout_desk_1', null)).toBe('A space heater catches fire · starting…');
+});

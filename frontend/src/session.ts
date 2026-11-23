@@ -176,10 +176,17 @@ export class SessionClient {
     this.socket.send(JSON.stringify({ type: 'resize_furniture', room_version: roomVersion, id, scale, final }));
   }
 
-  /** Prepares a drill on a room object (#234): headset only. */
-  sendPrepareDrill(roomVersion: number, entity: string, hazard = 'catches fire'): void {
+  /**
+   * Prepares a drill (#234): headset only. On a room object, by its id; or on a new object (#233),
+   * by a short description, standing by a room object if one is named.
+   */
+  sendPrepareDrill(
+    roomVersion: number,
+    target: { entity: string } | { description: string; near?: string | null },
+    hazard = 'catches fire',
+  ): void {
     if (this.socket?.readyState !== WebSocket.OPEN) return;
-    this.socket.send(JSON.stringify({ type: 'prepare_drill', room_version: roomVersion, entity, hazard }));
+    this.socket.send(JSON.stringify({ type: 'prepare_drill', room_version: roomVersion, ...target, hazard }));
   }
 
   /** Calls the drill off (#234). */

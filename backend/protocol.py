@@ -154,8 +154,17 @@ class PrepareDrillMessage(WireModel):
 
     type: Literal["prepare_drill"]
     room_version: int = Field(ge=1)
-    entity: str = Field(max_length=64)
+    # A room object; or a new object (#233), described, standing near a room object if named.
+    entity: str | None = Field(default=None, max_length=64)
+    description: str | None = Field(default=None, min_length=3, max_length=60)
+    near: str | None = Field(default=None, max_length=64)
     hazard: str = Field(default="catches fire", min_length=3, max_length=120)
+
+    @model_validator(mode="after")
+    def one_target(self) -> Self:
+        if (self.entity is None) == (self.description is None):
+            raise ValueError("A drill is on a room object or a new object, one of them")
+        return self
 
 
 class CancelDrillMessage(WireModel):
