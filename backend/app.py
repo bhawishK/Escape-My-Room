@@ -79,6 +79,7 @@ from backend.protocol import (
     DesignerHandMessage,
     EntityTransformMessage,
     GripMessage,
+    GuideMessage,
     HazardControlMessage,
     MarkerState,
     PoseMessage,
@@ -132,6 +133,7 @@ type Incoming = (
     | CancelDrillMessage
     | ResizeFurnitureMessage
     | DesignerHandMessage
+    | GuideMessage
 )
 LOG = logging.getLogger(__name__)
 
@@ -160,6 +162,7 @@ INCOMING: dict[str, type[Incoming]] = {
     "cancel_drill": CancelDrillMessage,
     "resize_furniture": ResizeFurnitureMessage,
     "designer_hand": DesignerHandMessage,
+    "guide": GuideMessage,
 }
 
 # Why a voice call set-up message was not passed on (#13), as the page shows it.
@@ -733,6 +736,8 @@ def create_app(
         hand_sequence = 0
         # When this headset's hand was last passed to the phone (#185), on the loop's clock.
         hand_passed_at = -math.inf
+        guide_sequence = 0
+        guide_passed_at = -math.inf
         outbox = Outbox(socket, room.delivery_delay)
 
         async def reject(code: str, message: str) -> None:
@@ -758,10 +763,11 @@ def create_app(
                 if room.manipulation is not None and room.manipulation.owner == role:
                     room.drop()
                 if previous is not None:
-                    # A headset replaced by a new tab takes its hand with it (#185).
+                    # A headset replaced by a new tab takes its hand (#185) and spot (#248).
                     phone = room.outboxes.get("mobile_master")
                     if role == "vr_solver" and phone is not None:
                         phone.reply({"type": "designer_hand", "position": None, "length": None})
+                        phone.reply({"type": "guide", "spot": None})
                     try:
                         await asyncio.wait_for(
                             previous.close(code=1000, reason="Device connected in another tab"),
@@ -839,6 +845,31 @@ def create_app(
                             )
                             if position is not None:
                                 hand_passed_at = now
+                    elif isinstance(incoming, GuideMessage):
+                        if role != "vr_solver":
+                            await reject("role_forbidden", "Only the headset guides.")
+                            continue
+                        if incoming.sequence <= guide_sequence:
+                            await reject(
+                                "stale_sequence", "Guide sequences must increase on this socket."
+                            )
+                            continue
+                        guide_sequence = incoming.sequence
+                        now = asyncio.get_running_loop().time()
+                        # As the hand: at most one spot every HAND_SECONDS; clearing always passes.
+                        if incoming.spot is not None and now - guide_passed_at < HAND_SECONDS:
+                            continue
+                        phone = room.outboxes.get("mobile_master")
+                        if phone is not None:
+                            spot = incoming.spot
+                            phone.reply(
+                                {
+                                    "type": "guide",
+                                    "spot": None if spot is None else spot.model_dump(),
+                                }
+                            )
+                            if spot is not None:
+                                guide_passed_at = now
                     elif isinstance(incoming, PresenceMessage):
                         if incoming.sequence <= presence_sequence:
                             await reject(
@@ -1109,10 +1140,11 @@ def create_app(
                     del room.outboxes[role]
                 if room.sockets.get(role) is socket:
                     room.disconnect(role)
-                    # The headset gone, so is its hand in the phone's room (#185).
+                    # The headset gone, so are its hand (#185) and spot (#248) in the phone's room.
                     phone = room.outboxes.get("mobile_master")
                     if role == "vr_solver" and phone is not None:
                         phone.reply({"type": "designer_hand", "position": None, "length": None})
+                        phone.reply({"type": "guide", "spot": None})
                     await room.broadcast()
             await outbox.close()
 
