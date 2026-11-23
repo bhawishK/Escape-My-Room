@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { floorSpot, guidePath } from '../src/guide';
+import { floorSpot, guidePath, spotUnder } from '../src/guide';
 
 // Guiding from the dollhouse (#248): where a pointing ray meets the floor, and the phone's path to it.
 
@@ -26,4 +26,8 @@ test('the phone\'s path runs from its user\'s feet to the spot, along the floor'
   // Straight ahead (-z) needs no turn; to the +x side, a quarter turn right (-pi/2).
   expect(path.yaw).toBeCloseTo(0, 9);
   expect(guidePath({ x: 0, y: 0, z: 0 }, { x: 2, y: 0, z: 0 }).yaw).toBeCloseTo(-Math.PI / 2, 9);
+});
+
+test('a pinch while guiding sets the floor spot under the fingertip (#273)', () => {
+  expect(spotUnder({ x: 1.2, y: 0.35, z: -0.8 })).toEqual({ x: 1.2, y: 0, z: -0.8 });
 });

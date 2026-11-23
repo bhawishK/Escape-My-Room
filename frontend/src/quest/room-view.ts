@@ -101,6 +101,14 @@ export class QuestRoom {
     },
     resize: { idle: buttonSprite('Resize', '#2f8f5f', 'wrist:resize', WRIST_BUTTON_METRES), busy: null },
     exit: { idle: buttonSprite('Exit VR', '#c62f2f', 'wrist:exit', WRIST_BUTTON_METRES), busy: null },
+    guide: {
+      idle: buttonSprite('Guide', '#2f6fc6', 'wrist:guide', WRIST_BUTTON_METRES),
+      busy: buttonSprite('Guiding · off', '#c68a2f', 'wrist:guide:busy', WRIST_BUTTON_METRES),
+    },
+    mute: {
+      idle: buttonSprite('Mute', '#5b6472', 'wrist:mute', WRIST_BUTTON_METRES),
+      busy: buttonSprite('Unmute', '#c62f2f', 'wrist:mute:busy', WRIST_BUTTON_METRES),
+    },
   };
   private readonly wristLine = textSprite('');
   private wristText = '';
@@ -297,7 +305,7 @@ export class QuestRoom {
     items: readonly CatalogueItem[],
     menu: WristMenu | null,
     line = '',
-    busy: { speaking: boolean; making: boolean; running?: boolean; flooring?: boolean } = { speaking: false, making: false },
+    busy: { speaking: boolean; making: boolean; running?: boolean; flooring?: boolean; guiding?: boolean; muted?: boolean } = { speaking: false, making: false },
     /** The Drill page's objects to choose from, and the one chosen (#234). */
     objects: readonly { id: string; label: string }[] = [],
     chosen: string | null = null,
@@ -323,6 +331,7 @@ export class QuestRoom {
       const at = menu.buttons[name];
       const busyFor: Partial<Record<WristButton, boolean | undefined>> = {
         speak: busy.speaking, make: busy.making, run: busy.running, floor: busy.flooring,
+        guide: busy.guiding, mute: busy.muted,
       };
       const showBusy = other !== null && !!busyFor[name];
       idle.visible = at !== undefined && !showBusy;

@@ -44,7 +44,7 @@ export interface WristMenu {
   /** The page's buttons by name: speak and make, prepare, run and cancel, move and resize, or exit. */
   buttons: Partial<Record<WristButton, Position>>;
 }
-export type WristButton = 'speak' | 'make' | 'prepare' | 'run' | 'cancel' | 'move' | 'resize' | 'floor' | 'exit';
+export type WristButton = 'speak' | 'make' | 'guide' | 'prepare' | 'run' | 'cancel' | 'move' | 'resize' | 'floor' | 'mute' | 'exit';
 
 /** What a pinch on the menu is on. */
 export type WristChoice =
@@ -73,10 +73,15 @@ export function wristMenu(hand: Position, headYaw: number, page: WristPage, piec
     if (page === 'edit') buttons.floor = { ...at(0, ROW_ABOVE), y: hand.y + ROW_ABOVE - CONTROLS_BELOW };
   }
   if (page === 'drill') {
-    const [speak, prepare, run, cancel] = row(4, PAIR_METRES).map(at => ({ ...at, y: at.y - CONTROLS_BELOW }));
-    Object.assign(buttons, { speak, prepare, run, cancel });
+    // Guide sets the "go here" spot with a pinch on the floor (#273).
+    const [speak, guide, prepare, run, cancel] = row(5, PAIR_METRES).map(at => ({ ...at, y: at.y - CONTROLS_BELOW }));
+    Object.assign(buttons, { speak, guide, prepare, run, cancel });
   }
-  if (page === 'exit') buttons.exit = at(0, ROW_ABOVE);
+  if (page === 'exit') {
+    // Mute is a button, not a fist (#273).
+    const [mute, exit] = row(2, PAIR_METRES);
+    Object.assign(buttons, { mute, exit });
+  }
   return {
     page, stops, line: at(0, LINE_ABOVE),
     pieces: page === 'objects' ? row(pieces, SLOT_METRES) : [],

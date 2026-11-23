@@ -23,11 +23,11 @@ import {
   looksToTake,
   throwInRoom, yawOf, orientationFromDollhouse, scaleLabel, velocityFromDollhouse,
 } from './dollhouse';
-import { floorSpot } from '../guide';
+import { spotUnder } from '../guide';
 import { FloorTouch, refloored, saveFloor, savedFloor, withFloor } from './floor-touch';
 import { Dictation } from './dictation';
 import { drillLine, drillObjects, drillPlaying, type DrillState } from './drill';
-import { Dwell, FIST_COOLDOWN_MS, FIST_HOLD_MS, GestureGate, HeadNods, fistHeldUp, unmuteHint } from './gestures';
+import { Dwell, unmuteHint } from './gestures';
 import { readFrame, type FrameSample, type InputSample, type Pose, type Ray } from './hands';
 import { Hud } from './hud';
 import { PieceResize, TAP_MS, isTap, sizeLabel } from './piece-resize';
@@ -122,7 +122,6 @@ let pauseNotice: string | null = null;
 /** What a gesture last said in the headset, and until when. */
 let gestureLine: { text: string; until: number } | null = null;
 /** A fist held up mutes and unmutes the voice call (#175). */
-const fistGate = new GestureGate<'fist'>({ holdMs: FIST_HOLD_MS, cooldownMs: FIST_COOLDOWN_MS });
 /** Two pinches shrink the room into a dollhouse and grow it back (#180). Only this headset's view. */
 const scaling = new DollhouseScaling();
 /** One hand holding nothing carries a small room, to move and turn it (#182). */
@@ -147,7 +146,6 @@ let resizeUntil = -Infinity;
 let holdStart: { since: number; at: Position; id: string } | null = null;
 /** The object the last hold took, known before Python confirms the hold. */
 let heldId: string | null = null;
-const nods = new HeadNods();
 const dwell = new Dwell(DWELL_MS);
 let lastPresence = -Infinity;
 let presenceSent = false;
@@ -217,7 +215,7 @@ function report(): void {
 }
 
 /** Mutes or unmutes from inside VR, where the page's Mute button cannot be reached. */
-function toggleMute(how: 'fist' | 'button', now: number): void {
+function toggleMute(how: 'menu' | 'button', now: number): void {
   // Not while dictating: the call stays muted until the description is said (#188).
   if (!voice.on || dictationListening) return;
   const muted = !voice.status.muted;
@@ -1130,14 +1128,7 @@ function frame(xrFrame: XRFrame, time: number): void {
   const leftHand = sample.inputs.find(input => input.source.handedness === 'left');
   const wristOpen = palm.update(leftHand?.kind === 'hand' ? leftHand.pose : null, time) || leftHand?.kind === 'controller';
 
-  // A fist held up mutes and unmutes. Not by a hand that pinches, carries an object or the room,
-  // takes a piece from the catalogue, or has just closed the wrist menu.
-  const fist = voice.on && fistHeldUp(sample.inputs.map(input => ({
-    pose: input.pose, wrist: input.wrist,
-    busy: input.holding || input.source === holder || input.source === carrier || input.source === taking?.source ||
-      (input.source === leftHand?.source && palm.closingFist),
-  })), head?.position ?? null);
-  if (fistGate.update(fist ? 'fist' : 'none', time)) toggleMute('fist', time);
+  // Muting is the wrist menu's Mute button, or B or Y on a controller: no fist (#273).
 
   // Two pinches holding nothing scale the room, and take hold of nothing while they do (#180).
   // First, so the gaze and every hand below reach into the room as it is drawn this frame.
@@ -1154,10 +1145,6 @@ function frame(xrFrame: XRFrame, time: number): void {
   const looking = lookedAt();
   const rest = dwell.update(looking, time);
   if (rest.started && rest.target) gesture(`Looking at ${label(rest.target)} · a topic to talk about`, time);
-  if (head) {
-    const answer = nods.update(head.orientation, time);
-    if (answer) gesture(answer === 'yes' ? 'Yes (nod)' : 'No (shake)', time);
-  }
 
   // The wrist menu floats above the open left hand (#204), at life size too: a slider of the
   // catalogue (#184), making a piece, Move and Resize, and Exit (#200). Not while that hand
@@ -1170,6 +1157,7 @@ function frame(xrFrame: XRFrame, time: number): void {
     speaking: speaking !== null, making: making !== null,
     running: drillPlaying(currentDrill(), state?.room.hazards ?? []),
     flooring: touchingFloor,
+    guiding, muted: voice.on && voice.status.muted,
   }, drillMenuObjects(), chosenObject());
 
   // Touching the floor (#218): a hand resting flat on the real floor sets the room's floor there.
@@ -1229,6 +1217,12 @@ function frame(xrFrame: XRFrame, time: number): void {
           runDrill();
         } else if (choice.button === 'cancel') {
           cancelDrill();
+        } else if (choice.button === 'guide') {
+          // Guide on: the next pinch on the floor sets the spot; off: the spot goes (#273).
+          guiding = !guiding;
+          if (!guiding) guideSpot = null;
+        } else if (choice.button === 'mute') {
+          toggleMute('menu', time);
         } else if (choice.button === 'floor') {
           touchingFloor = !touchingFloor;
           floorTouch.reset();
@@ -1237,6 +1231,14 @@ function frame(xrFrame: XRFrame, time: number): void {
         }
         continue;
       }
+    }
+    // Guiding (#273): a pinch on the floor, in the dollhouse or the room, sets the "go here" spot
+    // under the fingertip; it stays until the next pinch or Guide is pressed again.
+    if (guiding && input.holding && !before && input.pinchAt && alignment && !holder &&
+      input.source !== leftHand?.source) {
+      guideSpot = spotUnder(inRoom(alignment, input.pinchAt));
+      pressedAt.delete(input.source);
+      continue;
     }
     // A pinch sliding the menu follows the hand along it; one holding Hold to speak listens until
     // it lets go.
@@ -1355,8 +1357,6 @@ function frame(xrFrame: XRFrame, time: number): void {
   // Rays: each controller's, a pinching hand's, and a pointing finger's.
   const drawn: DrawnRay[] = [];
   let aimed: string | null = null;
-  // Where a pointing finger meets the floor, in room metres: the phone draws a path to it (#248).
-  let pointedSpot: ReturnType<typeof floorSpot> = null;
   for (const input of sample.inputs) {
     if (input.fingerRay) {
       if (!pointingSince.has(input.source)) pointingSince.set(input.source, time);
@@ -1365,11 +1365,6 @@ function frame(xrFrame: XRFrame, time: number): void {
     }
     const pointing = input.fingerRay !== null && time - (pointingSince.get(input.source) ?? time) >= POINT_MS;
     const ray = pointing ? input.fingerRay : input.ray;
-    if (pointing && input.fingerRay && alignment && !pointedSpot) {
-      const { origin, direction } = input.fingerRay;
-      const along = { x: origin.x + direction.x * 0.1, y: origin.y + direction.y * 0.1, z: origin.z + direction.z * 0.1 };
-      pointedSpot = floorSpot(inRoom(alignment, origin), inRoom(alignment, along));
-    }
     if (!ray || (input.kind === 'hand' && !pointing && !input.holding)) continue;
     const { hit, blocked } = aimedAt(ray);
     aimed ??= hit;
@@ -1388,7 +1383,7 @@ function frame(xrFrame: XRFrame, time: number): void {
   const reaching = alignment && scaling.view.scale < 1
     ? handInDollhouse(scaling.view, alignment, handPoints(sample.inputs), floor()) : null;
   publishHand(reaching, time);
-  publishGuide(pointedSpot, time);
+  publishGuide(guiding ? guideSpot : null, time);
   // The dollhouse's walls are cut away where they would stand between the viewer and the room (#269).
   if (alignment && head) {
     const at = inRoom(alignment, head.position);
@@ -1414,24 +1409,29 @@ function floor(): RoomEntity[] {
 }
 
 /** Sends the pointed spot at most as often as presence; once pointing has stopped a moment, says it's gone. */
+/** Whether Guide is on (#273), and the spot it set, in room metres. */
+let guiding = false;
+let guideSpot: Position | null = null;
 let lastGuide = -Infinity;
+let guideSent = '';
 let guideShown = false;
-let guideLost: number | null = null;
-const GUIDE_GRACE_MS = 500;
-function publishGuide(spot: ReturnType<typeof floorSpot>, time: number): void {
+/** A kept spot is sent again this often, so the phone (which drops one after 1.5 s) keeps it. */
+const GUIDE_RESEND_MS = 500;
+function publishGuide(spot: Position | null, time: number): void {
   if (!connected) return;
   if (spot) {
-    guideLost = null;
-    if (time - lastGuide < PRESENCE_MS || !client.sendGuide(spot)) return;
+    const key = spot.x.toFixed(3) + ',' + spot.z.toFixed(3);
+    if (key === guideSent && time - lastGuide < GUIDE_RESEND_MS) return;
+    if (!client.sendGuide(spot)) return;
+    guideSent = key;
     lastGuide = time;
     guideShown = true;
     room?.showGuideSpot(spot);
     return;
   }
-  // A finger passing out of a pointing pose for a moment keeps the path where it is.
-  guideLost ??= time;
-  if (guideShown && time - guideLost >= GUIDE_GRACE_MS && client.sendGuide(null)) {
+  if (guideShown && client.sendGuide(null)) {
     guideShown = false;
+    guideSent = '';
     room?.showGuideSpot(null);
   }
 }

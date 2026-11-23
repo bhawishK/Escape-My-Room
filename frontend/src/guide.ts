@@ -25,6 +25,11 @@ export function floorSpot(from: Position, through: Position, floorY = 0, reach =
   return Math.hypot(spot.x - from.x, spot.y - from.y, spot.z - from.z) <= reach ? spot : null;
 }
 
+/** The floor spot under a point in room metres, as a pinch sets the guide's spot (#273). */
+export function spotUnder(point: Position, floorY = 0): Position {
+  return { x: point.x, y: floorY, z: point.z };
+}
+
 /** The path the phone draws: from where its user stands to the spot, along the floor. */
 export interface GuidePath {
   from: Position;

@@ -90,7 +90,7 @@ export function fistHeldUp(hands: readonly FistHand[], head: Position | null): b
 
 /** How to unmute from inside VR, for the line in the headset: by hand, or on a controller. */
 export function unmuteHint(mode: 'hands' | 'controllers' | 'none'): string {
-  return mode === 'controllers' ? 'press B or Y' : 'hold up a fist';
+  return mode === 'controllers' ? 'press B or Y' : 'pinch Unmute on the wrist menu\'s Exit page';
 }
 
 /**
