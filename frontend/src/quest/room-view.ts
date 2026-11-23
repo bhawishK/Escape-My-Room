@@ -10,6 +10,7 @@ import {
   FIGURE_METRES, LIFE_SIZE, residentFigure, scaleLabel, type DollhouseView,
 } from './dollhouse';
 import { HazardFrames, type HazardRoom } from '../hazard-frames';
+import { cutAway, wallBox, type WallSegment } from './walls';
 import { PAGE_NAMES, WRIST_PAGES, type WristButton, type WristMenu } from './wrist-menu';
 
 /** A ray drawn from a controller, a hand or a fingertip, in the `local` reference space. */
@@ -56,6 +57,11 @@ export class QuestRoom {
   private readonly highlight = new THREE.BoxHelper(new THREE.Object3D(), 0xffcc00);
   /** The commander's pointed spot on the room's floor, in room metres (#248). */
   private readonly guideRing = guideRing();
+  /** The room's walls (#269), in room metres, drawn only while the room is a dollhouse. */
+  private readonly wallGroup = new THREE.Group();
+  private walls: WallSegment[] = [];
+  private wallsDrawn = '';
+  private wallsCut = '';
   private readonly control = new THREE.BoxHelper(new THREE.Object3D(), 0xff9500);
   private readonly rays: THREE.Mesh[] = [];
   /** The picture of a piece being made (#186), held in the hand. */
@@ -139,6 +145,9 @@ export class QuestRoom {
     this.anchor.name = 'room-anchor';
     // In the room, so it shrinks and turns with the dollhouse.
     this.anchor.add(this.guideRing);
+    this.wallGroup.name = 'walls';
+    this.wallGroup.visible = false;
+    this.anchor.add(this.wallGroup);
     this.dollhouse.name = 'dollhouse';
     this.dollhouse.add(this.anchor);
     scene.add(this.dollhouse);
@@ -486,6 +495,48 @@ export class QuestRoom {
     this.container.dataset.scale = scaleLabel(view.scale);
     this.view = view;
     this.drawPhone();
+    // Walls only in the dollhouse: at life size the splat shows the real ones.
+    this.wallGroup.visible = view.scale < LIFE_SIZE_SCALE;
+  }
+
+  /** The room's walls from its layout (#269): see-through panels, made again when they change. */
+  showWalls(walls: readonly WallSegment[]): void {
+    const key = JSON.stringify(walls);
+    if (key === this.wallsDrawn) return;
+    this.wallsDrawn = key;
+    this.walls = [...walls];
+    for (const child of [...this.wallGroup.children]) {
+      child.removeFromParent();
+      const mesh = child as THREE.Mesh;
+      mesh.geometry?.dispose();
+      (mesh.material as THREE.Material | undefined)?.dispose();
+    }
+    for (const wall of walls) {
+      const box = wallBox(wall);
+      const panel = new THREE.Mesh(
+        new THREE.BoxGeometry(box.length, wall.height, wall.thickness),
+        new THREE.MeshBasicMaterial({ color: 0xe8e4dc, transparent: true, opacity: WALL_OPACITY, depthWrite: false }),
+      );
+      panel.name = 'wall';
+      panel.position.set(box.x, wall.height / 2, box.z);
+      panel.rotation.y = box.yaw;
+      this.wallGroup.add(panel);
+    }
+    this.wallsCut = '';
+    this.container.dataset.walls = String(walls.length);
+  }
+
+  /**
+   * The cut-away (#269): walls between the viewer (x, z in room metres) and the room's middle are
+   * hidden, so the dollhouse's inside always shows; null shows them all.
+   */
+  cutWalls(viewer: [number, number] | null): void {
+    const cut = viewer ? cutAway(this.walls, viewer) : this.walls.map(() => false);
+    const key = cut.join(',');
+    if (key === this.wallsCut) return;
+    this.wallsCut = key;
+    this.wallGroup.children.forEach((panel, index) => { panel.visible = !cut[index]; });
+    this.container.dataset.wallsShown = String(cut.filter(hidden => !hidden).length);
   }
 
   /** Each ray, in the `local` reference space. */
@@ -559,6 +610,7 @@ export class QuestRoom {
    */
   async sync(state: SessionState): Promise<{ version: number; loaded: boolean } | null> {
     if (state.server_time_ms !== undefined) this.clock.sample(state.server_time_ms, Date.now());
+    this.showWalls(state.room.available ? state.room.walls ?? [] : []);
     const result = await this.syncRoom(state);
     if (this.hazardRoom) this.hazardRoom.entities = state.room.entities;
     this.hazards.sync(state.room.hazards ?? [], this.hazardRoom);
@@ -708,6 +760,10 @@ export class QuestRoom {
 const fileName = (url: string) => url.split('/').pop() ?? url;
 
 /** A standing figure facing -z: a body, a head and a nose for the way they face. */
+/** The room's walls in the dollhouse (#269): drawn below this scale, this see-through. */
+const LIFE_SIZE_SCALE = 0.999;
+const WALL_OPACITY = 0.35;
+
 /** The phone user's view cone (#248): how far it reaches, how wide, and how faint. */
 const VIEW_CONE = 'phone-view-cone';
 const VIEW_CONE_METRES = 1.6;

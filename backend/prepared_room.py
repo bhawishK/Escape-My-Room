@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from backend.gltf import IDENTITY, AssetError, GltfDocument, read_asset
 from backend.protocol import Position, WireModel
+from backend.room_walls import WallSegment, room_walls
 
 UNITS = "meters"
 FRAME = "y_up_right_handed"
@@ -242,6 +243,8 @@ class LoadedRoom(BaseModel):
     map: RoomMap | None = None
     # Objects the phone can calibrate by standing at two of them (#120).
     landmarks: list[RoomLandmark] = Field(default_factory=lambda: list[RoomLandmark]())
+    # The walls from the room's layout, for the dollhouse (#269); none without a layout.
+    walls: list[WallSegment] = Field(default_factory=lambda: list[WallSegment]())
 
 
 class _Entity(Protocol):
@@ -350,6 +353,13 @@ class PreparedScene(WireModel):
 
 
 def load_prepared_room(directory: Path) -> LoadedRoom:
+    """The room in `directory`, with the walls from its layout if it has one (#269)."""
+    loaded = _load_prepared_room(directory)
+    loaded.walls = room_walls(directory)
+    return loaded
+
+
+def _load_prepared_room(directory: Path) -> LoadedRoom:
     manifest_path = directory / "manifest.json"
     if not manifest_path.is_file():
         raise PreparedRoomError("Prepared room manifest is missing.")

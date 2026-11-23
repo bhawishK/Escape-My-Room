@@ -43,6 +43,7 @@ from backend.protocol import (
     Role,
     Velocity,
 )
+from backend.room_walls import WallSegment
 
 # A tracked participant who stops sending is marked stale after this long. The last place stays.
 PRESENCE_STALE_AFTER = 1.5
@@ -227,6 +228,8 @@ class PrototypeRoom:
     map: RoomMap | None = None
     # Objects the phone can calibrate by (#120).
     landmarks: list[RoomLandmark] = field(default_factory=lambda: list[RoomLandmark]())
+    # The room's walls from its layout, for the dollhouse (#269).
+    walls: list[WallSegment] = field(default_factory=lambda: list[WallSegment]())
     splat_placement: SplatPlacement | None = None
     load_error: str | None = None
     loaded_versions: dict[Role, int | None] = field(
@@ -330,6 +333,7 @@ class PrototypeRoom:
                 else None,
                 "loaded_by": dict(self.loaded_versions),
                 "hazards": [hazard.wire() for hazard in self.hazards] if available else [],
+                "walls": [wall.model_dump() for wall in self.walls] if available else [],
             },
         }
 

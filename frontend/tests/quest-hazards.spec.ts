@@ -202,3 +202,9 @@ test('a drill typed on the Drill card is worked out by the server, which says wh
   await page.getByRole('button', { name: 'Plan it', exact: true }).click();
   await expect(page.getByTestId('drill-status')).toHaveText("Understanding spoken drills isn't set up on this server.");
 });
+
+test('the headset builds the room\'s walls from its layout, with the door\'s wall in two', async ({ page }) => {
+  // The splat room's layout (#269): four walls, the door's split round it.
+  await headset(page);
+  await expect(page.getByTestId('quest-scene')).toHaveAttribute('data-walls', '5');
+});
