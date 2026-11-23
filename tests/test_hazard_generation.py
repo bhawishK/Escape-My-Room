@@ -131,14 +131,33 @@ def test_an_object_not_in_the_room_is_refused(start_service, tmp_path):
 def test_a_failed_step_says_why_and_keeps_what_was_made(
     start_service, tmp_path, fail, kept, message
 ):
-    settings = GENERATOR | {"ESCAPE_ROOM_FIXTURE_GENERATOR_FAIL": fail}
-    with start_service(tmp_path, **settings) as url:
-        started = start(url, {"description": "a space heater"}).json()
-        failed = wait_for(url, started["id"], {"failed", "ready"})
+    # On a room object: a new object's failed animation leaves its body instead (#233, below).
+    room = splat_room(tmp_path)
+    settings = GENERATOR | {
+        "ESCAPE_ROOM_FIXTURE_GENERATOR_FAIL": fail,
+        "ESCAPE_ROOM_PREPARED_DIR": str(room),
+    }
+    with start_service(tmp_path / "data", **settings) as url:
+        started = start(url, {"entity": "block"}).json()
+        # Picturing a room object from its splat takes longer than drawing one.
+        failed = wait_for(url, started["id"], {"failed", "ready"}, timeout=60)
         assert failed["state"] == "failed"
         assert failed["error"] == message
         assert failed["asset"] is None
         assert httpx.get(f"{url}{failed[kept]}", timeout=5).status_code == 200
+
+
+def test_a_new_object_whose_animation_fails_keeps_its_body_and_says_why(start_service, tmp_path):
+    settings = GENERATOR | {"ESCAPE_ROOM_FIXTURE_GENERATOR_FAIL": "animate"}
+    with start_service(tmp_path, **settings) as url:
+        started = start(url, {"description": "a space heater"}).json()
+        done = wait_for(url, started["id"], {"failed", "ready"})
+        assert done["state"] == "ready"
+        asset = done["asset"]
+        assert asset["frames"] == 0
+        assert asset["note"] == "The video couldn't be turned into a 3D animation. Try again."
+        assert asset["body"]["size"]["height"] > 0
+        assert httpx.get(f"{url}/api/hazards/{asset['id']}/body.glb", timeout=5).status_code == 200
 
 
 def test_a_hazard_can_be_cancelled_at_any_step_and_makes_nothing(start_service, tmp_path):

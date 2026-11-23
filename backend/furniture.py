@@ -32,6 +32,8 @@ class CatalogueItem(WireModel):
     model_url: str
     # Made from a description (#186), rather than built in.
     generated: bool = False
+    # A new object's body under its fire (#233) is placed, but not offered in the catalogue.
+    listed: bool = True
 
 
 class Catalogue:
@@ -64,7 +66,7 @@ class Catalogue:
 
     def listed(self) -> list[CatalogueItem]:
         with self.lock:
-            return list(self.items.values())
+            return [item for item in self.items.values() if item.listed]
 
     def file(self, name: str) -> Path | None:
         """A model file to serve, or None for anything else."""

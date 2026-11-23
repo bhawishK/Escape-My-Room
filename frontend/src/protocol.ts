@@ -103,7 +103,7 @@ export interface SessionState {
    * The drill being prepared or ready (#234). The headset is told on which object and how far
    * along; the phone only that one is coming.
    */
-  drill?: { state: 'preparing' | 'ready' | 'failed'; entity?: string; hazard?: string; job?: string | null; hazard_id?: string | null; error?: string | null } | null;
+  drill?: { state: 'preparing' | 'ready' | 'failed'; entity?: string | null; description?: string | null; hazard?: string; job?: string | null; hazard_id?: string | null; error?: string | null } | null;
   /** Counts pieces added to the catalogue, so pages reload it when one is made (#187). */
   catalogue_version: number;
   mobile_connected: boolean;

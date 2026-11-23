@@ -9,7 +9,9 @@ import type { RoomEntity } from '../protocol';
 
 /** The drill as the headset is told it: on which object, and how far along. */
 export interface DrillState {
-  entity: string;
+  /** A room object's id; null for a new object (#233), which has a description instead. */
+  entity: string | null;
+  description?: string | null;
   hazard: string;
   state: 'preparing' | 'ready' | 'failed';
   job: string | null;
@@ -42,12 +44,16 @@ export function drillLine(
 ): string {
   const label = (id: string) => entities.find(entity => entity.id === id)?.label ?? id.replace(/_/g, ' ');
   // Another object chosen than the drill's: Prepare would make a drill on it instead.
-  if (chosen && chosen !== drill?.entity) return `${label(chosen)} · pinch Prepare`;
+  if (chosen && drill?.entity !== null && chosen !== drill?.entity) return `${label(chosen)} · pinch Prepare`;
   if (!drill) return 'Choose an object, then pinch Prepare';
-  const name = label(drill.entity);
+  // A new object (#233) is named by its description, with a capital.
+  const said = drill.description ?? 'A new object';
+  const name = drill.entity ? label(drill.entity) : said.charAt(0).toUpperCase() + said.slice(1);
   const plan = `${name} ${drill.hazard}`;
   if (drill.state === 'failed') return `Couldn't prepare: ${drill.error ?? 'try again'}`;
   if (drill.state === 'preparing') return `${plan} · ${STEPS[jobState ?? 'queued'] ?? 'making it'}…`;
+  // A new object without its fire: its shape stands alone, and says why.
+  if (!drill.hazard_id) return `${name} · ${drill.error ?? 'ready'}`;
   const playing = hazards.find(hazard => hazard.id === drill.hazard_id)?.playing ?? false;
   return playing ? `${plan} · running, Stop to end` : `${plan} · ready, pinch Start`;
 }

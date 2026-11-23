@@ -70,7 +70,7 @@ export class HazardFrames {
     for (const hazard of hazards) {
       const drawn = this.drawn.get(hazard.id);
       if (drawn) drawn.hazard = hazard;
-      else if (hazard.placement) this.add(hazard, room);
+      else if (hazard.placement && hazard.frames > 0) this.add(hazard, room);
     }
     this.showLabel();
   }

@@ -39,7 +39,7 @@ from backend.drill_prompt import DrillPrompts, NotUnderstood
 from backend.env_file import load_env_file
 from backend.errors import Refusal
 from backend.filming_check import CheckRequest, FilmingChecks
-from backend.furniture import Catalogue
+from backend.furniture import Catalogue, CatalogueItem
 from backend.furniture_generation import (
     FurnitureGeneration,
     GenerationError,
@@ -48,6 +48,7 @@ from backend.furniture_generation import (
     timeout_from_environment,
 )
 from backend.hazard_generation import (
+    HazardAsset,
     HazardGeneration,
     HazardJob,
     HazardRequest,
@@ -85,6 +86,7 @@ from backend.protocol import (
     HazardControlMessage,
     MarkerState,
     PoseMessage,
+    Position,
     PrepareDrillMessage,
     PresenceMessage,
     PresenceState,
@@ -99,7 +101,7 @@ from backend.protocol import (
     VoiceSignalMessage,
     WireModel,
 )
-from backend.room_object_picture import PictureRefused, object_picture
+from backend.room_object_picture import PictureRefused, object_picture, open_side
 from backend.room_views import RenderFailure
 from backend.session_log import SessionLogs, enabled_from_environment
 from backend.sessions import Drill, PrototypeRoom
@@ -200,6 +202,9 @@ FURNITURE_REFUSALS = {
     "controlled_by_other": ("controlled_by_other", "The other person is holding that piece."),
 }
 
+
+# A new object stands this far beyond the room object it's near (#233), in metres.
+NEW_OBJECT_GAP = 0.4
 
 # What a drill can't be on: the room's floor and walls (#234, #235).
 SURFACES = re.compile(r"^(floor|wall|ceiling)")
@@ -366,13 +371,57 @@ def create_app(
             session_logs.record("hazard", {"event": event, "id": hazard_id})
             session_logs.end(event)
 
+    def new_object_spot(near: str | None) -> tuple[float, float]:
+        """Where a new object stands (#233): on the floor at a named room object's open side, a
+        little beyond it; else the middle of the room."""
+        target = next((e for e in room.entities if e.id == near), None) if near else None
+        if target is None:
+            return (0.0, 0.0)
+        across, along = open_side(room.entities, target.id)
+        reach = max(target.size.width, target.size.depth) / 2 + NEW_OBJECT_GAP
+        return (target.position.x + across * reach, target.position.z + along * reach)
+
+    def place_new_object(asset: HazardAsset, at: tuple[float, float]) -> None:
+        """A new object's fire into the room (#233): its body placed as furniture where it
+        stands, the fire moved there and hiding it while it plays. Without a 3D animation, the
+        body stands alone and the drill says why."""
+        drill = room.drill
+        body = asset.body
+        if drill is None or body is None or room.room_version is None:
+            return
+        item = CatalogueItem(
+            id=f"hzb_{asset.id[3:]}",
+            name=(asset.target.description or "New object")[:40],
+            node=body.node,
+            size=body.size,
+            model_url=body.model_url,
+            generated=True,
+            listed=False,
+        )
+        catalogue.add(item)
+        placed = room.add_furniture(room.room_version, item, Position(x=at[0], y=0.0, z=at[1]), 0.0)
+        if placed != "ok":
+            drill.state, drill.error = "failed", "There's no free floor for it there."
+            return
+        standing = room.entities[-1]
+        drill.body_entity = standing.id
+        offset = (standing.position.x, standing.position.z)
+        if asset.frames == 0:
+            drill.state, drill.job = "ready", None
+            drill.error = f"Only its shape is shown: {asset.note or 'its animation failed'}"
+            return
+        room.drill_ready(asset, offset, standing.id)
+
     async def drill_job_done(job: HazardJob) -> None:
         async with room.lock:
             drill = room.drill
             if drill is None or drill.job != job.id:
                 return
             if job.state == "ready" and job.asset is not None:
-                room.drill_ready(job.asset)
+                if job.asset.body is not None and drill.at is not None:
+                    place_new_object(job.asset, drill.at)
+                else:
+                    room.drill_ready(job.asset)
             else:
                 drill.state = "failed"
                 drill.error = job.error or "The fire couldn't be made."
@@ -762,6 +811,14 @@ def create_app(
             if e not in already
         ]
         return {"jobs": [job.model_dump() for job in jobs], "already": already}
+
+    @app.get("/api/hazards/{asset_id}/body.glb")
+    async def hazard_body(asset_id: str) -> FileResponse:
+        """A new object's mesh, its body under its fire (#233)."""
+        path = hazards.body(asset_id)
+        if path is None:
+            raise HTTPException(404, "That body does not exist.")
+        return FileResponse(path, media_type="model/gltf-binary")
 
     @app.get("/api/hazards/jobs/{job_id}")
     async def hazard_job(job_id: str) -> dict[str, Any]:
@@ -1183,7 +1240,33 @@ def create_app(
                         session_logs.end(
                             "called off" if isinstance(incoming, CancelDrillMessage) else "replaced"
                         )
-                        if isinstance(incoming, PrepareDrillMessage):
+                        if isinstance(incoming, PrepareDrillMessage) and incoming.description:
+                            # A new object (#233): found already made, else made, then placed.
+                            at = new_object_spot(incoming.near)
+                            room.drill = Drill(
+                                entity=None,
+                                description=incoming.description.strip(),
+                                hazard=incoming.hazard.strip(),
+                                state="preparing",
+                                at=at,
+                            )
+                            found = hazards.cached_new(incoming.description, incoming.hazard)
+                            if found is not None:
+                                place_new_object(found, at)
+                            elif not hazards.available:
+                                room.drill.state = "failed"
+                                room.drill.error = "This server can't make fires."
+                            else:
+                                made = hazards.start(
+                                    HazardRequest(
+                                        target=HazardTarget(description=incoming.description),
+                                        hazard=incoming.hazard,
+                                        at=at,
+                                    )
+                                )
+                                room.drill.job = made.id
+                            room.revision += 1
+                        elif isinstance(incoming, PrepareDrillMessage):
                             if not any(e.id == incoming.entity for e in room.entities):
                                 await reject("unknown_entity", "That room object does not exist.")
                                 await room.broadcast()
@@ -1194,7 +1277,7 @@ def create_app(
                                 state="preparing",
                             )
                             found = hazards.cached(
-                                live_rooms.directory.name, incoming.entity, incoming.hazard
+                                live_rooms.directory.name, incoming.entity or "", incoming.hazard
                             )
                             if found is not None:
                                 room.drill_ready(found)
@@ -1204,7 +1287,7 @@ def create_app(
                             else:
                                 made = hazards.start(
                                     HazardRequest(
-                                        target=HazardTarget(entity=incoming.entity),
+                                        target=HazardTarget(entity=incoming.entity or ""),
                                         hazard=incoming.hazard,
                                     )
                                 )

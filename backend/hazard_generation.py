@@ -24,11 +24,14 @@ from pydantic import BaseModel, Field, model_serializer, model_validator
 
 from backend.furniture_generation import (
     DEFAULT_TIMEOUT_SECONDS,
+    PIECE_NODE,
     GenerationError,
     Generator,
     run_step,
+    true_to_size,
 )
 from backend.hazard_placement import Box, Placement, place, true_size_box
+from backend.prepared_room import EntitySize
 from backend.splat_frames import check, prune, read_frame, to_spz
 from backend.video_gate import gate, read_frames
 
@@ -71,6 +74,14 @@ class HazardRequest(BaseModel):
     at: tuple[float, float] = (0.0, 0.0)
 
 
+class HazardBody(BaseModel):
+    """A new object's mesh, true to size (#233): its body in the room, under the 4D look."""
+
+    model_url: str
+    node: str
+    size: EntitySize
+
+
 class HazardAsset(BaseModel):
     """A finished hazard: its frames, served at `frame_url` with `{n}` the frame's number."""
 
@@ -91,6 +102,9 @@ class HazardAsset(BaseModel):
     loops: bool = False
     # The live room's folder it was made in (#234): a fire on a room object is reused only there.
     room: str | None = None
+    # A new object's mesh (#233), and why it stands alone when its 3D animation couldn't be made.
+    body: HazardBody | None = None
+    note: str | None = None
 
 
 class HazardJob(BaseModel):
@@ -226,6 +240,29 @@ class HazardGeneration:
                 return asset
         return None
 
+    def cached_new(self, description: str, hazard: str) -> HazardAsset | None:
+        """The newest fire already made for a new object of this description (#233); new objects
+        aren't tied to a room."""
+        wording, said = normalised_hazard(hazard), normalised_hazard(description)
+        found: list[tuple[HazardAsset, float]] = []
+        for path in (self.root / "hazards").glob("hz_*/hazard.json"):
+            try:
+                asset = HazardAsset.model_validate_json(path.read_text(encoding="utf-8"))
+                made = path.stat().st_mtime
+            except (OSError, ValueError):
+                continue
+            same = normalised_hazard(asset.target.description or "") == said
+            if same and normalised_hazard(asset.hazard) == wording and asset.body is not None:
+                found.append((asset, made))
+        return max(found, key=lambda pair: pair[1])[0] if found else None
+
+    def body(self, asset_id: str) -> Path | None:
+        """A new object's mesh to serve (#233)."""
+        if not ASSET_ID.fullmatch(asset_id):
+            return None
+        path = self.root / "hazards" / asset_id / "body.glb"
+        return path if path.is_file() else None
+
     def library(self, room: str) -> list[tuple[HazardAsset, float]]:
         """The fires made on objects in `room`, newest first, with when each was made (#235)."""
         found: list[tuple[HazardAsset, float]] = []
@@ -319,11 +356,30 @@ class HazardGeneration:
                 picture = run_step(lambda: generator.image(description), "image", self.timeout)
                 box, facing, hide = true_size_box(description, job.at), (0.0, 1.0), None
                 name = description
+            body: tuple[bytes, EntitySize] | None = None
             (folder / "picture.png").write_bytes(picture)
             if not self._advance(
                 job_id, "queued", "image_ready", image_url=f"/api/hazards/jobs/{job_id}/image"
             ):
                 return
+            if target.entity is None:
+                # A new object's body (#233): its mesh, true to size, made from the same picture.
+                # Its box, at the room's origin, places the 4D frames; the room moves both to
+                # where the object is put.
+                description = target.description or ""
+                mesh = run_step(lambda: generator.model(picture), "model", self.timeout)
+                body = true_to_size(mesh, description)
+                (folder / "body.glb").write_bytes(body[0])
+                size = body[1]
+                box = Box(
+                    x=0.0,
+                    y=0.0,
+                    z=0.0,
+                    yaw=0.0,
+                    width=size.width,
+                    depth=size.depth,
+                    height=size.height,
+                )
             prompt = video_prompt(name, job.hazard)
             videos: list[bytes] = []
             first_failure: GenerationError | None = None
@@ -360,17 +416,27 @@ class HazardGeneration:
                 job_id, "image_ready", "video_ready", video_url=f"/api/hazards/jobs/{job_id}/video"
             ):
                 return
-            frames = run_step(lambda: generator.animate(video), "animate", self.timeout)
-            if len(frames) < 2:
-                raise GenerationError("animate")
-            # Checked against its video, then made light for phones (#227).
+            note: str | None = None
             try:
-                splats = [read_frame(frame) for frame in frames]
-            except (ValueError, StopIteration) as exc:
-                raise GenerationError("animate") from exc
-            scores = check(splats, read_frames(video))
-            placement = place(splats[0], box, facing, hide)
-            frames = [to_spz(prune(splat)) for splat in splats]
+                frames = run_step(lambda: generator.animate(video), "animate", self.timeout)
+                if len(frames) < 2:
+                    raise GenerationError("animate")
+                # Checked against its video, then made light for phones (#227).
+                try:
+                    splats = [read_frame(frame) for frame in frames]
+                except (ValueError, StopIteration) as exc:
+                    raise GenerationError("animate") from exc
+                scores = check(splats, read_frames(video))
+                placement = place(splats[0], box, facing, hide)
+                frames = [to_spz(prune(splat)) for splat in splats]
+            except GenerationError as exc:
+                # A new object without its 3D animation still has its body (#233): it stands
+                # alone, and says why.
+                if body is None:
+                    raise
+                note = exc.message
+                frames, scores = [], []
+                placement = Placement(position=(0.0, 0.0, 0.0), turn=0.0, scale=1.0, hide=None)
             asset_id = f"hz_{uuid.uuid4().hex[:8]}"
             kept = self.root / "hazards" / asset_id
             (kept / "frames").mkdir(parents=True, exist_ok=True)
@@ -388,7 +454,15 @@ class HazardGeneration:
                 placement=placement,
                 seconds=round(len(frames) / FRAMES_PER_SECOND, 3),
                 room=job.room,
+                body=None
+                if body is None
+                else HazardBody(
+                    model_url=f"/api/hazards/{asset_id}/body.glb", node=PIECE_NODE, size=body[1]
+                ),
+                note=note,
             )
+            if body is not None:
+                (kept / "body.glb").write_bytes(body[0])
             (kept / "hazard.json").write_text(asset.model_dump_json(indent=2), encoding="utf-8")
             with self.lock:
                 current = self.jobs[job_id]
