@@ -127,6 +127,14 @@ export class GestureGate<T extends string> {
 const SWING_DEGREES = 8;
 /** Two turns back within this long are a nod or a shake. */
 const NOD_WINDOW_MS = 1200;
+/**
+ * A nod's or a shake's swings are quick and keep coming back to the same place: a turn back counts
+ * only within this long of the one before, and only if it ends this near where the one before last
+ * did. Looking around turns the head back too, but slowly, or somewhere new each time (seen as
+ * false "No (shake)" in the Quest test run of 2026-11-23).
+ */
+const SWING_MS = 450;
+const RETURN_DEGREES = 10;
 
 /** Turns of one angle back the other way: a nod is two of them in the head's tilt. */
 class Swings {
@@ -136,7 +144,11 @@ class Swings {
   /** The farthest point of the current move, and its way: 1 up or left, -1 down or right, 0 none yet. */
   private extreme = 0;
   private direction = 0;
+  /** When each counted turn back happened, and where it turned. */
   private turns: number[] = [];
+  /** When the move under way began, and where each turn of this series turned. */
+  private movedAt = 0;
+  private turnedAt: number[] = [];
 
   /** The angle now, in degrees: how many times it turned back within the window. */
   update(degrees: number, now: number): number {
@@ -154,10 +166,25 @@ class Swings {
       // Still going the same way: the far point follows the head.
       this.extreme = this.angle;
     } else if (Math.abs(moved) >= SWING_DEGREES) {
-      // Back the other way far enough; the first move only sets the way.
-      if (this.direction !== 0) this.turns.push(now);
+      // Back the other way far enough; the first move only sets the way. A slow turn back, or
+      // one that doesn't come back to where the one before last turned, starts a new series.
+      if (this.direction !== 0) {
+        const quick = now - this.movedAt <= SWING_MS;
+        const before = this.turnedAt.length >= 2 ? this.turnedAt[this.turnedAt.length - 2] : null;
+        const returns = before === null || Math.abs(this.extreme - before) <= RETURN_DEGREES;
+        if (quick && returns) {
+          this.turns.push(now);
+          this.turnedAt.push(this.extreme);
+        } else {
+          this.turns = [];
+          this.turnedAt = [this.extreme];
+        }
+      } else {
+        this.turnedAt = [this.extreme];
+      }
       this.direction = Math.sign(moved);
       this.extreme = this.angle;
+      this.movedAt = now;
     }
     return this.turns.length;
   }
@@ -166,10 +193,14 @@ class Swings {
     this.last = null;
     this.direction = 0;
     this.turns = [];
+    this.turnedAt = [];
   }
 }
 
-/** Yes and no from the head: nodding down and up twice, or shaking side to side twice. */
+/**
+ * Yes and no from the head: nodding down and up twice, or shaking side to side three times; each
+ * quick, around the same place.
+ */
 export class HeadNods {
   private readonly tilt = new Swings();
   private readonly turn = new Swings();
@@ -180,7 +211,7 @@ export class HeadNods {
     const pitch = Math.asin(Math.max(-1, Math.min(1, forward.y))) * 180 / Math.PI;
     const yaw = Math.atan2(-forward.x, -forward.z) * 180 / Math.PI;
     const nodded = this.tilt.update(pitch, now) >= 2;
-    const shook = this.turn.update(yaw, now) >= 2;
+    const shook = this.turn.update(yaw, now) >= 3;
     if (!nodded && !shook) return null;
     this.tilt.clear();
     this.turn.clear();

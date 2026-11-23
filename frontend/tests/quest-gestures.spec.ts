@@ -161,6 +161,25 @@ test('shaking the head side to side twice is no', () => {
   expect(said.filter(Boolean)).toEqual(['no']);
 });
 
+test('looking quickly from one thing to another and back is not a shake', () => {
+  // Left, then over to the right, then to something ahead: quick, but somewhere new each time.
+  const scan: [number, number][] = [[0, 0]];
+  for (const [from, to] of [[0, 40], [40, -30], [-30, 10], [10, -45]] as const) {
+    for (let step = 1; step <= 5; step++) scan.push([from + (to - from) * step / 5, 0]);
+  }
+  expect(watch(new HeadNods(), scan).filter(Boolean)).toEqual([]);
+});
+
+test('turning the head slowly back and forth, as when looking at a dollhouse, is not a shake', () => {
+  // The same swings as a shake, but each over 700 ms.
+  const slow: [number, number][] = [[0, 0]];
+  for (let swing = 0; swing < 6; swing++) {
+    const [from, to] = swing % 2 === 0 ? [0, -20] : [-20, 0];
+    for (let step = 1; step <= 14; step++) slow.push([from + (to - from) * step / 14, 0]);
+  }
+  expect(watch(new HeadNods(), slow).filter(Boolean)).toEqual([]);
+});
+
 test('looking down once, or looking around, is neither', () => {
   expect(watch(new HeadNods(), swinging('pitch', 30, 2)).filter(Boolean)).toEqual([]);
   // A slow look to the left and back, over two seconds.
