@@ -470,6 +470,62 @@ function showDrill(next: SessionState): void {
     .replace('pinch ', 'press ');
 }
 
+const drillSayForm = element<HTMLFormElement>('drill-say-form');
+const drillSay = element<HTMLInputElement>('drill-say');
+const drillDictate = element<HTMLButtonElement>('drill-dictate');
+/** What was said, while Qwen works it out (#232). */
+let planning: string | null = null;
+
+/**
+ * What the commander said, made a drill by Qwen (#232): an object in the room is chosen and
+ * prepared at once; something not in the room waits for new objects (#233).
+ */
+async function planDrill(said: string): Promise<void> {
+  planning = said;
+  drillStatus.textContent = 'Working out: ' + said;
+  try {
+    const response = await fetch('/api/drill/plan', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: said }),
+    });
+    if (!response.ok) {
+      drillStatus.textContent = await errorMessage(response, "That couldn't be made a drill.");
+      return;
+    }
+    const plan = (await response.json()) as { kind: string; entity: string | null; label: string | null; description: string | null; hazard: string };
+    if (plan.kind === 'room_object' && plan.entity) {
+      drillObject.value = plan.entity;
+      prepareDrill(plan.entity);
+      drillStatus.textContent = (plan.label ?? plan.entity) + ' ' + plan.hazard + ' · preparing';
+    } else {
+      drillStatus.textContent = (plan.description ?? 'That') + " isn't in the room: drills on new objects come later.";
+    }
+  } catch {
+    drillStatus.textContent = 'The server could not be reached. Try again.';
+  } finally {
+    planning = null;
+  }
+}
+
+drillSayForm.addEventListener('submit', event => {
+  event.preventDefault();
+  const said = drillSay.value.trim();
+  if (said.length >= 3) void planDrill(said);
+});
+drillDictate.addEventListener('pointerdown', event => {
+  try {
+    drillDictate.setPointerCapture(event.pointerId);
+  } catch {
+    // Listening goes on without the capture.
+  }
+  startDictation('drill');
+});
+for (const name of ['pointerup', 'pointercancel'] as const) {
+  drillDictate.addEventListener(name, () => {
+    dictationHeld = false;
+    dictation.stop();
+  });
+}
+
 drillForm.addEventListener('submit', event => {
   event.preventDefault();
   if (drillObject.value) prepareDrill(drillObject.value);
@@ -659,38 +715,52 @@ let dictationFailed = false;
 const listeningLine = (): string => mutedForDictation
   ? 'Listening, with the call muted… let go when you have said it.'
   : 'Listening… let go when you have said it.';
+/** What dictation is for: Make's description, or what happens in the drill (#232). */
+let dictatingFor: 'make' | 'drill' = 'make';
 const dictation = new Dictation({
   heard: text => {
+    if (dictatingFor === 'drill') {
+      drillSay.value = text;
+      if (dictationHeld) drillStatus.textContent = listeningLine();
+      return;
+    }
     makeInput.value = text;
     // Late words after letting go don't say "listening" again.
     if (dictationHeld) furnitureStatus.textContent = listeningLine();
   },
   failed: message => {
     dictationFailed = true;
-    furnitureStatus.textContent = message;
+    (dictatingFor === 'drill' ? drillStatus : furnitureStatus).textContent = message;
   },
   ended: () => {
     dictationHeld = false;
     dictationListening = false;
     dictateButton.setAttribute('aria-pressed', 'false');
+    drillDictate.setAttribute('aria-pressed', 'false');
     if (mutedForDictation) {
       mutedForDictation = false;
       voice.setMuted(false);
     }
+    if (dictatingFor === 'drill') {
+      // Said for the drill: Qwen makes it a plan at once.
+      if (!dictationFailed && drillSay.value.trim()) void planDrill(drillSay.value.trim());
+      return;
+    }
     if (!dictationFailed && makeInput.value.trim()) furnitureStatus.textContent = 'Check the description, then press Make it.';
   },
 });
-function startDictation(): void {
+function startDictation(forWhat: 'make' | 'drill' = 'make'): void {
   if (dictation.listening) return;
   dictationFailed = false;
+  dictatingFor = forWhat;
   if (!dictation.start()) return;
   // Cleared only once listening has started, so a browser that can't listen keeps what was typed.
-  makeInput.value = '';
+  (forWhat === 'drill' ? drillSay : makeInput).value = '';
   dictationHeld = true;
   dictationListening = true;
-  dictateButton.setAttribute('aria-pressed', 'true');
+  (forWhat === 'drill' ? drillDictate : dictateButton).setAttribute('aria-pressed', 'true');
   keepDictationMuted();
-  furnitureStatus.textContent = listeningLine();
+  (forWhat === 'drill' ? drillStatus : furnitureStatus).textContent = listeningLine();
 }
 dictateButton.addEventListener('pointerdown', event => {
   // Held to the button, so a wobbling ray or finger doesn't end the hold early. A pointer the
@@ -947,7 +1017,11 @@ function wristLine(): string {
     if (making) return furnitureStatus.textContent ?? '';
     return said ? `${said} · pinch Make it` : 'Hold to speak, and say the piece to make';
   }
-  if (wristPage === 'drill') return drillText();
+  if (wristPage === 'drill') {
+    if (speaking && dictatingFor === 'drill') return drillSay.value.trim() ? 'Listening: ' + drillSay.value.trim() : 'Listening… say what happens, then let go';
+    if (planning) return 'Working out: ' + planning;
+    return drillText();
+  }
   if (wristPage === 'edit' && touchingFloor) return 'Rest a hand flat on the floor for a second';
   if (wristPage === 'edit') {
     const piece = entities().find(entity => entity.id === offer?.id);
@@ -1133,9 +1207,10 @@ function frame(xrFrame: XRFrame, time: number): void {
           return;
         }
         if (choice.button === 'speak') {
-          // Held like the page's talk button: listening until the pinch lets go (#188).
+          // Held like the page's talk button: listening until the pinch lets go (#188). On the
+          // Drill page, what is said becomes the drill (#232).
           speaking = input.source;
-          startDictation();
+          startDictation(wristPage === 'drill' ? 'drill' : 'make');
         } else if (choice.button === 'make') {
           if (making) cancelButton.click();
           else makeForm.requestSubmit();
