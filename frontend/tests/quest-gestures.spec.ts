@@ -277,8 +277,8 @@ test('a second fist unmutes only after the hand is let go and the cool-down has 
 
 test('the line in the headset names the fist with hands, and B or Y with controllers', () => {
   const muted: VoiceStatus = { phase: 'connected', problem: null, receiving: true, muted: true, peerMuted: false, path: null };
-  expect(voiceNote(muted, 'the phone', unmuteHint('hands'))).toBe('You are muted · hold up a fist to unmute');
+  expect(voiceNote(muted, 'the phone', unmuteHint('hands'))).toBe("You are muted · pinch Unmute on the wrist menu's Exit page to unmute");
   expect(voiceNote(muted, 'the phone', unmuteHint('controllers'))).toBe('You are muted · press B or Y to unmute');
   // Before any hand or controller is seen, hands are assumed: the page is moving to them.
-  expect(unmuteHint('none')).toBe('hold up a fist');
+  expect(unmuteHint('none')).toBe("pinch Unmute on the wrist menu's Exit page");
 });

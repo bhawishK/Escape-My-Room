@@ -41,12 +41,15 @@ test('each page shows only its own things: pieces, speak and make, objects and P
   expect(drill.objects).toHaveLength(2);
   close(drill.objects[0], { x: -0.0375, y: 1.12, z: -0.4 });
   // Hold to speak says the drill (#232), then Prepare, Start and Call off.
-  close(drill.buttons.speak, { x: -0.12, y: 1.075, z: -0.4 });
-  close(drill.buttons.prepare, { x: -0.04, y: 1.075, z: -0.4 });
-  close(drill.buttons.run, { x: 0.04, y: 1.075, z: -0.4 });
-  close(drill.buttons.cancel, { x: 0.12, y: 1.075, z: -0.4 });
+  // ... and Guide (#273), between them.
+  close(drill.buttons.speak, { x: -0.16, y: 1.075, z: -0.4 });
+  close(drill.buttons.guide, { x: -0.08, y: 1.075, z: -0.4 });
+  close(drill.buttons.prepare, { x: 0, y: 1.075, z: -0.4 });
+  close(drill.buttons.run, { x: 0.08, y: 1.075, z: -0.4 });
+  close(drill.buttons.cancel, { x: 0.16, y: 1.075, z: -0.4 });
   expect(wristChoice(drill, { x: 0.035, y: 1.12, z: -0.4 })).toEqual({ kind: 'object', index: 1 });
-  expect(wristChoice(drill, { x: 0.115, y: 1.075, z: -0.4 })).toEqual({ kind: 'button', button: 'cancel' });
+  expect(wristChoice(drill, { x: 0.155, y: 1.075, z: -0.4 })).toEqual({ kind: 'button', button: 'cancel' });
+  expect(wristChoice(drill, { x: -0.085, y: 1.075, z: -0.4 })).toEqual({ kind: 'button', button: 'guide' });
 
   const edit = wristMenu(HAND, 0, 'edit', 3);
   close(edit.buttons.move, { x: -0.04, y: 1.12, z: -0.4 });
@@ -54,7 +57,10 @@ test('each page shows only its own things: pieces, speak and make, objects and P
   // Touch the floor (#218), on its own row below them.
   close(edit.buttons.floor, { x: 0, y: 1.075, z: -0.4 });
 
-  expect(Object.keys(wristMenu(HAND, 0, 'exit', 3).buttons)).toEqual(['exit']);
+  // Mute is a button beside Exit VR, not a fist (#273).
+  const exit = wristMenu(HAND, 0, 'exit', 3);
+  expect(Object.keys(exit.buttons)).toEqual(['mute', 'exit']);
+  close(exit.buttons.mute, { x: -0.04, y: 1.12, z: -0.4 });
 });
 
 test('a pinch chooses the piece or button it is on, the track, or nothing', () => {
