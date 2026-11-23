@@ -169,4 +169,5 @@ export type ServerEvent =
   | ({ type: 'voice_signal' } & VoiceSignal)
   /** The headset's hand inside the dollhouse, for the phone (#185); null when none is. */
   | { type: 'designer_hand'; position: Position | null; length: number | null }
+  | { type: 'guide'; spot: Position | null }
   | { type: 'error'; code: string; message: string };

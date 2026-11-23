@@ -23,6 +23,7 @@ import {
   looksToTake,
   throwInRoom, yawOf, orientationFromDollhouse, scaleLabel, velocityFromDollhouse,
 } from './dollhouse';
+import { floorSpot } from '../guide';
 import { Dictation } from './dictation';
 import { drillLine, drillObjects, drillPlaying, type DrillState } from './drill';
 import { Dwell, FIST_COOLDOWN_MS, FIST_HOLD_MS, GestureGate, HeadNods, fistHeldUp, unmuteHint } from './gestures';
@@ -1179,6 +1180,8 @@ function frame(xrFrame: XRFrame, time: number): void {
   // Rays: each controller's, a pinching hand's, and a pointing finger's.
   const drawn: DrawnRay[] = [];
   let aimed: string | null = null;
+  // Where a pointing finger meets the floor, in room metres: the phone draws a path to it (#248).
+  let pointedSpot: ReturnType<typeof floorSpot> = null;
   for (const input of sample.inputs) {
     if (input.fingerRay) {
       if (!pointingSince.has(input.source)) pointingSince.set(input.source, time);
@@ -1187,6 +1190,11 @@ function frame(xrFrame: XRFrame, time: number): void {
     }
     const pointing = input.fingerRay !== null && time - (pointingSince.get(input.source) ?? time) >= POINT_MS;
     const ray = pointing ? input.fingerRay : input.ray;
+    if (pointing && input.fingerRay && alignment && !pointedSpot) {
+      const { origin, direction } = input.fingerRay;
+      const along = { x: origin.x + direction.x * 0.1, y: origin.y + direction.y * 0.1, z: origin.z + direction.z * 0.1 };
+      pointedSpot = floorSpot(inRoom(alignment, origin), inRoom(alignment, along));
+    }
     if (!ray || (input.kind === 'hand' && !pointing && !input.holding)) continue;
     const { hit, blocked } = aimedAt(ray);
     aimed ??= hit;
@@ -1205,6 +1213,7 @@ function frame(xrFrame: XRFrame, time: number): void {
   const reaching = alignment && scaling.view.scale < 1
     ? handInDollhouse(scaling.view, alignment, handPoints(sample.inputs), floor()) : null;
   publishHand(reaching, time);
+  publishGuide(pointedSpot, time);
   publishPresence(time);
   showHud(time, drawn.some(ray => ray.look === 'blocked'));
   if (performance.now() - lastReport >= REPORT_MS) report();
@@ -1220,6 +1229,29 @@ function floor(): RoomEntity[] {
   const version = state?.room.room_version ?? null;
   if (floorCache.version !== version) floorCache = { version, pieces: floorPieces(entities()) };
   return floorCache.pieces;
+}
+
+/** Sends the pointed spot at most as often as presence; once pointing has stopped a moment, says it's gone. */
+let lastGuide = -Infinity;
+let guideShown = false;
+let guideLost: number | null = null;
+const GUIDE_GRACE_MS = 500;
+function publishGuide(spot: ReturnType<typeof floorSpot>, time: number): void {
+  if (!connected) return;
+  if (spot) {
+    guideLost = null;
+    if (time - lastGuide < PRESENCE_MS || !client.sendGuide(spot)) return;
+    lastGuide = time;
+    guideShown = true;
+    room?.showGuideSpot(spot);
+    return;
+  }
+  // A finger passing out of a pointing pose for a moment keeps the path where it is.
+  guideLost ??= time;
+  if (guideShown && time - guideLost >= GUIDE_GRACE_MS && client.sendGuide(null)) {
+    guideShown = false;
+    room?.showGuideSpot(null);
+  }
 }
 
 /** Sends the hand in the dollhouse at most as often as presence, and says once when it leaves. */

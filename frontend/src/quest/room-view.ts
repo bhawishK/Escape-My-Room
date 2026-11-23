@@ -54,6 +54,8 @@ export class QuestRoom {
   private readonly late = new LateEntities(this.models);
   private readonly phone: THREE.Group;
   private readonly highlight = new THREE.BoxHelper(new THREE.Object3D(), 0xffcc00);
+  /** The commander's pointed spot on the room's floor, in room metres (#248). */
+  private readonly guideRing = guideRing();
   private readonly control = new THREE.BoxHelper(new THREE.Object3D(), 0xff9500);
   private readonly rays: THREE.Mesh[] = [];
   /** The picture of a piece being made (#186), held in the hand. */
@@ -129,6 +131,8 @@ export class QuestRoom {
   ) {
     this.hazards = new HazardFrames(() => this.loadSpark(), container);
     this.anchor.name = 'room-anchor';
+    // In the room, so it shrinks and turns with the dollhouse.
+    this.anchor.add(this.guideRing);
     this.dollhouse.name = 'dollhouse';
     this.dollhouse.add(this.anchor);
     scene.add(this.dollhouse);
@@ -163,6 +167,13 @@ export class QuestRoom {
   }
 
   /** Draws the phone user where Python last placed them; faded while their tracking is stale. */
+  /** The spot the commander points at, shown as a ring on the room's floor (#248); null hides it. */
+  showGuideSpot(spot: Position | null): void {
+    this.guideRing.visible = spot !== null;
+    this.container.dataset.guide = spot ? `${spot.x.toFixed(2)},${spot.z.toFixed(2)}` : '';
+    if (spot) this.guideRing.position.set(spot.x, 0.02, spot.z);
+  }
+
   showPhone(presence: PresenceState | undefined): void {
     this.presence = presence;
     this.drawPhone();
@@ -183,8 +194,10 @@ export class QuestRoom {
       const material = (child as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
       if (!material) return;
       material.transparent = true;
-      material.opacity = figure.opacity;
+      // The view cone stays faint, so the figure shows through it (#248).
+      material.opacity = child.name === VIEW_CONE ? VIEW_CONE_OPACITY * figure.opacity : figure.opacity;
     });
+    this.container.dataset.phoneFacing = figure.heading.toFixed(2);
   }
 
   /**
@@ -680,6 +693,23 @@ export class QuestRoom {
 const fileName = (url: string) => url.split('/').pop() ?? url;
 
 /** A standing figure facing -z: a body, a head and a nose for the way they face. */
+/** The phone user's view cone (#248): how far it reaches, how wide, and how faint. */
+const VIEW_CONE = 'phone-view-cone';
+const VIEW_CONE_METRES = 1.6;
+const VIEW_CONE_HALF_ANGLE = Math.PI / 6;
+const VIEW_CONE_OPACITY = 0.25;
+
+/** A ring on the floor where the commander points (#248). */
+function guideRing(): THREE.Mesh {
+  const geometry = new THREE.RingGeometry(0.22, 0.32, 40);
+  geometry.rotateX(-Math.PI / 2);
+  const ring = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0xffb020, transparent: true, opacity: 0.85, depthTest: false }));
+  ring.name = 'guide-spot';
+  ring.renderOrder = 5;
+  ring.visible = false;
+  return ring;
+}
+
 function person(colour: number): THREE.Group {
   const group = new THREE.Group();
   group.name = 'presence-phone';
@@ -691,7 +721,17 @@ function person(colour: number): THREE.Group {
   const nose = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.14, 12), material.clone());
   nose.rotation.x = -Math.PI / 2;
   nose.position.set(0, 1.4, -0.16);
-  group.add(body, head, nose);
+  // Which way the phone faces (#248): a faint cone from the head, opening the way they look. A
+  // remote guide needs to see where the other person is and which way they face.
+  const coneGeometry = new THREE.ConeGeometry(VIEW_CONE_METRES * Math.tan(VIEW_CONE_HALF_ANGLE), VIEW_CONE_METRES, 24, 1, true);
+  coneGeometry.rotateX(Math.PI / 2);
+  coneGeometry.translate(0, 0, -VIEW_CONE_METRES / 2);
+  const cone = new THREE.Mesh(coneGeometry, new THREE.MeshBasicMaterial({
+    color: colour, transparent: true, opacity: VIEW_CONE_OPACITY, side: THREE.DoubleSide, depthWrite: false,
+  }));
+  cone.name = VIEW_CONE;
+  cone.position.y = 1.4;
+  group.add(body, head, nose, cone);
   group.visible = false;
   return group;
 }

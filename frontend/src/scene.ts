@@ -2,6 +2,7 @@ import type { SplatMesh } from '@sparkjsdev/spark';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { STANDING_EYE_HEIGHT } from './alignment';
+import { guidePath } from './guide';
 import { HazardFrames, type HazardRoom } from './hazard-frames';
 import { ServerClock, lowEndDevice } from './hazard-playback';
 import type { RoomPose } from './phone-view';
@@ -31,6 +32,10 @@ export class DiagnosticScene {
   private readonly late = new LateEntities(new ModelCopies(this.loader));
   /** The designer's giant hand reaching into the room from above (#185). */
   private readonly giantHand = giantHand();
+  /** The commander's pointed spot (#248): a path along the floor to it, and a ring on it. */
+  private readonly guide = guideMarks();
+  private guideSpot: Position | null = null;
+  private guideDrawn = '';
   private readonly container: HTMLElement;
   private readonly roomAnchor = new THREE.Group();
   private roomGroup: THREE.Group | null = null;
@@ -133,6 +138,7 @@ export class DiagnosticScene {
     this.marker.visible = false;
     this.roomAnchor.add(this.marker);
     this.roomAnchor.add(this.giantHand);
+    this.roomAnchor.add(this.guide.group);
     this.people.set('mobile_master', this.person(0x30b0c7, 'presence-phone'));
     this.people.set('vr_solver', this.person(0xff9500, 'presence-headset'));
     this.statusCanvas.width = 512;
@@ -316,6 +322,7 @@ export class DiagnosticScene {
   /** Moves any glide on by `ms` milliseconds of drawing, and hazards on to this moment. */
   tick(ms: number): void {
     if (this.hazards.tick(this.clock.now(Date.now()))) this.changedAt = performance.now();
+    this.drawGuide();
     const root = this.smoothed ? this.entityRoots.get(this.smoothed.id) : undefined;
     if (!this.smoothed || !root) return;
     this.changedAt = performance.now();
@@ -521,8 +528,44 @@ export class DiagnosticScene {
     this.container.dataset.designerHandLength = drawn.toFixed(2);
   }
 
+  /** The commander's pointed spot on the floor, in room metres; null takes the path away (#248). */
+  showGuide(spot: Position | null): void {
+    this.guideSpot = spot;
+    this.drawGuide();
+  }
+
+  /** The path from where this phone stands to the spot, kept up to date as it walks. */
+  private drawGuide(): void {
+    const spot = this.guideSpot;
+    const at = this.following?.position ?? null;
+    const key = spot ? `${spot.x.toFixed(2)},${spot.z.toFixed(2)}|${at ? `${at.x.toFixed(2)},${at.z.toFixed(2)}` : ''}` : '';
+    if (key === this.guideDrawn) return;
+    this.guideDrawn = key;
+    this.changedAt = performance.now();
+    const { group, strip, ring } = this.guide;
+    group.visible = spot !== null;
+    this.container.dataset.guide = spot ? `${spot.x.toFixed(2)},${spot.z.toFixed(2)}` : '';
+    if (!spot) {
+      this.container.dataset.guideLength = '';
+      return;
+    }
+    ring.position.set(spot.x, GUIDE_LIFT, spot.z);
+    strip.visible = at !== null;
+    if (!at) {
+      this.container.dataset.guideLength = '';
+      return;
+    }
+    const path = guidePath(at, spot, GUIDE_LIFT);
+    // The strip is 1 m long along its local -z, starting at its origin: placed, turned and stretched.
+    strip.position.set(path.from.x, GUIDE_LIFT, path.from.z);
+    strip.rotation.set(0, path.yaw, 0);
+    strip.scale.set(1, 1, Math.max(path.length, 0.01));
+    this.container.dataset.guideLength = path.length.toFixed(2);
+  }
+
   clearRoom(): void {
     this.showDesignerHand(null);
+    this.showGuide(null);
     this.loadToken += 1;
     this.loadedVersion = null;
     this.loadingVersion = null;
@@ -671,6 +714,33 @@ export class DiagnosticScene {
     // A splat room changes where the overview looks from.
     this.applyView(this.alignment);
   }
+}
+
+/** The path and ring sit this far above the floor, so the floor doesn't hide them. */
+const GUIDE_LIFT = 0.02;
+
+/**
+ * The commander's pointed spot (#248): an amber strip along the floor, 1 m long along its local
+ * -z from its origin and 0.12 m wide, stretched to the path's length; and a ring on the spot.
+ */
+function guideMarks(): { group: THREE.Group; strip: THREE.Mesh; ring: THREE.Mesh } {
+  const group = new THREE.Group();
+  group.name = 'guide';
+  const material = new THREE.MeshBasicMaterial({ color: 0xffb020, transparent: true, opacity: 0.85, depthTest: false });
+  const stripGeometry = new THREE.PlaneGeometry(0.12, 1);
+  stripGeometry.rotateX(-Math.PI / 2);
+  stripGeometry.translate(0, 0, -0.5);
+  const strip = new THREE.Mesh(stripGeometry, material);
+  strip.name = 'guide-path';
+  strip.renderOrder = 5;
+  const ringGeometry = new THREE.RingGeometry(0.22, 0.32, 40);
+  ringGeometry.rotateX(-Math.PI / 2);
+  const ring = new THREE.Mesh(ringGeometry, material);
+  ring.name = 'guide-spot';
+  ring.renderOrder = 5;
+  group.add(strip, ring);
+  group.visible = false;
+  return { group, strip, ring };
 }
 
 /**
