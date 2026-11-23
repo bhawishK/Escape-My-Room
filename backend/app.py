@@ -99,6 +99,7 @@ from backend.protocol import (
 )
 from backend.room_object_picture import PictureRefused, object_picture
 from backend.room_views import RenderFailure
+from backend.session_log import SessionLogs, enabled_from_environment
 from backend.sessions import Drill, PrototypeRoom
 from backend.videos import (
     CompleteRequest,
@@ -330,6 +331,22 @@ def create_app(
         if loop is not None and not loop.is_closed():
             loop.call_soon_threadsafe(lambda: room.track(drill_job_done(job)))
 
+    def log_hazard(action: str, hazard_id: str) -> None:
+        """A fire started, stopped or removed (#259): a start begins a run, the others end it."""
+        if action == "start_hazard":
+            started = next((h for h in room.hazards if h.id == hazard_id), None)
+            asset = started.asset if started is not None else None
+            session_logs.begin(
+                room.room_version,
+                asset.target.entity if asset is not None else None,
+                asset.hazard if asset is not None else None,
+            )
+            session_logs.record("hazard", {"event": "started", "id": hazard_id})
+        else:
+            event = "stopped" if action == "stop_hazard" else "removed"
+            session_logs.record("hazard", {"event": event, "id": hazard_id})
+            session_logs.end(event)
+
     async def drill_job_done(job: HazardJob) -> None:
         async with room.lock:
             drill = room.drill
@@ -342,6 +359,9 @@ def create_app(
                 drill.error = job.error or "The fire couldn't be made."
             room.revision += 1
             await room.broadcast()
+
+    # Each drill run recorded for studies (#259): positions and guidance only.
+    session_logs = SessionLogs(data / "session-logs", enabled_from_environment())
 
     hazards = HazardGeneration(
         data / "hazards",
@@ -369,6 +389,7 @@ def create_app(
         room.splat_placement = loaded.splat_placement
         room.load_error = None
         # Hazards and the drill belong to the room they were placed in.
+        session_logs.end("room changed")
         room.hazards = []
         room.drill = None
         physics.load(loaded.room_version, room.entities)
@@ -707,6 +728,19 @@ def create_app(
             raise HTTPException(404, "That furniture file does not exist.")
         return FileResponse(path)
 
+    @app.get("/api/session-logs")
+    async def session_log_list() -> dict[str, Any]:
+        """The drill runs recorded (#259), newest first, each summarised."""
+        return {"runs": session_logs.runs()}
+
+    @app.get("/api/session-logs/{run_id}")
+    async def session_log_file(run_id: str) -> FileResponse:
+        """One run's log, as JSON lines."""
+        path = session_logs.path(run_id)
+        if path is None:
+            raise HTTPException(404, "That session log does not exist.")
+        return FileResponse(path, media_type="application/x-ndjson", filename=f"{run_id}.jsonl")
+
     @app.get("/api/rooms/live")
     async def live_room() -> dict[str, Any]:
         try:
@@ -833,6 +867,12 @@ def create_app(
                         # At most one place every HAND_SECONDS; the hand going always passes.
                         if incoming.position is not None and now - hand_passed_at < HAND_SECONDS:
                             continue
+                        hand = incoming.position
+                        session_logs.record(
+                            "hand",
+                            {"position": None if hand is None else hand.model_dump()},
+                            sample=None if hand is None else "hand",
+                        )
                         phone = room.outboxes.get("mobile_master")
                         if phone is not None:
                             position = incoming.position
@@ -859,6 +899,10 @@ def create_app(
                         # As the hand: at most one spot every HAND_SECONDS; clearing always passes.
                         if incoming.spot is not None and now - guide_passed_at < HAND_SECONDS:
                             continue
+                        session_logs.record(
+                            "guide",
+                            {"spot": None if incoming.spot is None else incoming.spot.model_dump()},
+                        )
                         phone = room.outboxes.get("mobile_master")
                         if phone is not None:
                             spot = incoming.spot
@@ -879,6 +923,18 @@ def create_app(
                             continue
                         presence_sequence = incoming.sequence
                         room.accept_presence(role, incoming)
+                        session_logs.record(
+                            "presence",
+                            {
+                                "role": role,
+                                "tracking": incoming.tracking_status,
+                                "position": None
+                                if incoming.position is None
+                                else incoming.position.model_dump(),
+                                "heading": incoming.heading,
+                            },
+                            sample=role,
+                        )
                         await room.broadcast()
                     elif isinstance(incoming, VoiceReadyMessage):
                         if room.set_voice_ready(role, incoming.ready):
@@ -1046,6 +1102,9 @@ def create_app(
                         stopping = room.drop_drill()
                         if stopping is not None:
                             hazards.cancel(stopping)
+                        session_logs.end(
+                            "called off" if isinstance(incoming, CancelDrillMessage) else "replaced"
+                        )
                         if isinstance(incoming, PrepareDrillMessage):
                             if not any(e.id == incoming.entity for e in room.entities):
                                 await reject("unknown_entity", "That room object does not exist.")
@@ -1095,6 +1154,8 @@ def create_app(
                         if result != "ok":
                             await reject(*HAZARD_REFUSALS[result])
                             continue
+                        if isinstance(incoming, HazardControlMessage):
+                            log_hazard(incoming.type, incoming.id)
                         await room.broadcast()
                     elif isinstance(incoming, SelectMessage):
                         if role != "mobile_master":
@@ -1140,6 +1201,8 @@ def create_app(
                     del room.outboxes[role]
                 if room.sockets.get(role) is socket:
                     room.disconnect(role)
+                    if role == "vr_solver":
+                        session_logs.end("headset left")
                     # The headset gone, so are its hand (#185) and spot (#248) in the phone's room.
                     phone = room.outboxes.get("mobile_master")
                     if role == "vr_solver" and phone is not None:
