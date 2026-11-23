@@ -152,6 +152,33 @@ class Manipulation:
     sequence: int | None = None
     # Box position in the headset grip's local frame. None for a phone hold.
     offset: tuple[float, float, float] | None = None
+    # Where the phone has carried it lately, with when (#219): its speed at let-go throws it.
+    track: list[tuple[float, float, float, float]] = field(
+        default_factory=lambda: list[tuple[float, float, float, float]]()
+    )
+
+
+# The phone throws (#219) at the speed it carried the object over this last stretch, if at least
+# THROW_MIN_SPEED: slower, the object just falls where it is let go. Physics caps the speed.
+THROW_WINDOW_SECONDS = 0.15
+THROW_MIN_SPEED = 0.3
+
+
+def phone_throw(
+    track: list[tuple[float, float, float, float]], now: float
+) -> Velocity | None:
+    """The carried object's velocity over the last THROW_WINDOW_SECONDS, from where the phone put
+    it; None when it was still or slow, or nothing recent is known."""
+    recent = [point for point in track if now - point[0] <= THROW_WINDOW_SECONDS]
+    if len(recent) < 2:
+        return None
+    (t0, x0, _, z0), (t1, x1, _, z1) = recent[0], recent[-1]
+    if t1 - t0 <= 1e-3:
+        return None
+    vx, vz = (x1 - x0) / (t1 - t0), (z1 - z0) / (t1 - t0)
+    if math.hypot(vx, vz) < THROW_MIN_SPEED:
+        return None
+    return Velocity(x=vx, y=0.0, z=vz)
 
 
 def in_room(
@@ -699,6 +726,10 @@ class PrototypeRoom:
             return "stale"
         if self.manipulation.owner != role:
             return "controlled_by_other"
+        if role == "mobile_master":
+            # The phone throws at the speed it was carrying the object (#219), only when it lets
+            # go: lost tracking or leaving drops the object where it is.
+            velocity = phone_throw(self.manipulation.track, time.monotonic())
         self.drop(velocity)
         self.revision += 1
         return "ok"
@@ -863,30 +894,27 @@ class PrototypeRoom:
         entity = self.entity(held.entity)
         # Aimed past the floor's edge, the object stays whole on the floor.
         entity.position = in_room(entity, (x, held.rest_y, z), self.entities, floor_level=False)
+        now = time.monotonic()
+        held.track.append((now, entity.position.x, entity.position.y, entity.position.z))
+        held.track = [point for point in held.track if now - point[0] <= THROW_WINDOW_SECONDS]
 
     def drop(self, velocity: Velocity | None = None) -> None:
-        """End the hold. A phone aim falls back to its floor height; a headset grip lets go where
-        it is, and the object falls there if physics runs (#161)."""
+        """End the hold where the object is; it falls there if physics runs (#161), thrown at
+        `velocity` when let go with one (the headset's grip, or the phone's carry, #219)."""
         held = self.manipulation
         if held is None:
             return
         entity = self.entity(held.entity)
-        if held.owner == "mobile_master":
-            entity.position = Position(x=entity.position.x, y=held.rest_y, z=entity.position.z)
-        else:
-            # Physics' walls stop only what it moves, so a held piece can be carried through them
-            # or under the floor; let go there, it would fall forever (#213).
-            where = entity.position
-            entity.position = in_room(entity, (where.x, where.y, where.z), self.entities)
+        # Physics' walls stop only what it moves, so a held piece can be carried through them or
+        # under the floor; let go there, it would fall forever (#213).
+        where = entity.position
+        entity.position = in_room(entity, (where.x, where.y, where.z), self.entities)
         # Let go inside another piece, it is put beside it rather than shoved out by physics (#183).
         if overlapping(entity, entity.position, self.entities):
             spot = free_spot(entity, entity.position, self.entities)
             if spot is not None:
                 entity.position = spot
-        if held.owner == "mobile_master":
-            if self.physics is not None:
-                self.physics.place(entity)
-        elif self.physics is not None:
+        if self.physics is not None:
             self.physics.release(entity, velocity)
         self.manipulation = None
 

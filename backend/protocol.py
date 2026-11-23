@@ -207,7 +207,8 @@ class ReleaseMessage(WireModel):
     """The holder lets go. The object stays where the hold left it and is not passed on.
 
     The headset may send how fast the object was moving as it was let go, which throws it (#162).
-    The phone never sends it, and a phone's let-go ignores it."""
+    The phone never sends it: its let-go throws at the speed it was carrying the object, worked out
+    on the server (#219)."""
 
     type: Literal["release"]
     manipulation_id: int = Field(ge=1)

@@ -2,6 +2,7 @@
 
 import json
 import math
+import time
 
 import pytest
 from websockets.sync.client import connect
@@ -66,10 +67,18 @@ class Phone:
         )["state"]
 
     def pick_up(self):
-        return self.send({"type": "acquire", "room_version": 1, "id": "box"})["state"]
+        self.ws.send(json.dumps({"type": "acquire", "room_version": 1, "id": "box"}))
+        return self.state_where(lambda state: state["manipulation"] is not None)
 
     def drop(self, manipulation_id):
-        return self.send({"type": "release", "manipulation_id": manipulation_id})["state"]
+        # Physics may send states of its own (#219): wait for the one where the hold has ended.
+        self.ws.send(json.dumps({"type": "release", "manipulation_id": manipulation_id}))
+        return self.state_where(lambda state: state["manipulation"] is None)
+
+    def state_where(self, predicate):
+        return receive_until(
+            self.ws, lambda event: event["type"] == "state" and predicate(event["state"])
+        )["state"]
 
     def send(self, message):
         self.ws.send(json.dumps(message))
@@ -125,9 +134,12 @@ def test_letting_go_leaves_the_box_where_it_was_aimed(service_url):
         held = phone.pick_up()
         first = held["manipulation"]["id"]
         phone.walk_to(0.5, 1.6)
+        # Held still a moment: a let-go then drops it where it is, without a throw (#219).
+        time.sleep(0.25)
         dropped = phone.drop(first)
         assert dropped["manipulation"] is None
-        assert box(dropped) == pytest.approx({"x": 0.5, "y": resting["y"], "z": 0.1})
+        # Physics has it now: it settles on the floor within a millimetre.
+        assert box(dropped) == pytest.approx({"x": 0.5, "y": resting["y"], "z": 0.1}, abs=1e-3)
         # Walking without holding leaves the box where it fell.
         assert box(phone.walk_to(0.0, 1.0)) == box(dropped)
         again = phone.pick_up()
@@ -221,7 +233,8 @@ def test_the_box_drops_when_the_phone_stops_walking(service_url):
         phone.walk_to(0.0, 1.0)
         stopped = phone.stop_walking()
         assert stopped["manipulation"] is None
-        assert box(stopped) == pytest.approx({"x": 0.0, "y": resting["y"], "z": -0.5})
+        # Dropped where it was, never thrown (#219); physics settles it within a millimetre.
+        assert box(stopped) == pytest.approx({"x": 0.0, "y": resting["y"], "z": -0.5}, abs=1e-3)
 
 
 def test_the_box_drops_when_the_phone_disconnects(service_url):
@@ -236,7 +249,7 @@ def test_the_box_drops_when_the_phone_disconnects(service_url):
             headset, lambda event: event.get("state", {}).get("mobile_connected") is False
         )["state"]
         assert gone["manipulation"] is None
-        assert box(gone) == pytest.approx({"x": 0.0, "y": resting["y"], "z": -0.5})
+        assert box(gone) == pytest.approx({"x": 0.0, "y": resting["y"], "z": -0.5}, abs=1e-3)
 
 
 def test_the_hold_reports_its_latest_movement(service_url):
