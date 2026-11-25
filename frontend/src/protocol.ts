@@ -76,6 +76,22 @@ export interface RoomState {
   hazards?: SessionHazard[];
   /** The walls from the room's layout, drawn in the dollhouse (#269); none without a layout. */
   walls?: { start: [number, number]; end: [number, number]; height: number; thickness: number }[];
+  /** The room's doors and windows, to guide the occupant out (#280); none without a layout. */
+  exits?: RoomExit[];
+}
+
+/** A door or window of the room (#280), in room metres. */
+export interface RoomExit {
+  id: string;
+  kind: 'door' | 'window';
+  /** The middle of the opening, on its wall: x, y (its middle's height), z. */
+  centre: [number, number, number];
+  width: number;
+  height: number;
+  /** Out of the room through the opening, a unit vector on the floor (x, z). */
+  outward: [number, number];
+  /** Where a person stands at this exit: on the floor, just inside the opening (x, z). */
+  anchor: [number, number];
 }
 
 export interface AlignmentState {

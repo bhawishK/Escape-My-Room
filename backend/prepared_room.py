@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from backend.gltf import IDENTITY, AssetError, GltfDocument, read_asset
 from backend.protocol import Position, WireModel
+from backend.room_exits import RoomExit, room_exits
 from backend.room_walls import WallSegment, room_walls
 
 UNITS = "meters"
@@ -245,6 +246,8 @@ class LoadedRoom(BaseModel):
     landmarks: list[RoomLandmark] = Field(default_factory=lambda: list[RoomLandmark]())
     # The walls from the room's layout, for the dollhouse (#269); none without a layout.
     walls: list[WallSegment] = Field(default_factory=lambda: list[WallSegment]())
+    # The doors and windows from the room's layout, to guide the occupant out (#280).
+    exits: list[RoomExit] = Field(default_factory=lambda: list[RoomExit]())
 
 
 class _Entity(Protocol):
@@ -353,9 +356,11 @@ class PreparedScene(WireModel):
 
 
 def load_prepared_room(directory: Path) -> LoadedRoom:
-    """The room in `directory`, with the walls from its layout if it has one (#269)."""
+    """The room in `directory`, with the walls and exits from its layout if it has one (#269,
+    #280)."""
     loaded = _load_prepared_room(directory)
     loaded.walls = room_walls(directory)
+    loaded.exits = room_exits(directory)
     return loaded
 
 
