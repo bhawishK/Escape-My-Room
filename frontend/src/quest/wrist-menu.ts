@@ -73,7 +73,7 @@ export function wristMenu(hand: Position, headYaw: number, page: WristPage, piec
     if (page === 'edit') buttons.floor = { ...at(0, ROW_ABOVE), y: hand.y + ROW_ABOVE - CONTROLS_BELOW };
   }
   if (page === 'drill') {
-    // Guide sets the "go here" spot with a pinch on the floor (#273).
+    // Guide stops guiding the phone user to an exit; pointing at a door starts it (#282).
     const [speak, guide, prepare, run, cancel] = row(5, PAIR_METRES).map(at => ({ ...at, y: at.y - CONTROLS_BELOW }));
     Object.assign(buttons, { speak, guide, prepare, run, cancel });
   }

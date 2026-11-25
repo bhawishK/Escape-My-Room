@@ -185,13 +185,13 @@ class DesignerHandMessage(WireModel):
     length: float | None = Field(default=None, gt=0, le=100)
 
 
-class GuideMessage(WireModel):
-    """Where the headset's pointing finger meets the floor, in room metres, for the phone to draw
-    a path to (#248); null when it stops pointing. Passed to the phone only, never kept."""
+class GuideExitMessage(WireModel):
+    """Guide the occupant to one of the room's exits (#281), or stop guiding with null. Headset
+    only. Python then keeps the occupant's route to it in the shared state."""
 
-    type: Literal["guide"]
-    sequence: int = Field(ge=1)
-    spot: Position | None
+    type: Literal["guide_exit"]
+    room_version: int = Field(ge=1)
+    exit: str | None = Field(max_length=64)
 
 
 class Velocity(WireModel):

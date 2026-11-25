@@ -3,12 +3,17 @@
 WebSocket and HTTP seams, real service; the fire is one already made, kept on disk."""
 
 import json
+import math
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
 from test_manipulation import open_socket, receive_until
 from test_session_hazards import ASSET, made_hazard
+
+# Its layout has a door, door_0, on the +x wall (#280).
+SPLAT_ROOM = Path(__file__).resolve().parents[1] / "assets" / "splat-room"
 
 
 def send(ws, message: dict[str, Any]) -> None:
@@ -61,19 +66,22 @@ def lines(url: str, run_id: str) -> list[dict[str, Any]]:
 def test_a_drill_run_is_logged_from_start_to_stop_and_summarised(start_service, tmp_path):
     made_hazard(tmp_path)
     with (
-        start_service(tmp_path) as url,
+        start_service(tmp_path, ESCAPE_ROOM_PREPARED_DIR=str(SPLAT_ROOM)) as url,
         open_socket(url, "vr_solver") as headset,
         open_socket(url, "mobile_master") as phone,
     ):
         assert logs(url) == []
         hazard_id = started(headset, phone)
-        # The occupant walks 1 m then 1 m more; the commander points at the door meanwhile.
+        # The occupant walks 1 m then 1 m more; the commander guides them to the door, and they
+        # walk out through it.
         for sequence, (x, z) in enumerate([(0.0, 0.0), (0.0, -1.0), (1.0, -1.0)], start=1):
             send(phone, presence(sequence, x, z))
             time.sleep(0.25)
-        send(headset, {"type": "guide", "sequence": 1, "spot": {"x": 2.0, "y": 0.0, "z": -1.0}})
+        send(headset, {"type": "guide_exit", "room_version": 1, "exit": "door_0"})
         time.sleep(0.25)
-        send(headset, {"type": "guide", "sequence": 2, "spot": None})
+        send(phone, presence(4, 0.8, 0.1))
+        time.sleep(0.25)
+        send(headset, {"type": "guide_exit", "room_version": 1, "exit": None})
         time.sleep(0.1)
         send(headset, {"type": "stop_hazard", "room_version": 1, "id": hazard_id})
         receive_until(
@@ -87,8 +95,9 @@ def test_a_drill_run_is_logged_from_start_to_stop_and_summarised(start_service, 
         (run,) = logs(url)
         assert run["object"] == "box" and run["hazard"] == "catches fire"
         assert run["ended"] == "stopped"
-        assert run["occupant_path_metres"] == 2.0
+        assert run["occupant_path_metres"] == round(2.0 + math.hypot(0.2, 1.1), 2)
         assert 0 < run["guided_share"] < 1
+        assert run["exit"] == "door_0" and 0 < run["out_seconds"] < 2
         assert run["seconds"] > 0.5
 
         logged = lines(url, run["id"])
@@ -101,13 +110,17 @@ def test_a_drill_run_is_logged_from_start_to_stop_and_summarised(start_service, 
             for line in logged
             if line["kind"] == "presence" and line["role"] == "mobile_master"
         ]
-        assert walked == [(0.0, 0.0), (0.0, -1.0), (1.0, -1.0)]
-        guides = [line["spot"] for line in logged if line["kind"] == "guide"]
-        assert guides == [{"x": 2.0, "y": 0.0, "z": -1.0}, None]
+        assert walked == [(0.0, 0.0), (0.0, -1.0), (1.0, -1.0), (0.8, 0.1)]
+        guides = [line["exit"] for line in logged if line["kind"] == "guide"]
+        assert guides == ["door_0", None]
+        routes = [line for line in logged if line["kind"] == "route"]
+        assert routes[0]["status"] == "routing" and routes[0]["route"][0] == [1.0, -1.0]
+        assert routes[-1]["status"] == "arrived"
         hazards = [line["event"] for line in logged if line["kind"] == "hazard"]
         assert hazards == ["started", "stopped"]
         # Positions and guidance only: no pictures, sound or video.
-        assert {line["kind"] for line in logged} <= {"run", "presence", "guide", "hand", "hazard"}
+        kinds = {"run", "presence", "guide", "route", "hand", "hazard"}
+        assert {line["kind"] for line in logged} <= kinds
 
 
 def test_presence_sent_twenty_times_a_second_is_logged_at_most_five(start_service, tmp_path):

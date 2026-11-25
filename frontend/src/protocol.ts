@@ -78,6 +78,19 @@ export interface RoomState {
   walls?: { start: [number, number]; end: [number, number]; height: number; thickness: number }[];
   /** The room's doors and windows, to guide the occupant out (#280); none without a layout. */
   exits?: RoomExit[];
+  /** The exit the commander chose and the occupant's route to it (#281); null until one is chosen. */
+  guidance?: RoomGuidance | null;
+}
+
+/** The occupant's way out (#281), worked out by Python from where the phone is. */
+export interface RoomGuidance {
+  exit: string;
+  /** waiting: the phone isn't seen yet; no_route: nothing walkable reaches the exit. */
+  status: 'waiting' | 'routing' | 'no_route' | 'arrived';
+  /** The points where the route turns, from the occupant to the exit's anchor (x, z). */
+  route: [number, number][] | null;
+  /** The route's length in metres. */
+  length: number | null;
 }
 
 /** A door or window of the room (#280), in room metres. */

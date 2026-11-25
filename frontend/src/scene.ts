@@ -2,13 +2,15 @@ import type { SplatMesh } from '@sparkjsdev/spark';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { STANDING_EYE_HEIGHT } from './alignment';
-import { guidePath } from './guide';
+import {
+  LOOK_AHEAD_METRES, chevronsAlong, edgeArrow, guidanceLine, pointAlong, routeFrom, routeLength, type Point,
+} from './exit-route';
 import { HazardFrames, type HazardRoom } from './hazard-frames';
 import { ServerClock, lowEndDevice } from './hazard-playback';
 import type { RoomPose } from './phone-view';
 import type { SplatDrawn } from './tracking-stats';
 import type {
-  AlignmentState, Position, PresenceState, Role, RoomEntity, SessionState,
+  AlignmentState, Position, PresenceState, Role, RoomEntity, RoomGuidance, SessionState,
 } from './protocol';
 import { LateEntities, ModelCopies, applyPlacement, placeEntities, roomOwn } from './room';
 
@@ -32,10 +34,12 @@ export class DiagnosticScene {
   private readonly late = new LateEntities(new ModelCopies(this.loader));
   /** The designer's giant hand reaching into the room from above (#185). */
   private readonly giantHand = giantHand();
-  /** The commander's pointed spot (#248): a path along the floor to it, and a ring on it. */
-  private readonly guide = guideMarks();
-  private guideSpot: Position | null = null;
-  private guideDrawn = '';
+  /** The way out to the exit the commander chose (#283): chevrons on the floor and a ring there. */
+  private readonly routeMarks = routeMarks();
+  private guidance: RoomGuidance | null = null;
+  private routeDrawn = '';
+  private readonly routeLine = document.createElement('p');
+  private readonly edgeArrow = document.createElement('div');
   private readonly container: HTMLElement;
   private readonly roomAnchor = new THREE.Group();
   private roomGroup: THREE.Group | null = null;
@@ -115,6 +119,15 @@ export class DiagnosticScene {
     this.drillBadge.textContent = 'DRILL · practice only, not a real fire';
     this.drillBadge.hidden = true;
     container.append(this.drillBadge);
+    this.routeLine.className = 'exit-line';
+    this.routeLine.setAttribute('role', 'status');
+    this.routeLine.dataset.testid = 'exit-line';
+    this.routeLine.hidden = true;
+    this.edgeArrow.className = 'exit-arrow';
+    this.edgeArrow.dataset.testid = 'exit-arrow';
+    this.edgeArrow.setAttribute('aria-hidden', 'true');
+    this.edgeArrow.hidden = true;
+    container.append(this.routeLine, this.edgeArrow);
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.xr.enabled = true;
@@ -138,7 +151,7 @@ export class DiagnosticScene {
     this.marker.visible = false;
     this.roomAnchor.add(this.marker);
     this.roomAnchor.add(this.giantHand);
-    this.roomAnchor.add(this.guide.group);
+    this.roomAnchor.add(this.routeMarks.group);
     this.people.set('mobile_master', this.person(0x30b0c7, 'presence-phone'));
     this.people.set('vr_solver', this.person(0xff9500, 'presence-headset'));
     this.statusCanvas.width = 512;
@@ -204,6 +217,8 @@ export class DiagnosticScene {
     for (const who of ['mobile_master', 'vr_solver'] as const) {
       this.showPerson(who, state.participants?.[who]);
     }
+    this.guidance = state.room?.guidance ?? null;
+    this.drawRoute();
   }
 
   private person(color: number, name: string): THREE.Group {
@@ -322,7 +337,7 @@ export class DiagnosticScene {
   /** Moves any glide on by `ms` milliseconds of drawing, and hazards on to this moment. */
   tick(ms: number): void {
     if (this.hazards.tick(this.clock.now(Date.now()))) this.changedAt = performance.now();
-    this.drawGuide();
+    this.drawRoute();
     const root = this.smoothed ? this.entityRoots.get(this.smoothed.id) : undefined;
     if (!this.smoothed || !root) return;
     this.changedAt = performance.now();
@@ -528,44 +543,72 @@ export class DiagnosticScene {
     this.container.dataset.designerHandLength = drawn.toFixed(2);
   }
 
-  /** The commander's pointed spot on the floor, in room metres; null takes the path away (#248). */
-  showGuide(spot: Position | null): void {
-    this.guideSpot = spot;
-    this.drawGuide();
+  /**
+   * The way out (#283): chevrons along the route to the exit the commander chose, from where this
+   * phone stands, and a ring at the exit; the distance left and an arrow at the screen's edge
+   * when the way on is out of sight. Called with each state and each frame, as the phone moves.
+   */
+  private drawRoute(): void {
+    const guidance = this.guidance;
+    const at = this.following?.position ?? null;
+    const here: Point | null = at ? [at.x, at.z] : null;
+    const route = guidance?.status === 'routing' && guidance.route ? routeFrom(guidance.route, here) : [];
+    const left = route.length > 1 ? routeLength(route) : null;
+    const key = JSON.stringify([guidance?.status ?? null, guidance?.route ?? null, here?.map(v => v.toFixed(1))]);
+    if (key !== this.routeDrawn) {
+      this.routeDrawn = key;
+      this.changedAt = performance.now();
+      const { group, chevrons, ring } = this.routeMarks;
+      group.visible = route.length > 1;
+      const placed = chevronsAlong(route).slice(0, MAX_CHEVRONS);
+      const matrix = new THREE.Matrix4();
+      const turn = new THREE.Quaternion();
+      const up = new THREE.Vector3(0, 1, 0);
+      const one = new THREE.Vector3(1, 1, 1);
+      placed.forEach((chevron, index) => {
+        turn.setFromAxisAngle(up, chevron.yaw);
+        matrix.compose(new THREE.Vector3(chevron.x, ROUTE_LIFT, chevron.z), turn, one);
+        chevrons.setMatrixAt(index, matrix);
+      });
+      chevrons.count = placed.length;
+      chevrons.instanceMatrix.needsUpdate = true;
+      const end = route[route.length - 1];
+      if (end) ring.position.set(end[0], ROUTE_LIFT, end[1]);
+      this.container.dataset.route = guidance?.status ?? '';
+      this.container.dataset.chevrons = String(placed.length);
+      this.container.dataset.routeLeft = left === null ? '' : left.toFixed(2);
+      const line = guidanceLine(guidance, left);
+      this.routeLine.hidden = line === null;
+      this.routeLine.textContent = line ?? '';
+      this.routeLine.dataset.status = guidance?.status ?? '';
+    }
+    this.pointEdgeArrow(route);
   }
 
-  /** The path from where this phone stands to the spot, kept up to date as it walks. */
-  private drawGuide(): void {
-    const spot = this.guideSpot;
-    const at = this.following?.position ?? null;
-    const key = spot ? `${spot.x.toFixed(2)},${spot.z.toFixed(2)}|${at ? `${at.x.toFixed(2)},${at.z.toFixed(2)}` : ''}` : '';
-    if (key === this.guideDrawn) return;
-    this.guideDrawn = key;
-    this.changedAt = performance.now();
-    const { group, strip, ring } = this.guide;
-    group.visible = spot !== null;
-    this.container.dataset.guide = spot ? `${spot.x.toFixed(2)},${spot.z.toFixed(2)}` : '';
-    if (!spot) {
-      this.container.dataset.guideLength = '';
-      return;
+  /** The arrow at the screen's edge, toward the way on, when that is out of sight (#283). */
+  private pointEdgeArrow(route: readonly Point[]): void {
+    const ahead = this.following && route.length > 1 ? pointAlong(route, LOOK_AHEAD_METRES) : null;
+    let arrow: ReturnType<typeof edgeArrow> = null;
+    if (ahead) {
+      const point = this.roomAnchor.localToWorld(new THREE.Vector3(ahead[0], ROUTE_LIFT, ahead[1]));
+      this.camera.updateMatrixWorld();
+      const behind = point.clone().applyMatrix4(this.camera.matrixWorldInverse).z > 0;
+      const ndc = point.project(this.camera);
+      arrow = edgeArrow(ndc, behind);
     }
-    ring.position.set(spot.x, GUIDE_LIFT, spot.z);
-    strip.visible = at !== null;
-    if (!at) {
-      this.container.dataset.guideLength = '';
-      return;
+    this.edgeArrow.hidden = arrow === null;
+    this.container.dataset.edgeArrow = arrow ? 'shown' : '';
+    if (arrow) {
+      this.edgeArrow.style.left = `${(arrow.left * 100).toFixed(1)}%`;
+      this.edgeArrow.style.top = `${(arrow.top * 100).toFixed(1)}%`;
+      this.edgeArrow.style.transform = `translate(-50%, -50%) rotate(${arrow.angle.toFixed(3)}rad)`;
     }
-    const path = guidePath(at, spot, GUIDE_LIFT);
-    // The strip is 1 m long along its local -z, starting at its origin: placed, turned and stretched.
-    strip.position.set(path.from.x, GUIDE_LIFT, path.from.z);
-    strip.rotation.set(0, path.yaw, 0);
-    strip.scale.set(1, 1, Math.max(path.length, 0.01));
-    this.container.dataset.guideLength = path.length.toFixed(2);
   }
 
   clearRoom(): void {
     this.showDesignerHand(null);
-    this.showGuide(null);
+    this.guidance = null;
+    this.drawRoute();
     this.loadToken += 1;
     this.loadedVersion = null;
     this.loadingVersion = null;
@@ -717,30 +760,38 @@ export class DiagnosticScene {
 }
 
 /** The path and ring sit this far above the floor, so the floor doesn't hide them. */
-const GUIDE_LIFT = 0.02;
+/** The route's marks sit this far above the floor, so the floor doesn't hide them. */
+const ROUTE_LIFT = 0.02;
+const MAX_CHEVRONS = 80;
 
 /**
- * The commander's pointed spot (#248): an amber strip along the floor, 1 m long along its local
- * -z from its origin and 0.12 m wide, stretched to the path's length; and a ring on the spot.
+ * The way out (#283): green chevrons lying on the floor, each pointing along -z before it is
+ * turned, and a ring at the exit.
  */
-function guideMarks(): { group: THREE.Group; strip: THREE.Mesh; ring: THREE.Mesh } {
+function routeMarks(): { group: THREE.Group; chevrons: THREE.InstancedMesh; ring: THREE.Mesh } {
   const group = new THREE.Group();
-  group.name = 'guide';
-  const material = new THREE.MeshBasicMaterial({ color: 0xffb020, transparent: true, opacity: 0.85, depthTest: false });
-  const stripGeometry = new THREE.PlaneGeometry(0.12, 1);
-  stripGeometry.rotateX(-Math.PI / 2);
-  stripGeometry.translate(0, 0, -0.5);
-  const strip = new THREE.Mesh(stripGeometry, material);
-  strip.name = 'guide-path';
-  strip.renderOrder = 5;
+  group.name = 'exit-route';
+  const material = new THREE.MeshBasicMaterial({ color: 0x30d080, transparent: true, opacity: 0.9, depthTest: false, side: THREE.DoubleSide });
+  const shape = new THREE.Shape([
+    new THREE.Vector2(0, 0.12), new THREE.Vector2(0.16, -0.04), new THREE.Vector2(0.16, -0.12),
+    new THREE.Vector2(0, 0.04), new THREE.Vector2(-0.16, -0.12), new THREE.Vector2(-0.16, -0.04),
+  ]);
+  const geometry = new THREE.ShapeGeometry(shape);
+  // Lying on the floor: the shape's +y, its point, becomes -z.
+  geometry.rotateX(-Math.PI / 2);
+  const chevrons = new THREE.InstancedMesh(geometry, material, MAX_CHEVRONS);
+  chevrons.name = 'exit-chevrons';
+  chevrons.count = 0;
+  chevrons.renderOrder = 5;
+  chevrons.frustumCulled = false;
   const ringGeometry = new THREE.RingGeometry(0.22, 0.32, 40);
   ringGeometry.rotateX(-Math.PI / 2);
   const ring = new THREE.Mesh(ringGeometry, material);
-  ring.name = 'guide-spot';
+  ring.name = 'exit-ring';
   ring.renderOrder = 5;
-  group.add(strip, ring);
+  group.add(chevrons, ring);
   group.visible = false;
-  return { group, strip, ring };
+  return { group, chevrons, ring };
 }
 
 /**

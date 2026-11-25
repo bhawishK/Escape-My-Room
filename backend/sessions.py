@@ -3,7 +3,7 @@
 import asyncio
 import math
 import time
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -19,6 +19,7 @@ from backend.furniture import (
     overlapping,
 )
 from backend.grab import grab_offset, grabbed_point, normalize
+from backend.guidance import Guidance
 from backend.hazard_generation import HazardAsset
 from backend.physics import PhysicsWorker
 from backend.prepared_room import (
@@ -166,9 +167,7 @@ THROW_WINDOW_SECONDS = 0.15
 THROW_MIN_SPEED = 0.3
 
 
-def phone_throw(
-    track: list[tuple[float, float, float, float]], now: float
-) -> Velocity | None:
+def phone_throw(track: list[tuple[float, float, float, float]], now: float) -> Velocity | None:
     """The carried object's velocity over the last THROW_WINDOW_SECONDS, from where the phone put
     it; None when it was still or slow, or nothing recent is known."""
     recent = [point for point in track if now - point[0] <= THROW_WINDOW_SECONDS]
@@ -233,6 +232,11 @@ class PrototypeRoom:
     walls: list[WallSegment] = field(default_factory=lambda: list[WallSegment]())
     # The room's doors and windows, each with an anchor on the floor inside it (#280).
     exits: list[RoomExit] = field(default_factory=lambda: list[RoomExit]())
+    # The exit the commander chose and the occupant's route to it (#281); None until one is chosen.
+    guidance: Guidance | None = None
+    guidance_timer: asyncio.TimerHandle | None = None
+    # Told each time the route or its status changes, to log it (#284).
+    guidance_changed: Callable[[dict[str, Any]], None] | None = None
     splat_placement: SplatPlacement | None = None
     load_error: str | None = None
     loaded_versions: dict[Role, int | None] = field(
@@ -338,6 +342,7 @@ class PrototypeRoom:
                 "hazards": [hazard.wire() for hazard in self.hazards] if available else [],
                 "walls": [wall.model_dump() for wall in self.walls] if available else [],
                 "exits": [exit_.model_dump() for exit_ in self.exits] if available else [],
+                "guidance": self.guidance.wire() if available and self.guidance else None,
             },
         }
 
@@ -744,6 +749,7 @@ class PrototypeRoom:
 
     async def broadcast(self, exclude: WebSocket | None = None) -> None:
         """Hand the newest state to each device's outbox; no device waits on another's network."""
+        self.refresh_guidance()
         state = self.snapshot()
         for role, outbox in list(self.outboxes.items()):
             if outbox.socket is not exclude:
@@ -752,6 +758,55 @@ class PrototypeRoom:
     def for_role(self, state: dict[str, Any], role: Role) -> dict[str, Any]:
         """The state as `role` sees it: only the drill differs (#234)."""
         return state | {"drill": None if self.drill is None else self.drill.wire(role)}
+
+    def choose_exit(self, exit_id: str | None) -> Literal["ok", "unknown_exit"]:
+        """Guide the occupant to one of the room's exits (#281), or stop guiding with None."""
+        if exit_id is None:
+            self.guidance = None
+        else:
+            chosen = next((exit_ for exit_ in self.exits if exit_.id == exit_id), None)
+            if chosen is None:
+                return "unknown_exit"
+            if self.guidance is None or self.guidance.exit.id != exit_id:
+                self.guidance = Guidance(exit=chosen)
+        self.revision += 1
+        return "ok"
+
+    def fires(self) -> set[str]:
+        """The room objects on fire now: those hidden by a playing hazard (#229)."""
+        hidden = (hazard.wire()["hide"] for hazard in self.hazards if hazard.started_at is not None)
+        return {entity for entity in hidden if isinstance(entity, str)}
+
+    def refresh_guidance(self) -> None:
+        """Bring the occupant's route up to date with where they and the room's objects are."""
+        if self.guidance is None:
+            return
+        phone = self.presence.get("mobile_master")
+        at = None
+        if phone is not None and phone.position is not None and phone.tracking_status != "inactive":
+            at = (phone.position.x, phone.position.z)
+        now = time.monotonic()
+        if self.guidance.update(self.entities, self.fires(), at, now):
+            self.revision += 1
+            if self.guidance_changed is not None:
+                self.guidance_changed(self.guidance.wire())
+        if self.guidance.due is not None and self.guidance_timer is None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+            self.guidance_timer = loop.call_later(self.guidance.due - now, self._guidance_due)
+
+    def _guidance_due(self) -> None:
+        self.guidance_timer = None
+        task = asyncio.get_running_loop().create_task(self._reroute())
+        self.background_tasks.add(task)
+        task.add_done_callback(self.background_tasks.discard)
+
+    async def _reroute(self) -> None:
+        async with self.lock:
+            if self.guidance is not None:
+                await self.broadcast()
 
     def accept_presence(self, role: Role, presence: PresenceMessage) -> None:
         self.presence[role] = PresenceState(

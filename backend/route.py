@@ -2,7 +2,7 @@
 
 The floor is a grid of ROUTE_CELL squares inside its bounds. A cell is blocked by any object
 standing on it (its footprint widened by a person's clearance, CLEARANCE) and, more widely, by
-the burning object (FIRE_CLEARANCE). The route is the shortest way through free cells, moving
+the burning objects (FIRE_CLEARANCE). The route is the shortest way through free cells, moving
 in eight directions (A*), then straightened where nothing is in the way, so it reads as a few
 clean legs rather than a staircase. A start or goal on a blocked cell is moved to the nearest
 free one; with no way through, there is no route.
@@ -10,7 +10,7 @@ free one; with no way through, there is no route.
 
 import heapq
 import math
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 
 from backend.furniture import footprint
 from backend.prepared_room import FLOOR_THICKNESS, SceneEntity, floor_bounds
@@ -46,7 +46,7 @@ def _inside(point: Point, corners: Sequence[Point]) -> bool:
 class FloorGrid:
     """Which floor cells a person can stand on."""
 
-    def __init__(self, entities: Sequence[SceneEntity], fire: str | None = None) -> None:
+    def __init__(self, entities: Sequence[SceneEntity], fires: Collection[str] = ()) -> None:
         bounds = floor_bounds(list(entities))
         self.x0, self.x1, self.z0, self.z1 = bounds or (-2.0, 2.0, -2.0, 2.0)
         self.columns = max(1, int((self.x1 - self.x0) / ROUTE_CELL))
@@ -63,7 +63,7 @@ class FloorGrid:
                 ("floor", "wall")
             ):
                 continue
-            clearance = FIRE_CLEARANCE if entity.id == fire else CLEARANCE
+            clearance = FIRE_CLEARANCE if entity.id in fires else CLEARANCE
             size = type(entity.size)(
                 width=entity.size.width + 2 * clearance,
                 height=entity.size.height,
@@ -121,11 +121,11 @@ class FloorGrid:
 
 
 def route(
-    entities: Sequence[SceneEntity], start: Point, goal: Point, fire: str | None = None
+    entities: Sequence[SceneEntity], start: Point, goal: Point, fires: Collection[str] = ()
 ) -> list[Point] | None:
     """The walkable way from `start` to `goal` (x, z in room metres), round furniture and the
-    burning object `fire`, as the points where it turns; None if there's no way through."""
-    grid = FloorGrid(entities, fire)
+    burning objects `fires`, as the points where it turns; None if there's no way through."""
+    grid = FloorGrid(entities, fires)
     first, last = grid.nearest_free(grid.cell(start)), grid.nearest_free(grid.cell(goal))
     if first is None or last is None:
         return None

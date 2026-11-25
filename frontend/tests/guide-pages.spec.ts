@@ -1,38 +1,60 @@
 import { expect, test, type Page } from '@playwright/test';
 
-// Guiding from the dollhouse (#248) on the real pages: the headset's pointed spot reaches the
-// phone's room view; the phone's facing reaches the headset's figure of it, as a view cone.
+// Guiding on the real pages: the exit the headset chooses gives the phone its way out (#283); the
+// phone's facing reaches the headset's figure of it, as a view cone (#248).
+
+/** The splat room's server: its layout has a door on its +x wall, door_0 (#280). */
+const SPLAT_ROOM = 'http://127.0.0.1:8774';
 
 /** Opens the headset page; its socket is passed through, and the test can speak on it. */
-async function headset(page: Page): Promise<(message: object) => void> {
+async function headset(page: Page, origin = ''): Promise<(message: object) => void> {
   let speak: ((message: object) => void) | null = null;
   await page.routeWebSocket(/\/api\/ws/, socket => {
     const server = socket.connectToServer();
     speak = message => server.send(JSON.stringify(message));
   });
-  await page.goto('/quest/');
+  await page.goto(`${origin}/quest/`);
   await page.getByRole('button', { name: 'Connect headset', exact: true }).click();
   await expect(page.getByTestId('connection')).toHaveText('Connected · VR headset');
   return message => speak!(message);
 }
 
-test('the spot the headset points at reaches the phone\'s room view, and goes when it stops', async ({ browser, page }) => {
-  const send = await headset(page);
+test('the exit the headset chooses gives the phone chevrons and the distance, until it is out', async ({ browser, page }) => {
+  const send = await headset(page, SPLAT_ROOM);
   const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
-  await phone.goto('/');
+  // The phone's own socket, so the test can say where it stands.
+  let say: ((message: object) => void) | null = null;
+  await phone.routeWebSocket(/\/api\/ws/, socket => {
+    const server = socket.connectToServer();
+    say = message => server.send(JSON.stringify(message));
+  });
+  await phone.goto(`${SPLAT_ROOM}/`);
   await phone.getByRole('button', { name: 'Connect phone', exact: true }).click();
   await expect(phone.getByTestId('connection')).toHaveText('Connected · Phone');
   const scene = phone.locator('#scene');
+  const line = phone.getByTestId('exit-line');
+  const stand = (sequence: number, x: number, z: number) => say!({
+    type: 'presence', sequence: 1000 + sequence, tracking_status: 'tracked', position: { x, y: 1.4, z }, heading: 0,
+  });
+  stand(1, -1, -1);
 
-  send({ type: 'guide', sequence: 1001, spot: { x: 1.5, y: 0, z: -0.8 } });
-  await expect(scene).toHaveAttribute('data-guide', '1.50,-0.80');
-  send({ type: 'guide', sequence: 1002, spot: null });
-  await expect(scene).toHaveAttribute('data-guide', '');
+  // Nothing before the commander confirms an exit.
+  await expect(line).toBeHidden();
+  await expect(scene).toHaveAttribute('data-route', '');
+  send({ type: 'guide_exit', room_version: 1, exit: 'door_0' });
+  await expect(scene).toHaveAttribute('data-route', 'routing');
+  await expect(line).toHaveText(/^Exit \d\.\d m · follow the arrows$/);
+  expect(Number(await scene.getAttribute('data-chevrons'))).toBeGreaterThan(2);
 
-  // A spot that stops coming, as when the headset's tab freezes, goes by itself.
-  send({ type: 'guide', sequence: 1003, spot: { x: 0.2, y: 0, z: 0.4 } });
-  await expect(scene).toHaveAttribute('data-guide', '0.20,0.40');
-  await expect(scene).toHaveAttribute('data-guide', '', { timeout: 4_000 });
+  // At the door, it says so, and the chevrons go.
+  stand(2, 0.8, 0.1);
+  await expect(line).toHaveText("You're out");
+  await expect(scene).toHaveAttribute('data-chevrons', '0');
+
+  // The commander stops guiding: it all goes.
+  send({ type: 'guide_exit', room_version: 1, exit: null });
+  await expect(line).toBeHidden();
+  await expect(scene).toHaveAttribute('data-route', '');
   await phone.close();
 });
 

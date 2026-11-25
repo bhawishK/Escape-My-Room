@@ -5,7 +5,8 @@ room changes, or the headset leaves. It is one JSON-lines file in `data/session-
 has `t`, the milliseconds since the run started, and a `kind`:
 - `run`: `started` (room version, object, hazard, wall-clock time) or `ended` (with the reason);
 - `presence`: a person's tracking, position and facing, at most five times a second each;
-- `guide`: the commander's pointed spot, or null when cleared (#248);
+- `guide`: the exit the commander chose, or null when they stopped guiding (#284);
+- `route`: each new route to that exit and its status, `arrived` when the occupant is out (#284);
 - `hand`: the giant hand's position, or null, at most five times a second (#185);
 - `hazard`: a fire `started`, `stopped` or `removed`.
 
@@ -129,6 +130,9 @@ def summarise(path: Path) -> dict[str, Any] | None:
     previous: tuple[float, float] | None = None
     guiding_since: float | None = None
     guided = 0.0
+    exit_chosen: str | None = None
+    chosen_at: float | None = None
+    out_after: float | None = None
     for line in logged:
         if line["kind"] == "presence" and line.get("role") == "mobile_master":
             position = line.get("position")
@@ -139,11 +143,16 @@ def summarise(path: Path) -> dict[str, Any] | None:
                 walked += math.dist(previous, here)
             previous = here
         elif line["kind"] == "guide":
-            if line.get("spot") is not None and guiding_since is None:
-                guiding_since = line["t"]
-            elif line.get("spot") is None and guiding_since is not None:
+            if line.get("exit") is not None:
+                exit_chosen, chosen_at = line["exit"], line["t"]
+                if guiding_since is None:
+                    guiding_since = line["t"]
+            elif guiding_since is not None:
                 guided += line["t"] - guiding_since
                 guiding_since = None
+        elif line["kind"] == "route" and line.get("status") == "arrived":
+            if out_after is None and chosen_at is not None:
+                out_after = (line["t"] - chosen_at) / 1000
     if guiding_since is not None:
         guided += last["t"] - guiding_since
     return {
@@ -156,4 +165,7 @@ def summarise(path: Path) -> dict[str, Any] | None:
         "seconds": round(seconds, 2),
         "occupant_path_metres": round(walked, 2),
         "guided_share": round(guided / last["t"], 3) if last["t"] > 0 else 0.0,
+        # The exit last chosen, and how long after it was the occupant got out (#284).
+        "exit": exit_chosen,
+        "out_seconds": None if out_after is None else round(out_after, 2),
     }

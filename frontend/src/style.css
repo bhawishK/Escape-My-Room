@@ -349,3 +349,39 @@ textarea::placeholder { color: var(--label-2); }
 .drill-badge[hidden] {
   display: none;
 }
+
+/* The way out (#283): the distance left, under the drill badge, and an arrow at the screen's edge. */
+.exit-line {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 44px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  margin: 0;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: #1f8a5a;
+  color: #fff;
+  font: 700 18px/1.2 system-ui, sans-serif;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 2px 10px rgb(0 0 0 / 0.3);
+}
+.exit-line[data-status="no_route"] {
+  background: #c68a2f;
+}
+.exit-arrow {
+  position: fixed;
+  z-index: 1000;
+  width: 0;
+  height: 0;
+  border-left: 26px solid transparent;
+  border-right: 26px solid transparent;
+  border-bottom: 52px solid #30d080;
+  filter: drop-shadow(0 2px 4px rgb(0 0 0 / 0.5));
+  pointer-events: none;
+}
+.exit-line[hidden],
+.exit-arrow[hidden] {
+  display: none;
+}

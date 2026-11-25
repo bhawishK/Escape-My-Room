@@ -60,10 +60,10 @@ def test_with_nothing_in_the_way_it_is_one_straight_leg():
 
 def test_the_burning_object_is_kept_further_away():
     fire = entity("layout_desk_1", 0.0, 0.0, 0.8, 0.6)
-    grid = FloorGrid([FLOOR, fire], fire="layout_desk_1")
+    grid = FloorGrid([FLOOR, fire], fires={"layout_desk_1"})
     # A point just beyond a person's clearance is still blocked next to a fire.
     assert not grid.free(grid.cell((0.0, 0.3 + 0.4)))
-    way = route([FLOOR, fire], (-1.5, 0.0), (1.5, 0.0), fire="layout_desk_1")
+    way = route([FLOOR, fire], (-1.5, 0.0), (1.5, 0.0), fires={"layout_desk_1"})
     assert way is not None
     nearest = min(
         math.dist(point, (0.0, 0.0))
