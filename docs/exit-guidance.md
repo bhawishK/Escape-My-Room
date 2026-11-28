@@ -71,21 +71,23 @@ The phone sees nothing before the commander confirms an exit. The old pinch-a-sp
 | `OFFER_GRACE_MS` | `frontend/src/quest/exits.ts` | 800 ms | The confirming pinch misses, or a later pinch confirms by mistake |
 | `CHEVRON_SPACING_METRES` | `frontend/src/exit-route.ts` | 0.5 m | Chevrons are too dense or too sparse on the phone |
 
-## The device check: not yet run
+## The device check
 
-In room 10, with the iPhone and the Quest 3. Write the result beside each line, with the date.
+Run on 28 November 2026 with the iPhone and the Quest 3, in the test room (`assets/splat-room`). Its door is written by hand for the tests, so this checked the flow, not a real door's position. Room 10, or a newly filmed room once #276 gives it exits, is still to do.
 
 | Check | Result |
 | --- | --- |
-| Room 10's door shows as an exit outline in the dollhouse | |
-| Pointing at the door in the dollhouse offers "Exit · guide here"; a pinch confirms it | |
-| The same at life size | |
-| The offer goes when the ray leaves the door | |
-| The phone shows nothing before the confirm | |
-| The phone's chevrons go round the furniture to the door | |
-| The edge arrow shows when the phone faces away, and points the right way | |
-| The distance goes down as the phone user walks | |
-| "You're out" at the door, on the phone and the headset | |
-| With a fire started, the route keeps clear of it | |
-| Guide on the wrist menu stops it on both devices | |
-| The session log has the exit, the routes and `out_seconds` | |
+| The door shows as an exit outline in the dollhouse | Works (28 Nov, test room) |
+| Pointing at the door in the dollhouse offers "Exit · guide here"; a pinch confirms it | Works (28 Nov, test room) |
+| The same at life size | Works (28 Nov, test room) |
+| The offer goes when the ray leaves the door | Works (28 Nov, test room) |
+| The phone shows nothing before the confirm | Works (28 Nov, test room) |
+| The phone's chevrons go round the furniture to the door | Works (28 Nov, test room) |
+| The edge arrow shows when the phone faces away, and points the right way | Works (28 Nov, test room) |
+| The distance goes down as the phone user walks | Works (28 Nov, test room) |
+| "You're out" at the door, on the phone and the headset | Works (28 Nov, test room) |
+| Guide on the wrist menu stops it on both devices | Works (28 Nov, test room) |
+| Pointing at other walls or furniture, or moving the box, chooses no exit | Works (28 Nov, test room) |
+| With a fire started, the route keeps clear of it | Not yet: the test room has no fire made |
+| The session log has the exit, the routes and `out_seconds` | Not yet: needs a drill run |
+| All of it in room 10, or a filmed room with a real door | Not yet |
