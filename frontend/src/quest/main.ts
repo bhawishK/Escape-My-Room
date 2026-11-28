@@ -23,10 +23,10 @@ import {
   looksToTake,
   throwInRoom, yawOf, orientationFromDollhouse, scaleLabel, velocityFromDollhouse,
 } from './dollhouse';
-import { spotUnder } from '../guide';
 import { FloorTouch, refloored, saveFloor, savedFloor, withFloor } from './floor-touch';
 import { Dictation } from './dictation';
 import { drillLine, drillObjects, drillPlaying, type DrillState } from './drill';
+import { OFFER_GRACE_MS, exitAlongRay, exitName, guidingLine } from './exits';
 import { Dwell, unmuteHint } from './gestures';
 import { readFrame, type FrameSample, type InputSample, type Pose, type Ray } from './hands';
 import { Hud } from './hud';
@@ -1157,7 +1157,7 @@ function frame(xrFrame: XRFrame, time: number): void {
     speaking: speaking !== null, making: making !== null,
     running: drillPlaying(currentDrill(), state?.room.hazards ?? []),
     flooring: touchingFloor,
-    guiding, muted: voice.on && voice.status.muted,
+    guiding: guidance() !== null, muted: voice.on && voice.status.muted,
   }, drillMenuObjects(), chosenObject());
 
   // Touching the floor (#218): a hand resting flat on the real floor sets the room's floor there.
@@ -1218,9 +1218,9 @@ function frame(xrFrame: XRFrame, time: number): void {
         } else if (choice.button === 'cancel') {
           cancelDrill();
         } else if (choice.button === 'guide') {
-          // Guide on: the next pinch on the floor sets the spot; off: the spot goes (#273).
-          guiding = !guiding;
-          if (!guiding) guideSpot = null;
+          // While guiding, it stops; else it says how to start (#282).
+          if (guidance()) chooseExit(null, time);
+          else gesture('Point at a door, then pinch to guide the phone user out', time);
         } else if (choice.button === 'mute') {
           toggleMute('menu', time);
         } else if (choice.button === 'floor') {
@@ -1232,11 +1232,12 @@ function frame(xrFrame: XRFrame, time: number): void {
         continue;
       }
     }
-    // Guiding (#273): a pinch on the floor, in the dollhouse or the room, sets the "go here" spot
-    // under the fingertip; it stays until the next pinch or Guide is pressed again.
-    if (guiding && input.holding && !before && input.pinchAt && alignment && !holder &&
+    // "Exit · guide here" (#282): a pinch while an exit is offered, or just after pointing at it
+    // ended in that pinch, guides the phone user out through it.
+    if (exitOffer && time - exitOffer.seen <= OFFER_GRACE_MS && input.holding && !before && alignment && !holder &&
       input.source !== leftHand?.source) {
-      guideSpot = spotUnder(inRoom(alignment, input.pinchAt));
+      chooseExit(exitOffer.exit, time);
+      exitOffer = null;
       pressedAt.delete(input.source);
       continue;
     }
@@ -1368,9 +1369,15 @@ function frame(xrFrame: XRFrame, time: number): void {
     if (!ray || (input.kind === 'hand' && !pointing && !input.holding)) continue;
     const { hit, blocked } = aimedAt(ray);
     aimed ??= hit;
+    // A pointing finger or a controller on an exit offers it (#282); not a hand already pinching.
+    const onExit = (pointing || input.kind !== 'hand') && !holder ? exitAimedAt(ray) : null;
+    if (onExit) exitOffer = { exit: onExit, seen: time };
     drawn.push({ ...ray, look: blocked ? 'blocked' : hit ? 'target' : 'miss' });
   }
   room?.showRays(drawn);
+  if (exitOffer && time - exitOffer.seen > OFFER_GRACE_MS) exitOffer = null;
+  room?.showExits(state?.room.exits ?? [], exitOffer?.exit ?? null, guidance()?.exit ?? null);
+  room?.showRoute(guidance()?.route ?? null);
   // What a ray is on, else the object the gaze has rested on long enough to start a topic.
   const topic = rest.progress >= 1 ? rest.target : null;
   room?.showHighlight(mine ? null : aimed ?? topic);
@@ -1383,7 +1390,6 @@ function frame(xrFrame: XRFrame, time: number): void {
   const reaching = alignment && scaling.view.scale < 1
     ? handInDollhouse(scaling.view, alignment, handPoints(sample.inputs), floor()) : null;
   publishHand(reaching, time);
-  publishGuide(guiding ? guideSpot : null, time);
   // The dollhouse's walls are cut away where they would stand between the viewer and the room (#269).
   if (alignment && head) {
     const at = inRoom(alignment, head.position);
@@ -1408,32 +1414,27 @@ function floor(): RoomEntity[] {
   return floorCache.pieces;
 }
 
-/** Sends the pointed spot at most as often as presence; once pointing has stopped a moment, says it's gone. */
-/** Whether Guide is on (#273), and the spot it set, in room metres. */
-let guiding = false;
-let guideSpot: Position | null = null;
-let lastGuide = -Infinity;
-let guideSent = '';
-let guideShown = false;
-/** A kept spot is sent again this often, so the phone (which drops one after 1.5 s) keeps it. */
-const GUIDE_RESEND_MS = 500;
-function publishGuide(spot: Position | null, time: number): void {
-  if (!connected) return;
-  if (spot) {
-    const key = spot.x.toFixed(3) + ',' + spot.z.toFixed(3);
-    if (key === guideSent && time - lastGuide < GUIDE_RESEND_MS) return;
-    if (!client.sendGuide(spot)) return;
-    guideSent = key;
-    lastGuide = time;
-    guideShown = true;
-    room?.showGuideSpot(spot);
-    return;
-  }
-  if (guideShown && client.sendGuide(null)) {
-    guideShown = false;
-    guideSent = '';
-    room?.showGuideSpot(null);
-  }
+/** The exit a ray points at and when it last did (#282): "Exit · guide here" shows there. */
+let exitOffer: { exit: string; seen: number } | null = null;
+
+/** The exit the phone user is being guided to and their route, as Python keeps it (#281). */
+const guidance = () => state?.room.guidance ?? null;
+
+/** The exit a ray is on, in the dollhouse or the room; null without an aligned room. */
+function exitAimedAt(ray: Ray): string | null {
+  const alignment = aligned();
+  const exits = state?.room.exits ?? [];
+  if (!alignment || exits.length === 0) return null;
+  const hit = exitAlongRay(
+    exits, inRoom(alignment, ray.origin), directionInRoom(alignment, ray.direction), RAY_REACH_METERS / scaling.view.scale);
+  return hit?.id ?? null;
+}
+
+/** Guides the phone user out through an exit, or stops guiding with null (#282). */
+function chooseExit(exit: string | null, time: number): void {
+  const version = state?.room.room_version;
+  if (version === null || version === undefined || !client.sendGuideExit(version, exit)) return;
+  gesture(exit ? `Guiding the phone user to ${exitName(state?.room.exits ?? [], exit)}` : 'Guiding stopped', time);
 }
 
 /** Sends the hand in the dollhouse at most as often as presence, and says once when it leaves. */
@@ -1487,7 +1488,9 @@ function showHud(time: number, blocked: boolean): void {
     // A change in the call shows for a moment; being muted stays, so nobody talks to no one.
     // It names the way to unmute for what is in use now: hands, or controllers.
     ?? (voice.status.muted ? voiceNote(voice.status, 'the phone', unmuteHint(inputMode())) : null)
-    ?? (voiceSaid && time <= voiceSaid.until ? voiceSaid.text : null);
+    ?? (voiceSaid && time <= voiceSaid.until ? voiceSaid.text : null)
+    // While guiding, how far the phone user has to go, until they are out (#284).
+    ?? guidingLine(guidance(), state?.room.exits ?? []);
   hud.show(text, text === gestureLine?.text || (text === voiceSaid?.text && voice.status.phase === 'connected' && !voice.status.muted));
 }
 

@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { STANDING_EYE_HEIGHT } from '../alignment';
 import { ServerClock } from '../hazard-playback';
-import type { AlignmentState, CatalogueItem, Position, PresenceState, RoomEntity, SessionState } from '../protocol';
+import type { AlignmentState, CatalogueItem, Position, PresenceState, RoomEntity, RoomExit, SessionState } from '../protocol';
 import { RAY_REACH_METERS } from '../grab';
 import { LateEntities, ModelCopies, applyPlacement, placeEntities, roomOwn } from '../room';
 import {
@@ -56,9 +56,15 @@ export class QuestRoom {
   private readonly phone: THREE.Group;
   private readonly highlight = new THREE.BoxHelper(new THREE.Object3D(), 0xffcc00);
   /** The commander's pointed spot on the room's floor, in room metres (#248). */
-  private readonly guideRing = guideRing();
   /** The room's walls (#269), in room metres, drawn only while the room is a dollhouse. */
   private readonly wallGroup = new THREE.Group();
+  /** The room's exits (#282): an outline round each opening and a ring on the floor inside it. */
+  private readonly exitGroup = new THREE.Group();
+  private exitsDrawn = '';
+  /** The phone user's route to the chosen exit (#284), as Python sends it. */
+  private readonly routeLine = routeLine();
+  private routeDrawn = '';
+  private readonly offerLabel = buttonSprite('Exit · guide here', '#2f8f5f', 'exit-offer', OFFER_LABEL_METRES);
   private walls: WallSegment[] = [];
   private wallsDrawn = '';
   private wallsCut = '';
@@ -151,11 +157,14 @@ export class QuestRoom {
   ) {
     this.hazards = new HazardFrames(() => this.loadSpark(), container);
     this.anchor.name = 'room-anchor';
-    // In the room, so it shrinks and turns with the dollhouse.
-    this.anchor.add(this.guideRing);
     this.wallGroup.name = 'walls';
     this.wallGroup.visible = false;
     this.anchor.add(this.wallGroup);
+    this.exitGroup.name = 'exits';
+    this.anchor.add(this.exitGroup);
+    this.anchor.add(this.routeLine);
+    this.offerLabel.visible = false;
+    scene.add(this.offerLabel);
     this.dollhouse.name = 'dollhouse';
     this.dollhouse.add(this.anchor);
     scene.add(this.dollhouse);
@@ -190,11 +199,60 @@ export class QuestRoom {
   }
 
   /** Draws the phone user where Python last placed them; faded while their tracking is stale. */
-  /** The spot the commander points at, shown as a ring on the room's floor (#248); null hides it. */
-  showGuideSpot(spot: Position | null): void {
-    this.guideRing.visible = spot !== null;
-    this.container.dataset.guide = spot ? `${spot.x.toFixed(2)},${spot.z.toFixed(2)}` : '';
-    if (spot) this.guideRing.position.set(spot.x, 0.02, spot.z);
+  /**
+   * The room's exits (#282): each outlined, faintly in the dollhouse; the one a ray offers in
+   * yellow with "Exit · guide here" over it; the one guided to in green, in the room too.
+   */
+  showExits(exits: readonly RoomExit[], offered: string | null, chosen: string | null): void {
+    const key = JSON.stringify(exits);
+    if (key !== this.exitsDrawn) {
+      this.exitsDrawn = key;
+      for (const child of [...this.exitGroup.children]) {
+        this.exitGroup.remove(child);
+        child.traverse(part => {
+          const mesh = part as THREE.Mesh;
+          mesh.geometry?.dispose();
+          (mesh.material as THREE.Material | undefined)?.dispose();
+        });
+      }
+      for (const exit of exits) this.exitGroup.add(exitMarker(exit));
+    }
+    const small = this.view.scale < LIFE_SIZE_SCALE;
+    for (const marker of this.exitGroup.children) {
+      const look = marker.name === offered ? 'offered' : marker.name === chosen ? 'chosen' : 'idle';
+      marker.visible = look !== 'idle' || small;
+      marker.traverse(part => {
+        const material = (part as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined;
+        if (!material) return;
+        material.color.set(EXIT_COLOURS[look]);
+        material.opacity = look === 'idle' ? 0.35 : 0.95;
+      });
+    }
+    const exit = exits.find(candidate => candidate.id === offered);
+    this.offerLabel.visible = exit !== undefined;
+    if (exit) {
+      const top = new THREE.Vector3(exit.centre[0], exit.centre[1] + exit.height / 2, exit.centre[2]);
+      this.anchor.localToWorld(top);
+      // Readable in a hand-sized room and across a real one.
+      const width = small ? OFFER_LABEL_METRES * 0.5 : OFFER_LABEL_METRES;
+      this.offerLabel.scale.set(width, width / 3, 1);
+      this.offerLabel.position.set(top.x, top.y + width / 3, top.z);
+    }
+    this.container.dataset.exitOffered = offered ?? '';
+    this.container.dataset.exitChosen = chosen ?? '';
+  }
+
+  /** The phone user's way out (#284): a green line on the floor, in the dollhouse or the room. */
+  showRoute(route: readonly [number, number][] | null): void {
+    const key = JSON.stringify(route);
+    if (key === this.routeDrawn) return;
+    this.routeDrawn = key;
+    this.routeLine.visible = route !== null && route.length > 1;
+    this.container.dataset.route = route ? String(route.length) : '';
+    if (!route || route.length < 2) return;
+    this.routeLine.geometry.dispose();
+    this.routeLine.geometry = new THREE.BufferGeometry().setFromPoints(
+      route.map(([x, z]) => new THREE.Vector3(x, ROUTE_LIFT, z)));
   }
 
   showPhone(presence: PresenceState | undefined): void {
@@ -779,15 +837,50 @@ const VIEW_CONE_METRES = 1.6;
 const VIEW_CONE_HALF_ANGLE = Math.PI / 6;
 const VIEW_CONE_OPACITY = 0.25;
 
-/** A ring on the floor where the commander points (#248). */
-function guideRing(): THREE.Mesh {
-  const geometry = new THREE.RingGeometry(0.22, 0.32, 40);
-  geometry.rotateX(-Math.PI / 2);
-  const ring = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0xffb020, transparent: true, opacity: 0.85, depthTest: false }));
-  ring.name = 'guide-spot';
-  ring.renderOrder = 5;
-  ring.visible = false;
-  return ring;
+/** The route's line sits this far above the floor (#284). */
+const ROUTE_LIFT = 0.03;
+
+function routeLine(): THREE.Line {
+  const line = new THREE.Line(
+    new THREE.BufferGeometry(),
+    new THREE.LineBasicMaterial({ color: 0x30d080, transparent: true, opacity: 0.95, depthTest: false }),
+  );
+  line.name = 'exit-route';
+  line.renderOrder = 6;
+  line.visible = false;
+  line.frustumCulled = false;
+  return line;
+}
+
+/** The offer's label over an exit at life size, in metres; half that in the dollhouse (#282). */
+const OFFER_LABEL_METRES = 0.5;
+const EXIT_COLOURS = { idle: 0xffffff, offered: 0xffc020, chosen: 0x30d080 } as const;
+
+/** An exit's outline round its opening and a ring on the floor at its anchor, in room metres. */
+function exitMarker(exit: RoomExit): THREE.Group {
+  const group = new THREE.Group();
+  group.name = exit.id;
+  const [cx, cy, cz] = exit.centre;
+  const [nx, nz] = exit.outward;
+  // Along the wall, then up: the opening's four corners.
+  const tx = -nz;
+  const tz = nx;
+  const w = exit.width / 2;
+  const h = exit.height / 2;
+  const corners = [[-w, -h], [w, -h], [w, h], [-w, h]].map(
+    ([a, b]) => new THREE.Vector3(cx + tx * a, cy + b, cz + tz * a));
+  const line = new THREE.LineLoop(
+    new THREE.BufferGeometry().setFromPoints(corners),
+    new THREE.LineBasicMaterial({ transparent: true, depthTest: false }),
+  );
+  line.renderOrder = 6;
+  const ringGeometry = new THREE.RingGeometry(0.18, 0.26, 32);
+  ringGeometry.rotateX(-Math.PI / 2);
+  const ring = new THREE.Mesh(ringGeometry, new THREE.MeshBasicMaterial({ transparent: true, depthTest: false }));
+  ring.position.set(exit.anchor[0], 0.02, exit.anchor[1]);
+  ring.renderOrder = 6;
+  group.add(line, ring);
+  return group;
 }
 
 function person(colour: number): THREE.Group {

@@ -82,7 +82,7 @@ from backend.protocol import (
     DesignerHandMessage,
     EntityTransformMessage,
     GripMessage,
-    GuideMessage,
+    GuideExitMessage,
     HazardControlMessage,
     MarkerState,
     PoseMessage,
@@ -138,7 +138,7 @@ type Incoming = (
     | CancelDrillMessage
     | ResizeFurnitureMessage
     | DesignerHandMessage
-    | GuideMessage
+    | GuideExitMessage
 )
 LOG = logging.getLogger(__name__)
 
@@ -167,7 +167,7 @@ INCOMING: dict[str, type[Incoming]] = {
     "cancel_drill": CancelDrillMessage,
     "resize_furniture": ResizeFurnitureMessage,
     "designer_hand": DesignerHandMessage,
-    "guide": GuideMessage,
+    "guide_exit": GuideExitMessage,
 }
 
 # Why a voice call set-up message was not passed on (#13), as the page shows it.
@@ -430,6 +430,8 @@ def create_app(
 
     # Each drill run recorded for studies (#259): positions and guidance only.
     session_logs = SessionLogs(data / "session-logs", enabled_from_environment())
+    # Each new route to the exit, and the arrival, for the pilot (#284).
+    room.guidance_changed = lambda wire: session_logs.record("route", wire)
 
     hazards = HazardGeneration(
         data / "hazards",
@@ -454,6 +456,8 @@ def create_app(
         room.splat_phone_url = loaded.splat_phone_url
         room.landmarks = list(loaded.landmarks)
         room.walls = list(loaded.walls)
+        room.exits = list(loaded.exits)
+        room.guidance = None
         room.map = loaded.map
         room.splat_placement = loaded.splat_placement
         room.load_error = None
@@ -906,8 +910,6 @@ def create_app(
         hand_sequence = 0
         # When this headset's hand was last passed to the phone (#185), on the loop's clock.
         hand_passed_at = -math.inf
-        guide_sequence = 0
-        guide_passed_at = -math.inf
         outbox = Outbox(socket, room.delivery_delay)
 
         async def reject(code: str, message: str) -> None:
@@ -933,11 +935,10 @@ def create_app(
                 if room.manipulation is not None and room.manipulation.owner == role:
                     room.drop()
                 if previous is not None:
-                    # A headset replaced by a new tab takes its hand (#185) and spot (#248).
+                    # A headset replaced by a new tab takes its hand (#185).
                     phone = room.outboxes.get("mobile_master")
                     if role == "vr_solver" and phone is not None:
                         phone.reply({"type": "designer_hand", "position": None, "length": None})
-                        phone.reply({"type": "guide", "spot": None})
                     try:
                         await asyncio.wait_for(
                             previous.close(code=1000, reason="Device connected in another tab"),
@@ -1021,35 +1022,24 @@ def create_app(
                             )
                             if position is not None:
                                 hand_passed_at = now
-                    elif isinstance(incoming, GuideMessage):
+                    elif isinstance(incoming, GuideExitMessage):
                         if role != "vr_solver":
                             await reject("role_forbidden", "Only the headset guides.")
                             continue
-                        if incoming.sequence <= guide_sequence:
+                        if room.load_error is not None or room.room_version is None:
                             await reject(
-                                "stale_sequence", "Guide sequences must increase on this socket."
+                                "room_unavailable",
+                                room.load_error or "Prepared room is unavailable.",
                             )
                             continue
-                        guide_sequence = incoming.sequence
-                        now = asyncio.get_running_loop().time()
-                        # As the hand: at most one spot every HAND_SECONDS; clearing always passes.
-                        if incoming.spot is not None and now - guide_passed_at < HAND_SECONDS:
+                        if incoming.room_version != room.room_version:
+                            await reject(*ROOM_VERSION_MISMATCH)
                             continue
-                        session_logs.record(
-                            "guide",
-                            {"spot": None if incoming.spot is None else incoming.spot.model_dump()},
-                        )
-                        phone = room.outboxes.get("mobile_master")
-                        if phone is not None:
-                            spot = incoming.spot
-                            phone.reply(
-                                {
-                                    "type": "guide",
-                                    "spot": None if spot is None else spot.model_dump(),
-                                }
-                            )
-                            if spot is not None:
-                                guide_passed_at = now
+                        if room.choose_exit(incoming.exit) != "ok":
+                            await reject("unknown_exit", "The room has no such exit.")
+                            continue
+                        session_logs.record("guide", {"exit": incoming.exit})
+                        await room.broadcast()
                     elif isinstance(incoming, PresenceMessage):
                         if incoming.sequence <= presence_sequence:
                             await reject(
@@ -1365,11 +1355,10 @@ def create_app(
                     room.disconnect(role)
                     if role == "vr_solver":
                         session_logs.end("headset left")
-                    # The headset gone, so are its hand (#185) and spot (#248) in the phone's room.
+                    # The headset gone, so is its hand in the phone's room (#185).
                     phone = room.outboxes.get("mobile_master")
                     if role == "vr_solver" and phone is not None:
                         phone.reply({"type": "designer_hand", "position": None, "length": None})
-                        phone.reply({"type": "guide", "spot": None})
                     await room.broadcast()
             await outbox.close()
 

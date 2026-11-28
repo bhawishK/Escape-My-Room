@@ -10,8 +10,6 @@ interface SessionEvents {
   voice?: (signal: VoiceSignal) => void;
   /** The phone: the designer's hand in the dollhouse, or null when it has gone (#185). */
   designerHand?: (position: Position | null, length: number | null) => void;
-  /** Where the headset points on the floor, for the phone's path (#248); null when it stops. */
-  guide?: (spot: Position | null) => void;
   poseSent?: (sequence: number) => void;
   poseReplaced?: () => void;
 }
@@ -25,7 +23,6 @@ export class SessionClient {
   private sequence = 0;
   private presenceSequence = 0;
   private handSequence = 0;
-  private guideSequence = 0;
   private gripSequence = 0;
   /** The newest pose not yet sent because the connection was congested. */
   private waitingPose: PoseInput | null = null;
@@ -43,7 +40,6 @@ export class SessionClient {
     this.sequence = 0;
     this.presenceSequence = 0;
     this.handSequence = 0;
-    this.guideSequence = 0;
     this.gripSequence = 0;
     this.stopWaitingPose();
     try {
@@ -69,8 +65,6 @@ export class SessionClient {
               this.events.selection({ id: message.id, rejected: message.rejected });
             } else if (message.type === 'designer_hand') {
               this.events.designerHand?.(message.position, message.length);
-            } else if (message.type === 'guide') {
-              this.events.guide?.(message.spot);
             } else if (message.type === 'voice_signal') {
               this.events.voice?.(message);
             } else if (message.type === 'error') {
@@ -277,11 +271,10 @@ export class SessionClient {
     return true;
   }
 
-  /** Where the headset's pointing finger meets the floor, or null when it stops (#248). */
-  sendGuide(spot: Position | null): boolean {
-    if (this.socket?.readyState !== WebSocket.OPEN || this.socket.bufferedAmount > 16384) return false;
-    const sequence = ++this.guideSequence;
-    this.socket.send(JSON.stringify({ type: 'guide', sequence, spot }));
+  /** Guide the occupant to one of the room's exits, or stop guiding with null (#281): headset only. */
+  sendGuideExit(roomVersion: number, exit: string | null): boolean {
+    if (this.socket?.readyState !== WebSocket.OPEN) return false;
+    this.socket.send(JSON.stringify({ type: 'guide_exit', room_version: roomVersion, exit }));
     return true;
   }
 

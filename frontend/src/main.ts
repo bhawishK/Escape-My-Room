@@ -42,8 +42,6 @@ setUpPhotoPiece();
 /** A designer's hand not heard of for this long has gone, as a stale presence is (#185). */
 const HAND_STALE_MS = 1500;
 let handStale: number | undefined;
-/** The commander's pointed spot goes too if it stops coming (#248). */
-let guideStale: number | undefined;
 let view: DiagnosticScene | null = null;
 let xr: XRDiagnostic | null = null;
 let roomViewOpen = false;
@@ -677,13 +675,6 @@ const client = new SessionClient({
     if (!view) return;
     view.showDesignerHand(position, length);
     if (position) handStale = window.setTimeout(() => view?.showDesignerHand(null, null), HAND_STALE_MS);
-  },
-  // The commander's pointed spot: a path to it along the floor, until it goes or stops coming (#248).
-  guide: spot => {
-    clearTimeout(guideStale);
-    if (!view) return;
-    view.showGuide(spot);
-    if (spot) guideStale = window.setTimeout(() => view?.showGuide(null), HAND_STALE_MS);
   },
   connection: value => {
     connected = value;

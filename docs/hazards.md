@@ -74,12 +74,12 @@ Each drill run is recorded for studies, as one JSON-lines file in `data/session-
 - **When:** a run starts when a drill's fire starts. It ends when the fire is stopped, removed or called off, the room changes, or the headset leaves.
 - **What:**
   - each person's position and facing, at most 5 times a second each;
-  - the commander's pointed spot (#248);
+  - the exit the commander chose, each route to it, and when the occupant got out ([exit guidance](exit-guidance.md));
   - the giant hand (#185);
   - the fire's events.
 
   Each line is timed in milliseconds from the run's start. Positions and guidance only: no pictures, sound or video.
 - **Reading them:**
-  - `GET /api/session-logs` lists the runs, newest first. Each comes with its length, object and hazard, how it ended, how far the occupant walked, and how much of the run the commander was pointing the way.
+  - `GET /api/session-logs` lists the runs, newest first. Each comes with its length, object and hazard, how it ended, how far the occupant walked, how much of the run they were being guided, which exit, and how many seconds after it was chosen they got out (`out_seconds`).
   - `GET /api/session-logs/{id}` downloads one.
 - **Turning it off:** set `ESCAPE_ROOM_SESSION_LOGS=0`.

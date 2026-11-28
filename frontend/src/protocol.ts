@@ -76,6 +76,35 @@ export interface RoomState {
   hazards?: SessionHazard[];
   /** The walls from the room's layout, drawn in the dollhouse (#269); none without a layout. */
   walls?: { start: [number, number]; end: [number, number]; height: number; thickness: number }[];
+  /** The room's doors and windows, to guide the occupant out (#280); none without a layout. */
+  exits?: RoomExit[];
+  /** The exit the commander chose and the occupant's route to it (#281); null until one is chosen. */
+  guidance?: RoomGuidance | null;
+}
+
+/** The occupant's way out (#281), worked out by Python from where the phone is. */
+export interface RoomGuidance {
+  exit: string;
+  /** waiting: the phone isn't seen yet; no_route: nothing walkable reaches the exit. */
+  status: 'waiting' | 'routing' | 'no_route' | 'arrived';
+  /** The points where the route turns, from the occupant to the exit's anchor (x, z). */
+  route: [number, number][] | null;
+  /** The route's length in metres. */
+  length: number | null;
+}
+
+/** A door or window of the room (#280), in room metres. */
+export interface RoomExit {
+  id: string;
+  kind: 'door' | 'window';
+  /** The middle of the opening, on its wall: x, y (its middle's height), z. */
+  centre: [number, number, number];
+  width: number;
+  height: number;
+  /** Out of the room through the opening, a unit vector on the floor (x, z). */
+  outward: [number, number];
+  /** Where a person stands at this exit: on the floor, just inside the opening (x, z). */
+  anchor: [number, number];
 }
 
 export interface AlignmentState {
